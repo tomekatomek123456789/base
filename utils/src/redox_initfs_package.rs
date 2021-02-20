@@ -1,9 +1,9 @@
 use std::convert::{TryFrom, TryInto};
-use std::fs::{DirEntry, File, FileType, Metadata, OpenOptions, ReadDir};
+use std::fs::{DirEntry, File, Metadata, OpenOptions};
 use std::io::{prelude::*, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use std::os::unix::ffi::OsStringExt;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
 
 use anyhow::{anyhow, Context, Result};
@@ -11,7 +11,9 @@ use clap::{App, Arg};
 
 use redox_initfs::types as initfs;
 
-const DEFAULT_MAX_SIZE: u64 = 8 * 1024 * 1024;
+const KIBIBYTE: u64 = 1024;
+const MEBIBYTE: u64 = KIBIBYTE * 1024;
+const DEFAULT_MAX_SIZE: u64 = 64 * MEBIBYTE;
 
 enum EntryKind {
     File(File),
@@ -36,29 +38,23 @@ struct State {
 }
 
 fn read_directory(state: &mut State, path: &Path) -> Result<Dir> {
-    let read_dir = path.read_dir().map_err(|error| {
-        anyhow!(
-            "failed to read directory `{}`: {}",
-            path.to_string_lossy(),
-            error
-        )
-    })?;
+    let read_dir = path
+        .read_dir()
+        .with_context(|| anyhow!("failed to read directory `{}`", path.to_string_lossy(),))?;
 
     let entries = read_dir
         .map(|result| {
-            let entry = result.map_err(|error| {
+            let entry = result.with_context(|| {
                 anyhow!(
-                    "failed to get a directory entry from `{}`: {}",
+                    "failed to get a directory entry from `{}`",
                     path.to_string_lossy(),
-                    error
                 )
             })?;
 
-            let metadata = entry.metadata().map_err(|error| {
+            let metadata = entry.metadata().with_context(|| {
                 anyhow!(
-                    "failed to get metadata for `{}`: {}",
+                    "failed to get metadata for `{}`",
                     entry.path().to_string_lossy(),
-                    error
                 )
             })?;
             let file_type = metadata.file_type();
@@ -70,7 +66,13 @@ fn read_directory(state: &mut State, path: &Path) -> Result<Dir> {
                     entry.path().to_string_lossy()
                 ))
             };
-            let name = entry.path().into_os_string().into_vec();
+            let name = entry
+                .path()
+                .file_name()
+                .context("expected path to have a valid filename")?
+                .as_bytes()
+                .to_owned();
+
             let entry_kind = if file_type.is_symlink() {
                 return unsupported_type("symlink", &entry);
             } else if file_type.is_socket() {
@@ -81,15 +83,11 @@ fn read_directory(state: &mut State, path: &Path) -> Result<Dir> {
                 return unsupported_type("block device", &entry);
             } else if file_type.is_char_device() {
                 return unsupported_type("character device", &entry);
-            } else if file_type.is_dir() {
-                EntryKind::File(File::open(&entry.path()).map_err(|error| {
-                    anyhow!(
-                        "failed to open file `{}`: {}",
-                        entry.path().to_string_lossy(),
-                        error
-                    )
-                })?)
             } else if file_type.is_file() {
+                EntryKind::File(File::open(&entry.path()).with_context(|| {
+                    anyhow!("failed to open file `{}`", entry.path().to_string_lossy(),)
+                })?)
+            } else if file_type.is_dir() {
                 EntryKind::Dir(read_directory(state, &entry.path())?)
             } else {
                 return Err(anyhow!(
@@ -121,7 +119,7 @@ fn bump_alloc(state: &mut State, size: u64) -> Result<u64> {
         state.offset += size;
         Ok(offset)
     } else {
-        Err(anyhow!("Bump allocation failed: max limit reached"))
+        Err(anyhow!("bump allocation failed: max limit reached"))
     }
 }
 struct WriteResult {
@@ -246,7 +244,12 @@ fn allocate_and_write_dir(
             EntryKind::Dir(ref subdir) => {
                 let write_result =
                     allocate_and_write_dir(state, subdir, inode_table_offset, start_inode)
-                        .context("failed to copy directory entries into image")?;
+                        .with_context(|| {
+                            anyhow!(
+                                "failed to copy directory entries from `{}` into image",
+                                String::from_utf8_lossy(&entry.name)
+                            )
+                        })?;
 
                 (write_result, initfs::InodeType::Dir)
             }
@@ -441,7 +444,7 @@ fn main() -> Result<()> {
 
     let inode_table_offset = initfs::Offset(
         u32::try_from(inode_table_offset)
-            .map_err(|_| anyhow!("inode table located too far away"))?
+            .with_context(|| "inode table located too far away")?
             .into(),
     );
 
