@@ -13,5 +13,6 @@ name = "redox-initfs-package"
 [dependencies]
 anyhow = "1"
 clap = "2.33"
+plain = "0.2"
 
 redox-initfs = { path = ".." }
