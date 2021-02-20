@@ -9,18 +9,16 @@ macro_rules! primitive(
 
         impl $wrapper {
             #[inline]
-            pub fn get(&self) -> $primitive {
+            pub const fn get(&self) -> $primitive {
                 <$primitive>::from_le_bytes(self.0)
             }
             #[inline]
-            pub fn set(&mut self, new: $primitive) {
-                self.0 = <$primitive>::to_le_bytes(new);
+            pub fn set(&mut self, primitive: $primitive) {
+                *self = Self::new(primitive);
             }
             #[inline]
-            pub fn new(primitive: $primitive) -> Self {
-                let mut this = Self::default();
-                this.set(primitive);
-                this
+            pub const fn new(primitive: $primitive) -> Self {
+                Self(<$primitive>::to_le_bytes(primitive))
             }
         }
         impl From<$primitive> for $wrapper {
@@ -41,7 +39,7 @@ primitive!(U32, 32, u32);
 primitive!(U64, 64, u64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Magic(pub [u8; MAGIC_LEN]);
 
 #[repr(transparent)]
