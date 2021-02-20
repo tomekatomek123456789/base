@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["4lDO2 <4lDO2@protonmail.com>"]
 edition = "2018"
 description = "Archive a directory into a Redox initfs image"
+license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
