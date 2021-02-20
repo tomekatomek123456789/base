@@ -50,10 +50,6 @@ pub struct Offset(pub U32);
 #[derive(Clone, Copy, Debug)]
 pub struct Length(pub U32);
 
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug)]
-pub struct Inode(pub U16);
-
 #[repr(packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct Timespec {
@@ -97,7 +93,7 @@ pub enum InodeType {
 #[repr(packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct DirEntry {
-    pub inode: Inode,
+    pub inode: U16,
     pub name_len: U16,
     pub name_offset: Offset,
 }

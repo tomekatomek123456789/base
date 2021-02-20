@@ -13,6 +13,9 @@ pub struct InitFs<'initfs> {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct Inode(u16);
+
+#[derive(Clone, Copy, Debug)]
 pub struct Error;
 
 impl core::fmt::Display for Error {
@@ -49,6 +52,59 @@ pub struct InodeDir<'initfs> {
 impl<'initfs> InodeDir<'initfs> {
     pub fn inode(self) -> InodeStruct<'initfs> {
         self.inner
+    }
+    pub fn entry_count(&self) -> Result<u32> {
+        let len = self.entries()?.len();
+
+        // NOTE: Len is originally stored as a u32 in the struct, so it can never exceed u32
+        // despite first being converted to usize.
+        let len = len as u32;
+
+        Ok(len)
+    }
+    pub fn get_entry(&self, idx: u32) -> Result<Option<Entry<'initfs>>> {
+        let idx = usize::try_from(idx).map_err(|_| Error)?;
+
+        self.entries().map(|entries| {
+            let entry = entries.get(idx)?;
+
+            Some(Entry {
+                entry,
+                initfs: self.inner.initfs,
+            })
+        })
+    }
+    fn entries(&self) -> Result<&'initfs [DirEntry]> {
+        let bytes = self.inner.data()?;
+        let entries = plain::slice_from_bytes::<DirEntry>(bytes)
+            .expect("expected dir entry to have alignment 1");
+
+        Ok(entries)
+    }
+}
+
+pub struct Entry<'initfs> {
+    initfs: InitFs<'initfs>,
+    entry: &'initfs DirEntry,
+}
+
+impl<'initfs> Entry<'initfs> {
+    pub fn inode(&self) -> Inode {
+        Inode(self.entry.inode.get())
+    }
+    pub fn name(&self) -> Result<&'initfs [u8]> {
+        let name_offset: usize = self
+            .entry
+            .name_offset
+            .0
+            .get()
+            .try_into()
+            .map_err(|_| Error)?;
+        let name_length: usize = self.entry.name_len.get().try_into().map_err(|_| Error)?;
+
+        let name_end = name_offset.checked_add(name_length).ok_or(Error)?;
+
+        self.initfs.base.get(name_offset..name_end).ok_or(Error)
     }
 }
 
@@ -153,11 +209,6 @@ impl<'initfs> InitFs<'initfs> {
             .try_into()
             .expect("expected inode struct size to fit within u8")
     }
-    fn direntry_struct_len_8() -> u8 {
-        core::mem::size_of::<DirEntry>()
-            .try_into()
-            .expect("expected dir entry struct size to fit within u8")
-    }
     fn inode_table_offset_usize(&self) -> usize {
         // NOTE: We have already validated that the inode table fits within the initfs slice, and
         // that this length, which must fit within usize, also fits within u32.
@@ -190,7 +241,7 @@ impl<'initfs> InitFs<'initfs> {
         plain::slice_from_bytes::<InodeHeader>(inode_table_bytes)
             .expect("expected inode struct alignment to be 1")
     }
-    pub const ROOT_INODE: Inode = Inode(U16::new(0));
+    pub const ROOT_INODE: Inode = Inode(0);
 
     pub fn inode_count(&self) -> u16 {
         self.get_header_assume_valid().inode_count.get()
@@ -199,7 +250,7 @@ impl<'initfs> InitFs<'initfs> {
         // NOTE: Even for 16-bit architectures (obviously edge-case, but some bootloaders may
         // perhaps use this code), we have already checked that the inode table can fit within
         // usize, and the table byte size is always larger than the count.
-        let inode_usize = inode.0.get() as usize;
+        let inode_usize = inode.0 as usize;
 
         let inode = self.inode_table().get(inode_usize)?;
 

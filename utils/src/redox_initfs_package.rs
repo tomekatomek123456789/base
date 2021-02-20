@@ -294,7 +294,7 @@ fn allocate_and_write_dir(
             let inode = this_start_inode + index;
 
             *direntry = initfs::DirEntry {
-                inode: initfs::Inode(inode.into()),
+                inode: inode.into(),
                 name_len: name_len.into(),
                 name_offset: initfs::Offset(name_offset.into()),
             };
