@@ -6,7 +6,7 @@ use std::{cmp, ops};
 use syscall::{Error, EventFlags, Map, Result, SchemeMut, Stat, StatVfs, TimeSpec};
 use syscall::flag::{O_ACCMODE, O_CREAT, O_EXCL, O_RDWR, O_RDONLY, O_WRONLY, O_DIRECTORY, O_STAT};
 use syscall::{MODE_FILE, MODE_DIR, MODE_PERM, MODE_TYPE, SEEK_CUR, SEEK_END, SEEK_SET};
-use syscall::error::{EACCES, EBADF, EBADFD, EEXIST, EINVAL, EISDIR, EIO, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY, EOVERFLOW};
+use syscall::error::{EACCES, EBADF, EBADFD, EEXIST, EINVAL, EISDIR, EIO, ENOENT, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY, EOVERFLOW};
 
 use crate::filesystem::{self, DirEntry, File, FileData, Filesystem};
 
