@@ -18,7 +18,8 @@ fn main() {
         return;
     }
 
-    let mut socket = File::create(format!(":{}", scheme_name)).expect("ramfs: failed to create socket");
+    let mut socket =
+        File::create(format!(":{}", scheme_name)).expect("ramfs: failed to create socket");
     let mut scheme = Scheme::new(scheme_name).expect("ramfs: failed to initialize scheme");
 
     'packet_loop: loop {

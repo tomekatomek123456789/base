@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::ffi::OsStr;
-use std::{iter, fs, time};
+use std::{fs, iter, time};
 
-use std::os::unix::io::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::io::AsRawFd;
 
-use syscall::{Error, Result, StatVfs, TimeSpec, MODE_DIR};
 use syscall::error::{EACCES, EIO, ENFILE, ENOENT};
 use syscall::flag::{O_RDONLY, O_STAT};
+use syscall::{Error, Result, StatVfs, TimeSpec, MODE_DIR};
 
 use super::scheme::current_perm;
 
@@ -106,12 +106,18 @@ impl Filesystem {
         self.get_block_size().unwrap_or(Self::DEFAULT_BLOCK_SIZE)
     }
     pub fn next_inode_number(&mut self) -> Result<usize> {
-        let next = self.last_inode_number.checked_add(1).ok_or(Error::new(ENFILE))?;
+        let next = self
+            .last_inode_number
+            .checked_add(1)
+            .ok_or(Error::new(ENFILE))?;
         self.last_inode_number = next;
         Ok(next)
     }
     fn resolve_generic(&self, mut parts: Vec<&[u8]>, uid: u32, gid: u32) -> Result<usize> {
-        let mut current_file = self.files.get(&Self::ROOT_INODE).ok_or(Error::new(ENOENT))?;
+        let mut current_file = self
+            .files
+            .get(&Self::ROOT_INODE)
+            .ok_or(Error::new(ENOENT))?;
         let mut current_inode = Self::ROOT_INODE;
 
         let mut i = 0;
@@ -126,7 +132,9 @@ impl Filesystem {
                 FileData::File(_) => return Err(Error::new(ENOENT)),
             };
             let perm = current_perm(&current_file, uid, gid);
-            if perm & 0o1 == 0 { return Err(Error::new(EACCES)) }
+            if perm & 0o1 == 0 {
+                return Err(Error::new(EACCES));
+            }
 
             if part == b"." || part == b".." {
                 parts.remove(i);
@@ -141,7 +149,10 @@ impl Filesystem {
             }
             let part = parts.get(i).unwrap();
 
-            let entry = dentries.iter().find(|dentry| &dentry.name == part).ok_or(Error::new(ENOENT))?;
+            let entry = dentries
+                .iter()
+                .find(|dentry| &dentry.name == part)
+                .ok_or(Error::new(ENOENT))?;
             current_file = self.files.get(&entry.inode).ok_or(Error::new(EIO))?;
             current_inode = entry.inode;
 
@@ -149,8 +160,15 @@ impl Filesystem {
         }
         Ok(current_inode)
     }
-    pub fn resolve_except_last<'a>(&self, mut path_bytes: &'a [u8], uid: u32, gid: u32) -> Result<(usize, Option<&'a [u8]>)> {
-        if path_bytes.first() == Some(&b'/') { path_bytes = &path_bytes[1..] }
+    pub fn resolve_except_last<'a>(
+        &self,
+        mut path_bytes: &'a [u8],
+        uid: u32,
+        gid: u32,
+    ) -> Result<(usize, Option<&'a [u8]>)> {
+        if path_bytes.first() == Some(&b'/') {
+            path_bytes = &path_bytes[1..]
+        }
         let mut parts = path_components_iter(path_bytes).collect::<Vec<_>>();
 
         let last = if parts.len() >= 1 {
@@ -162,7 +180,9 @@ impl Filesystem {
         Ok((self.resolve_generic(parts, uid, gid)?, last))
     }
     pub fn resolve(&self, mut path_bytes: &[u8], uid: u32, gid: u32) -> Result<usize> {
-        if path_bytes.first() == Some(&b'/') { path_bytes = &path_bytes[1..] }
+        if path_bytes.first() == Some(&b'/') {
+            path_bytes = &path_bytes[1..]
+        }
         let parts = path_components_iter(path_bytes).collect::<Vec<_>>();
 
         self.resolve_generic(parts, uid, gid)
@@ -183,14 +203,23 @@ pub fn current_time() -> TimeSpec {
             let negative_duration = e.duration();
 
             return TimeSpec {
-                tv_sec: negative_duration.as_secs().try_into().unwrap_or(i64::min_value()),
-                tv_nsec: negative_duration.subsec_nanos().try_into().unwrap_or(i32::min_value()),
+                tv_sec: negative_duration
+                    .as_secs()
+                    .try_into()
+                    .unwrap_or(i64::min_value()),
+                tv_nsec: negative_duration
+                    .subsec_nanos()
+                    .try_into()
+                    .unwrap_or(i32::min_value()),
             };
         }
     };
 
     TimeSpec {
         tv_sec: duration.as_secs().try_into().unwrap_or(i64::max_value()),
-        tv_nsec: duration.subsec_nanos().try_into().unwrap_or(i32::max_value()),
+        tv_nsec: duration
+            .subsec_nanos()
+            .try_into()
+            .unwrap_or(i32::max_value()),
     }
 }
