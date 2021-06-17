@@ -47,7 +47,7 @@ impl AudioScheme {
 }
 
 impl SchemeBlockMut for AudioScheme {
-    fn open(&mut self, _path: &[u8], flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
+    fn open(&mut self, _path: &str, flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
         self.next_id += 1;
         let id = self.next_id;
 

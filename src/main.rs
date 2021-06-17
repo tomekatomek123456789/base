@@ -4,7 +4,7 @@ use std::{fs, io, mem, process, slice, thread};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use syscall::data::{Packet, SigAction};
-use syscall::flag::{O_CLOEXEC, SIGUSR1};
+use syscall::flag::{CloneFlags, SigActionFlags, O_CLOEXEC, SIGUSR1};
 use syscall::scheme::SchemeBlockMut;
 
 use self::scheme::AudioScheme;
@@ -40,9 +40,9 @@ fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, mut hda_file: fs::File) -
 fn daemon(pipe_fd: usize) -> io::Result<()> {
     // Handle signals from the hda thread
     syscall::sigaction(SIGUSR1, Some(&SigAction {
-        sa_handler: sigusr_handler,
+        sa_handler: Some(sigusr_handler),
         sa_mask: [0; 2],
-        sa_flags: 0,
+        sa_flags: SigActionFlags::empty(),
     }), None).map_err(from_syscall_error)?;
 
     let pid = syscall::getpid().map_err(from_syscall_error)?;
@@ -104,7 +104,7 @@ fn audiod() -> io::Result<()> {
     syscall::pipe2(&mut pipe, O_CLOEXEC).map_err(from_syscall_error)?;
 
     // Daemonize
-    if unsafe { syscall::clone(0) }.map_err(from_syscall_error)? == 0 {
+    if unsafe { syscall::clone(CloneFlags::empty()) }.map_err(from_syscall_error)? == 0 {
         let _ = syscall::close(pipe[0]);
         return daemon(pipe[1]);
     } else {
