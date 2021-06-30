@@ -84,6 +84,7 @@ impl<'initfs> InodeDir<'initfs> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Entry<'initfs> {
     initfs: InitFs<'initfs>,
     entry: &'initfs DirEntry,
