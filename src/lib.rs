@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 //! A super simple initfs, only meant to be loaded into RAM by the bootloader, and then directly be
 //! read.
 
@@ -24,6 +24,9 @@ impl core::fmt::Display for Error {
         write!(f, "invalid or corrupt initfs")
     }
 }
+
+#[cfg(any(test, feature = "std"))]
+impl std::error::Error for Error {}
 
 type Result<T> = core::result::Result<T, Error>;
 

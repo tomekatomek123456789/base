@@ -11,12 +11,19 @@ license = "MIT"
 plain = "0.2"
 
 [features]
-default = []
+default = ["std"]
+
+std = []
 
 # Enables functionality to actually read the filesystem, which is only done in
 # the kernel. (Writing to the filesystem is done in utils, and that crate only
 # needs the type definitions).
 kernel = []
+
+[dev-dependencies]
+log = "0.4"
+env_logger = "0.8"
+anyhow = "1"
 
 [workspace]
 members = [
