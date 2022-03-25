@@ -5,4 +5,4 @@ authors = ["Jeremy Soller <jackpot51@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-redox_syscall = "0.2.9"
+redox_syscall = "0.2.12"
