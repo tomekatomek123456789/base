@@ -67,32 +67,6 @@ pub unsafe extern "sysv64" fn start() -> ! {
     let _ = syscall::mprotect(rodata_start, rodata_end - rodata_start, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for .rodata");
     let _ = syscall::mprotect(data_start, data_end - data_start, MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_PRIVATE).expect("mprotect failed for .data/.bss");
 
-    /*const FD_ANONYMOUS: usize = !0;
-
-    {
-        let heap_size = 1024 * 1024;
-        let heap_start = syscall::fmap(FD_ANONYMOUS, &syscall::Map { offset: 0, address: 0, size: heap_size, flags: MapFlags::MAP_PRIVATE | MapFlags::PROT_READ | MapFlags::PROT_WRITE }).expect("failed to map heap");
-        crate::ALLOCATOR.0.get().write(linked_list_allocator::Heap::new(heap_start, heap_size));
-    }
-
-    let init_fd = syscall::open("initfs:/bin/init", syscall::O_CLOEXEC | syscall::O_RDONLY).expect("failed to open init");
-
-    const STACK_SIZE: usize = 1024 * 1024;
-    let stack = syscall::fmap(FD_ANONYMOUS, &syscall::Map { offset: 0, address: 0, flags: MapFlags::MAP_PRIVATE | MapFlags::PROT_READ | MapFlags::PROT_WRITE, size: STACK_SIZE }).unwrap();
-
-    let stack_top = 1_usize << 48;
-    memranges.push(syscall::ExecMemRange { address: stack_top - STACK_SIZE, size: STACK_SIZE, flags: MapFlags::PROT_READ | MapFlags::PROT_WRITE, old_address: stack });
-
-    // Now, push things such as argv, env (i.e. kernel cmdline when executing init) and auxv.
-    // TODO: Figure out reason behind subtraction by 256 (inherited from kernel behavior).
-    let mut target_sp = stack_top - 256;
-    let actual_sp = (stack + STACK_SIZE) as *mut usize;
-
-    let mut push = |value: usize| {
-        target_sp -= core::mem::size_of::<usize>();
-        actual_sp = actual_sp.sub(core::mem::size_of::<usize>());
-        actual_sp.write(value);
-    };*/
     extern "C" {
         fn relibc_start(stack: usize);
     }
