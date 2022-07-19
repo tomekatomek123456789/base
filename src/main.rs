@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::{env, io, process};
 
-use syscall::{Daemon, Packet, SchemeMut};
+use syscall::{Packet, SchemeMut};
 
 mod filesystem;
 mod scheme;
@@ -14,7 +14,7 @@ use self::scheme::Scheme;
 fn main() {
     let scheme_name = env::args().nth(1).expect("Usage:\n\tramfs SCHEME_NAME");
 
-    Daemon::new(move |daemon| {
+    redox_daemon::Daemon::new(move |daemon| {
         let mut socket =
             File::create(format!(":{}", scheme_name)).expect("ramfs: failed to create socket");
 
