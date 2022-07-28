@@ -247,7 +247,7 @@ impl SchemeMut for InitFsScheme {
     }
 }
 
-pub fn run(bytes: &'static [u8], sync_pipe: usize) {
+pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
     let mut scheme = InitFsScheme::new(bytes);
 
     let socket = syscall::open(":initfs", O_RDWR | O_CLOEXEC | O_CREAT)
@@ -276,4 +276,6 @@ pub fn run(bytes: &'static [u8], sync_pipe: usize) {
             }
         }
     }
+    syscall::exit(0);
+    unreachable!()
 }

@@ -10,14 +10,10 @@ name = "bootstrap"
 crate-type = ["staticlib"]
 
 [dependencies]
-arrayvec = { version = "0.7", default-features = false }
-goblin = { version = "0.4", default-features = false, features = ["elf32", "elf64"] }
-libc = "0.2"
-memoffset = "0.6"
-scroll = { version = "0.10", default-features = false }
 linked_list_allocator = "0.9"
 redox-initfs = { git = "https://gitlab.redox-os.org/redox-os/redox-initfs.git", features = ["kernel"], default-features = false }
-redox_syscall = { git = "https://gitlab.redox-os.org/4lDO2/syscall.git", branch = "userspace_fexec" }
+redox-exec = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", branch = "redox-exec" }
+redox_syscall = "0.3"
 
 [profile.release]
 panic = "abort"

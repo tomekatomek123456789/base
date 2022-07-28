@@ -9,6 +9,9 @@ pub mod initfs;
 
 extern crate alloc;
 
+use syscall::data::Map;
+use syscall::flag::MapFlags;
+
 #[panic_handler]
 fn panic_handler(info: &core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
@@ -37,27 +40,43 @@ fn alloc_error_handler(_: core::alloc::Layout) -> ! {
 #[lang = "eh_personality"]
 extern "C" fn rust_eh_personality() {}
 
-mod allocator {
-    struct RelibcAllocator;
+const HEAP_OFF: usize = 0x4000_0000_0000;
 
-    #[global_allocator]
-    static GLOBAL: RelibcAllocator = RelibcAllocator;
+struct Allocator;
+#[global_allocator]
+static ALLOCATOR: Allocator = Allocator;
 
-    use alloc::alloc::*;
+static mut HEAP: Option<linked_list_allocator::Heap> = None;
+static mut HEAP_TOP: usize = HEAP_OFF + SIZE;
+const SIZE: usize = 1024 * 1024;
+const HEAP_INCREASE_BY: usize = SIZE;
 
-    unsafe impl GlobalAlloc for RelibcAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            let mut ptr = core::ptr::null_mut();
-            let align = core::cmp::max(layout.align(), core::mem::align_of::<*mut libc::c_void>());
+unsafe impl alloc::alloc::GlobalAlloc for Allocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        let heap = HEAP.get_or_insert_with(|| {
+            HEAP_TOP = HEAP_OFF + SIZE;
+            let _ = syscall::fmap(!0, &Map { offset: 0, size: SIZE, address: HEAP_OFF, flags: MapFlags::PROT_WRITE | MapFlags::PROT_READ | MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED_NOREPLACE })
+                .expect("failed to map initial heap");
+            linked_list_allocator::Heap::new(HEAP_OFF, SIZE)
+        });
 
-            if libc::posix_memalign(&mut ptr, align, layout.size()) == 0 {
-                ptr.cast()
-            } else {
-                core::ptr::null_mut()
+        match heap.allocate_first_fit(layout) {
+            Ok(p) => p.as_ptr(),
+            Err(_) => {
+                if layout.size() > HEAP_INCREASE_BY || layout.align() > 4096 {
+                    return core::ptr::null_mut();
+                }
+
+                let _ = syscall::fmap(!0, &Map { offset: 0, size: HEAP_INCREASE_BY, address: HEAP_TOP, flags: MapFlags::PROT_WRITE | MapFlags::PROT_READ | MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED_NOREPLACE })
+                    .expect("failed to extend heap");
+                heap.extend(HEAP_INCREASE_BY);
+                HEAP_TOP += HEAP_INCREASE_BY;
+
+                return self.alloc(layout);
             }
         }
-        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-            libc::free(ptr.cast());
-        }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        HEAP.as_mut().unwrap().deallocate(core::ptr::NonNull::new(ptr).unwrap(), layout)
     }
 }
