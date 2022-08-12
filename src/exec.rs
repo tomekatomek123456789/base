@@ -53,14 +53,19 @@ pub fn main() -> ! {
 
         spawn_initfs(initfs_offset, initfs_length);
     }
+    const CWD: &[u8] = b"initfs:";
+    let extrainfo = redox_exec::ExtraInfo {
+        cwd: Some(CWD),
+    };
+
     let path = "initfs:bin/init";
-    let total_args_envs_size = path.len() + 1 + envs.len() + envs.iter().map(|v| v.len()).sum::<usize>();
+    let total_args_envs_auxvpointee_size = path.len() + 1 + envs.len() + envs.iter().map(|v| v.len()).sum::<usize>() + CWD.len() + 1;
 
     let image_file = FdGuard::new(syscall::open(path, O_RDONLY).expect("failed to open init"));
     let open_via_dup = FdGuard::new(syscall::open("thisproc:current/open_via_dup", 0).expect("failed to open open_via_dup"));
     let memory = FdGuard::new(syscall::open("memory:", 0).expect("failed to open memory"));
 
-    fexec_impl(image_file, open_via_dup, &memory, path.as_bytes(), [path], envs.iter(), total_args_envs_size, None).expect("failed to execute init");
+    fexec_impl(image_file, open_via_dup, &memory, path.as_bytes(), [path], envs.iter(), total_args_envs_auxvpointee_size, &extrainfo, None).expect("failed to execute init");
 
     unreachable!()
 }
@@ -82,8 +87,6 @@ unsafe fn spawn_initfs(initfs_start: usize, initfs_length: usize) {
         Ok(_) => {
             let _ = syscall::close(write);
             let _ = syscall::read(read, &mut [0]);
-
-            let _ = syscall::chdir("initfs:");
 
             return;
         }
