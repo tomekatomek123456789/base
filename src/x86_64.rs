@@ -24,7 +24,7 @@ pub unsafe extern "C" fn ustart() {
         # Setup a stack.
         mov rax, {number}
         mov rdi, {fd}
-        lea rsi, {map} # pointer to Map struct
+        mov rsi, offset {map} # pointer to Map struct
         mov rdx, {map_size} # size of Map struct
         syscall
 
