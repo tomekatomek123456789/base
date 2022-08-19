@@ -9,6 +9,10 @@
     panic_info_message
 )]
 
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64.rs"]
+pub mod arch;
+
 #[cfg(target_arch = "x86")]
 #[path = "i686.rs"]
 pub mod arch;

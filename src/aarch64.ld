@@ -1,0 +1,46 @@
+ENTRY(ustart)
+OUTPUT_FORMAT("elf64-littleaarch64", "elf64-littleaarch64", "elf64-littleaarch64")
+
+SECTIONS {
+  . = 0;
+  . += SIZEOF_HEADERS;
+  . = ALIGN(4096);
+
+  .text : {
+    __text_start = .;
+    *(.text*)
+    . = ALIGN(4096);
+    __text_end = .;
+  }
+  .rodata : {
+    __rodata_start = .;
+    *(.rodata*)
+    . = ALIGN(4096);
+    __rodata_end = .;
+  }
+  .data : {
+    __data_start = .;
+    *(.data*)
+    . = ALIGN(4096);
+    __data_end = .;
+
+    *(.tbss*)
+    . = ALIGN(4096);
+    *(.tdata*)
+    . = ALIGN(4096);
+
+    __bss_start = .;
+    *(.bss*)
+    . = ALIGN(4096);
+    __bss_end = .;
+  }
+  __end = .;
+
+  /DISCARD/ : {
+      *(.comment*)
+      *(.eh_frame*)
+      *(.gcc_except_table*)
+      *(.note*)
+      *(.rel.eh_frame*)
+  }
+}
