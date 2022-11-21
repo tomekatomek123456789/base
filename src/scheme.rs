@@ -45,8 +45,10 @@ impl AudioScheme {
                     let mut i = 0;
                     while i < mix_buffer.len() {
                         if let Some(sample) = buffer.pop_front() {
-                            let left = ((sample.0 as i32 * self.volume) / 100) as i16;
-                            let right = ((sample.1 as i32 * self.volume) / 100) as i16;
+                            // Multiply each sample by volume squared divided by 100 squared
+                            // This feels better than just multiplying by volume divided by 100
+                            let left = ((sample.0 as i32 * self.volume * self.volume) / 10000) as i16;
+                            let right = ((sample.1 as i32 * self.volume * self.volume) / 10000) as i16;
                             mix_buffer[i].0 = mix_buffer[i].0.saturating_add(left);
                             mix_buffer[i].1 = mix_buffer[i].1.saturating_add(right);
                         } else {
