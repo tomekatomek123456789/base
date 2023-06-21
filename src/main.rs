@@ -1,11 +1,12 @@
 extern crate syscall;
 
+use std::mem::MaybeUninit;
+use std::ptr::addr_of_mut;
 use std::{fs, io, mem, process, slice, thread};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 
-use syscall::data::{Packet, SigAction};
-use syscall::flag::{SigActionFlags, SIGUSR1};
+use syscall::data::Packet;
 use syscall::scheme::SchemeBlockMut;
 
 use redox_daemon::Daemon;
@@ -34,7 +35,7 @@ fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, mut hw_file: fs::File) ->
         };
 
         // Wake up the scheme thread
-        syscall::kill(pid, SIGUSR1).map_err(from_syscall_error)?;
+        syscall::kill(pid, syscall::SIGUSR1).map_err(from_syscall_error)?;
 
         hw_file.write(&buffer_u8)?;
     }
@@ -42,11 +43,19 @@ fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, mut hw_file: fs::File) ->
 
 fn daemon(daemon: Daemon) -> io::Result<()> {
     // Handle signals from the hw thread
-    syscall::sigaction(SIGUSR1, Some(&SigAction {
-        sa_handler: Some(sigusr_handler),
-        sa_mask: [0; 2],
-        sa_flags: SigActionFlags::empty(),
-    }), None).map_err(from_syscall_error)?;
+
+    unsafe {
+        let mut sigaction = MaybeUninit::<libc::sigaction>::uninit();
+        addr_of_mut!((*sigaction.as_mut_ptr()).sa_flags).write(0);
+        libc::sigemptyset(addr_of_mut!((*sigaction.as_mut_ptr()).sa_mask));
+        addr_of_mut!((*sigaction.as_mut_ptr()).sa_sigaction).write(sigusr_handler as usize);
+
+        match libc::sigaction(libc::SIGUSR1, sigaction.as_ptr(), core::ptr::null_mut()) {
+            0 => (),
+            -1 => return Err(io::Error::last_os_error()),
+            _ => unreachable!(),
+        }
+    }
 
     let pid = syscall::getpid().map_err(from_syscall_error)?;
 
