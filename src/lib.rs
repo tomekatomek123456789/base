@@ -1,7 +1,6 @@
 #![no_std]
 #![feature(
     asm_const,
-    asm_sym,
     alloc_error_handler,
     core_intrinsics,
     lang_items,
