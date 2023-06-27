@@ -258,6 +258,7 @@ pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
         .expect("failed to open initfs scheme socket");
 
     let _ = syscall::write(sync_pipe, &[0]);
+    let _ = syscall::close(sync_pipe);
 
     let mut packet = Packet::default();
 

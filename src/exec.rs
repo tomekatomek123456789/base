@@ -71,9 +71,10 @@ pub fn main() -> ! {
 }
 
 unsafe fn spawn_initfs(initfs_start: usize, initfs_length: usize) {
-    let mut buf = [0; 2];
-    syscall::pipe2(&mut buf, syscall::O_CLOEXEC).expect("failed to open sync pipe");
-    let [read, write] = buf;
+    let read = syscall::open("pipe:", syscall::O_CLOEXEC).expect("failed to open sync read pipe");
+
+    // The write pipe will not inherit O_CLOEXEC, but is closed by the daemon later.
+    let write = syscall::dup(read, b"write").expect("failed to open sync write pipe");
 
     match redox_exec::fork_impl() {
         Err(err) => {
