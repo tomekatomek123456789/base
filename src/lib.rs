@@ -78,7 +78,7 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
             HEAP_TOP = HEAP_OFF + SIZE;
             let _ = syscall::fmap(!0, &Map { offset: 0, size: SIZE, address: HEAP_OFF, flags: MapFlags::PROT_WRITE | MapFlags::PROT_READ | MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED_NOREPLACE })
                 .expect("failed to map initial heap");
-            linked_list_allocator::Heap::new(HEAP_OFF, SIZE)
+            linked_list_allocator::Heap::new(HEAP_OFF as *mut u8, SIZE)
         });
 
         match heap.allocate_first_fit(layout) {

@@ -10,16 +10,13 @@ name = "bootstrap"
 crate-type = ["staticlib"]
 
 [dependencies]
-linked_list_allocator = "0.9"
+linked_list_allocator = "0.10"
 redox-initfs = { git = "https://gitlab.redox-os.org/redox-os/redox-initfs.git", features = ["kernel"], default-features = false }
 redox-exec = { git = "https://gitlab.redox-os.org/redox-os/relibc.git" }
-redox_syscall = "0.3.2"
+redox_syscall = "0.4"
 
 [profile.release]
 panic = "abort"
 
 [profile.dev]
 panic = "abort"
-
-[patch.crates-io]
-redox_syscall = { git = "https://gitlab.redox-os.org/redox-os/syscall.git" }

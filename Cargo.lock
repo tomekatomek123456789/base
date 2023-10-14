@@ -37,9 +37,9 @@ dependencies = [
 
 [[package]]
 name = "linked_list_allocator"
-version = "0.9.1"
+version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "549ce1740e46b291953c4340adcd74c59bcf4308f4cac050fd33ba91b7168f4a"
+checksum = "9afa463f5405ee81cdb9cc2baf37e08ec7e4c8209442b5d72c04cfb2cd6e6286"
 dependencies = [
  "spinning_top",
 ]
@@ -56,9 +56,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.19"
+version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
+checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 
 [[package]]
 name = "plain"
@@ -87,7 +87,7 @@ dependencies = [
 [[package]]
 name = "redox-exec"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3327bc820dc089d28b855e902ae058119d5a9c80"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#2c7ec0dc8eec7307cfcb5d4aa9ddf332b7132a83"
 dependencies = [
  "goblin",
  "plain",
@@ -104,8 +104,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.3.5"
-source = "git+https://gitlab.redox-os.org/redox-os/syscall.git#a525620c818a801bb7038e111b71033eff56a3ee"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4722d768eff46b75989dd134e5c353f0d6296e5aaa3132e776cbdb56be7731aa"
 dependencies = [
  "bitflags",
 ]
