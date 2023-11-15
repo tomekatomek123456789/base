@@ -10,4 +10,6 @@ description = "In-memory filesystem for Redox, which is useful for early logging
 
 [dependencies]
 redox-daemon = "0.1.1"
-redox_syscall = "0.3"
+redox_syscall = "0.4.1"
+redox-scheme = { git = "https://gitlab.redox-os.org/redox-os/redox-scheme.git" }
+libredox = "0.0.3"

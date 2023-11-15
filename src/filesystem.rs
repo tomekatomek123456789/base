@@ -98,9 +98,7 @@ impl Filesystem {
         }
     }
     pub fn get_block_size(&self) -> Result<u32> {
-        let mut statvfs = StatVfs::default();
-        syscall::fstatvfs(self.memory_file.as_raw_fd() as usize, &mut statvfs)?;
-        Ok(statvfs.f_bsize)
+        Ok(libredox::call::fstatvfs(self.memory_file.as_raw_fd() as usize)?.f_bsize as u32)
     }
     pub fn block_size(&self) -> u32 {
         self.get_block_size().unwrap_or(Self::DEFAULT_BLOCK_SIZE)
