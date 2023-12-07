@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::str;
 use syscall::error::{EBADF, EINVAL, ENOENT, EWOULDBLOCK, Error, Result};
 use syscall::flag::O_NONBLOCK;
-use syscall::scheme::SchemeBlockMut;
+
+use redox_scheme::SchemeBlockMut;
 
 // The strict buffer size of the audiohw: driver
 const HW_BUFFER_SIZE: usize = 512;
