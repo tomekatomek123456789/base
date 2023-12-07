@@ -4,14 +4,16 @@ use std::os::unix::io::AsRawFd;
 use std::{cmp, ops};
 
 use syscall::error::{
-    EACCES, EBADF, EBADFD, EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY,
+    EACCES, EBADF, EBADFD, EEXIST, EINVAL, EIO, EISDIR, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY,
     EOVERFLOW,
 };
 use syscall::flag::{
     O_ACCMODE, O_CREAT, O_DIRECTORY, O_EXCL, O_RDONLY, O_RDWR, O_STAT, O_TRUNC, O_WRONLY,
 };
-use syscall::{Error, EventFlags, Map, Result, SchemeMut, Stat, StatVfs, TimeSpec};
+use syscall::{Error, EventFlags, Map, Result, Stat, StatVfs, TimeSpec};
 use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE, SEEK_CUR, SEEK_END, SEEK_SET};
+
+use redox_scheme::SchemeMut;
 
 use crate::filesystem::{self, DirEntry, File, FileData, Filesystem};
 
@@ -475,25 +477,21 @@ impl SchemeMut for Scheme {
         }
         Err(Error::new(ENOSYS))
     }
-    fn fmap(&mut self, fd: usize, _map: &Map) -> Result<usize> {
+    fn mmap_prep(&mut self, fd: usize, _offset: u64, _size: usize, _flags: syscall::MapFlags) -> Result<usize> {
         if !self.handles.contains_key(&fd) {
             return Err(Error::new(EBADF));
         }
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn funmap(&mut self, _address: usize, _len: usize) -> Result<usize> {
-        // TODO
-        Err(Error::new(ENOSYS))
-    }
-    fn fpath(&mut self, fd: usize, buf: &mut [u8]) -> Result<usize> {
+    fn fpath(&mut self, fd: usize, _buf: &mut [u8]) -> Result<usize> {
         if !self.handles.contains_key(&fd) {
             return Err(Error::new(EBADF));
         }
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn frename(&mut self, fd: usize, path: &str, uid: u32, gid: u32) -> Result<usize> {
+    fn frename(&mut self, fd: usize, _path: &str, _uid: u32, _gid: u32) -> Result<usize> {
         if !self.handles.contains_key(&fd) {
             return Err(Error::new(EBADF));
         }
@@ -563,7 +561,14 @@ impl SchemeMut for Scheme {
         if !self.handles.contains_key(&fd) {
             return Err(Error::new(EBADF));
         }
-        syscall::fstatvfs(self.filesystem.memory_file.as_raw_fd() as usize, stat)?;
+        let abi_stat = libredox::call::fstatvfs(self.filesystem.memory_file.as_raw_fd() as usize)?;
+        // TODO: From impl
+        *stat = StatVfs {
+            f_bavail: abi_stat.f_bavail,
+            f_bfree: abi_stat.f_bfree,
+            f_blocks: abi_stat.f_blocks,
+            f_bsize: abi_stat.f_bsize as u32,
+        };
 
         Ok(0)
     }
