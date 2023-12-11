@@ -71,12 +71,17 @@ fn daemon(daemon: Daemon) -> Result<()> {
     let mut pending = Vec::new();
 
     loop  {
-        if let Some(request) = socket.next_request(SignalBehavior::Restart)? {
-            match request.handle_scheme_block_mut(&mut *scheme.lock().unwrap()) {
+        match socket.next_request(SignalBehavior::Interrupt) {
+            Ok(Some(request)) => match request.handle_scheme_block_mut(&mut *scheme.lock().unwrap()) {
                 Ok(response) => {
                     socket.write_responses(&[response], SignalBehavior::Restart)?;
                 }
                 Err(request) => pending.push(request),
+            },
+            Ok(None) => {},
+            Err(err) => match err.errno {
+                libredox::errno::EINTR => {},
+                _ => return Err(err),
             }
         }
 
