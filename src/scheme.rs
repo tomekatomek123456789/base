@@ -564,9 +564,9 @@ impl SchemeMut for Scheme {
         let abi_stat = libredox::call::fstatvfs(self.filesystem.memory_file.as_raw_fd() as usize)?;
         // TODO: From impl
         *stat = StatVfs {
-            f_bavail: abi_stat.f_bavail,
-            f_bfree: abi_stat.f_bfree,
-            f_blocks: abi_stat.f_blocks,
+            f_bavail: abi_stat.f_bavail as u64,
+            f_bfree: abi_stat.f_bfree as u64,
+            f_blocks: abi_stat.f_blocks as u64,
             f_bsize: abi_stat.f_bsize as u32,
         };
 
