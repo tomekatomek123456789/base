@@ -15,9 +15,9 @@ static MAP: Map = Map {
 };
 
 core::arch::global_asm!(
-"
-    .globl ustart
-    ustart:
+    "
+    .globl _start
+    _start:
     # Setup a stack.
     mov eax, {number}
     mov ebx, {fd}

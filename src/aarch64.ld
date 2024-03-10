@@ -1,4 +1,4 @@
-ENTRY(ustart)
+ENTRY(_start)
 OUTPUT_FORMAT("elf64-littleaarch64", "elf64-littleaarch64", "elf64-littleaarch64")
 
 SECTIONS {

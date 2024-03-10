@@ -20,8 +20,8 @@ static MAP: Map = Map {
 
 core::arch::global_asm!(
     "
-    .globl ustart
-    ustart:
+    .globl _start
+    _start:
     // Setup a stack.
     ldr x8, ={number}
     ldr x0, ={fd}
