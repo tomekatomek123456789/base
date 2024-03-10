@@ -3,7 +3,6 @@
     asm_const,
     alloc_error_handler,
     core_intrinsics,
-    panic_info_message
 )]
 
 #[cfg(target_arch = "aarch64")]
@@ -39,12 +38,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
         }
     }
 
-    let _ = syscall::write(1, b"panic: ");
-    if let Some(message) = info.message() {
-        writeln!(&mut Writer, "{}", message).unwrap();
-    } else {
-        let _ = syscall::write(1, b"(explicit panic)\n");
-    }
+    let _ = writeln!(&mut Writer, "{}", info);
     core::intrinsics::abort();
 }
 
