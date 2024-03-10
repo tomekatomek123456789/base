@@ -11,8 +11,6 @@ mod offsets {
         // data+bss (RW-)
         static __data_start: u8;
         static __bss_end: u8;
-
-        static __end: u8;
     }
     pub fn text() -> (usize, usize) {
         unsafe { (&__text_start as *const u8 as usize, &__text_end as *const u8 as usize) }

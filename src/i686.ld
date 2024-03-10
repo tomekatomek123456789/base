@@ -34,7 +34,6 @@ SECTIONS {
     . = ALIGN(4096);
     __bss_end = .;
   }
-  __end = .;
 
   /DISCARD/ : {
       *(.comment*)
