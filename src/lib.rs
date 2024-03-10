@@ -3,7 +3,6 @@
     asm_const,
     alloc_error_handler,
     core_intrinsics,
-    lang_items,
     panic_info_message
 )]
 
@@ -53,8 +52,6 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 fn alloc_error_handler(_: core::alloc::Layout) -> ! {
     core::intrinsics::abort();
 }
-#[lang = "eh_personality"]
-extern "C" fn rust_eh_personality() {}
 
 #[cfg(target_pointer_width = "32")]
 const HEAP_OFF: usize = 0x4000_0000;
