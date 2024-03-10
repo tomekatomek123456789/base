@@ -35,13 +35,14 @@ pub unsafe extern "C" fn start() -> ! {
     let _ = syscall::open("debug:", syscall::O_WRONLY); // stdout
     let _ = syscall::open("debug:", syscall::O_WRONLY); // stderr
 
-    // TODO: PROT_NONE
-    let _ = syscall::mprotect(0, 4096, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for NULL page");
+    let _ = syscall::mprotect(4096, 4096, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for initfs header page");
 
     let _ = syscall::mprotect(text_start, text_end - text_start, MapFlags::PROT_READ | MapFlags::PROT_EXEC | MapFlags::MAP_PRIVATE).expect("mprotect failed for .text");
     let _ = syscall::mprotect(rodata_start, rodata_end - rodata_start, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for .rodata");
     let _ = syscall::mprotect(data_start, data_end - data_start, MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_PRIVATE).expect("mprotect failed for .data/.bss");
     let _ = syscall::mprotect(data_end, crate::arch::STACK_START - data_end, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for rest of memory");
+
+    // FIXME make the initfs read-only
 
     crate::exec::main();
 }
