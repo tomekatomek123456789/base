@@ -1,6 +1,9 @@
-#![cfg_attr(not(any(test, feature = "std")), no_std)]
+#![no_std]
 //! A super simple initfs, only meant to be loaded into RAM by the bootloader, and then directly be
 //! read.
+
+#[cfg(any(test, feature = "std"))]
+extern crate std;
 
 use core::convert::{TryFrom, TryInto};
 
