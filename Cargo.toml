@@ -17,6 +17,7 @@ redox_syscall = "0.4"
 
 [profile.release]
 panic = "abort"
+lto = "fat"
 
 [profile.dev]
 panic = "abort"
