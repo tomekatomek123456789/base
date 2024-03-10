@@ -14,6 +14,7 @@ fn archive_and_read() -> Result<()> {
     let args = self::archive::Args {
         destination_path: Path::new("out.img"),
         source: Path::new("data"),
+        bootstrap_code: None,
         max_size: self::archive::DEFAULT_MAX_SIZE,
     };
     self::archive::archive(&args).context("failed to archive")?;

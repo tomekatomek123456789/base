@@ -25,6 +25,11 @@ fn main() -> Result<()> {
                 .help("Specify the source directory to build the image from."),
         )
         .arg(
+            Arg::new("BOOTSTRAP_CODE")
+                .required(false)
+                .help("Specify the bootstrap ELF file to include in the image.")
+        )
+        .arg(
             Arg::new("OUTPUT")
                 .required(true)
                 .long("output")
@@ -47,12 +52,15 @@ fn main() -> Result<()> {
         .get_one::<String>("SOURCE")
         .expect("expected the required arg SOURCE to exist");
 
+    let bootstrap_code = matches.get_one::<String>("BOOTSTRAP_CODE");
+
     let destination = matches
         .get_one::<String>("OUTPUT")
         .expect("expected the required arg OUTPUT to exist");
 
     let args = Args {
         source: Path::new(source),
+        bootstrap_code: bootstrap_code.map(|bootstrap_code| Path::new(bootstrap_code)),
         destination_path: Path::new(destination),
         max_size,
     };

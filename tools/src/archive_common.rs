@@ -355,8 +355,16 @@ pub struct Args<'a> {
     pub destination_path: &'a Path,
     pub max_size: u64,
     pub source: &'a Path,
+    pub bootstrap_code: Option<&'a Path>,
 }
-pub fn archive(&Args { destination_path, max_size, source }: &Args) -> Result<()> {
+pub fn archive(
+    &Args {
+        destination_path,
+        max_size,
+        source,
+        bootstrap_code,
+    }: &Args,
+) -> Result<()> {
     let previous_extension = destination_path.extension().map_or("", |ext| {
         ext.to_str()
             .expect("expected destination path to be valid UTF-8")
@@ -407,14 +415,20 @@ pub fn archive(&Args { destination_path, max_size, source }: &Args) -> Result<()
     log::debug!("there are {} inodes", state.inode_count);
 
     // NOTE: The header is always stored at offset zero.
-    let header_offset = bump_alloc(
-        &mut state,
-        std::mem::size_of::<initfs::Header>()
-            .try_into()
-            .expect("expected header size to fit"),
-        "allocate header",
-    )?;
+    let header_offset = bump_alloc(&mut state, 4096, "allocate header")?;
     assert_eq!(header_offset, 0);
+
+    if let Some(bootstrap_code) = bootstrap_code {
+        allocate_and_write_file(
+            &mut state,
+            &File::open(bootstrap_code).with_context(|| {
+                anyhow!(
+                    "failed to open bootstrap code file `{}`",
+                    bootstrap_code.to_string_lossy(),
+                )
+            })?,
+        )?;
+    };
 
     let inode_table_length = {
         let inode_entry_size: u64 = std::mem::size_of::<initfs::InodeHeader>()
