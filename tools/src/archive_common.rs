@@ -418,7 +418,7 @@ pub fn archive(
     let header_offset = bump_alloc(&mut state, 4096, "allocate header")?;
     assert_eq!(header_offset, 0);
 
-    if let Some(bootstrap_code) = bootstrap_code {
+    let bootstrap_entry = if let Some(bootstrap_code) = bootstrap_code {
         allocate_and_write_file(
             &mut state,
             &File::open(bootstrap_code).with_context(|| {
@@ -428,6 +428,15 @@ pub fn archive(
                 )
             })?,
         )?;
+        let bootstrap_data = std::fs::read(bootstrap_code).with_context(|| {
+            anyhow!(
+                "failed to read bootstrap code file `{}`",
+                bootstrap_code.to_string_lossy(),
+            )
+        })?;
+        elf_entry(&bootstrap_data)
+    } else {
+        u64::MAX
     };
 
     let inode_table_length = {
@@ -477,6 +486,7 @@ pub fn archive(
             },
             inode_count: state.inode_count.into(),
             inode_table_offset,
+            bootstrap_entry: bootstrap_entry.into(),
         };
         write_all_at(&*state.file, &header_bytes, header_offset, "writing header")
             .context("failed to write header")?;
@@ -488,4 +498,29 @@ pub fn archive(
     state.file.ok = true;
 
     Ok(())
+}
+
+fn elf_entry(data: &[u8]) -> u64 {
+    assert!(&data[..4] == b"\x7FELF");
+    match (data[4], data[5]) {
+        // 32-bit, little endian
+        (1, 1) => u32::from_le_bytes(
+            <[u8; 4]>::try_from(&data[0x18..0x18 + 4]).expect("conversion cannot fail"),
+        ) as u64,
+        // 32-bit, big endian
+        (1, 2) => u32::from_be_bytes(
+            <[u8; 4]>::try_from(&data[0x18..0x18 + 4]).expect("conversion cannot fail"),
+        ) as u64,
+        // 64-bit, little endian
+        (2, 1) => u64::from_le_bytes(
+            <[u8; 8]>::try_from(&data[0x18..0x18 + 8]).expect("conversion cannot fail"),
+        ),
+        // 64-bit, big endian
+        (2, 2) => u64::from_be_bytes(
+            <[u8; 8]>::try_from(&data[0x18..0x18 + 8]).expect("conversion cannot fail"),
+        ),
+        (ei_class, ei_data) => {
+            panic!("Unsupported ELF EI_CLASS {} EI_DATA {}", ei_class, ei_data);
+        }
+    }
 }

@@ -1,3 +1,5 @@
+use core::mem::offset_of;
+
 pub const MAGIC_LEN: usize = 8;
 pub const MAGIC: [u8; 8] = *b"RedoxFtw";
 
@@ -69,7 +71,13 @@ pub struct Header {
     pub inode_table_offset: Offset,
     pub creation_time: Timespec,
     pub inode_count: U16,
+    pub bootstrap_entry: U64,
 }
+
+const _: () = {
+    // Ensure the offsets of field used by the bootloader stay stable.
+    assert!(offset_of!(Header, bootstrap_entry) == 0x1a);
+};
 
 #[repr(packed)]
 #[derive(Clone, Copy, Debug)]
