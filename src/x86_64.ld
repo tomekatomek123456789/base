@@ -2,7 +2,8 @@ ENTRY(_start)
 OUTPUT_FORMAT(elf64-x86-64)
 
 SECTIONS {
-  . = 0;
+  . = 4096 + 4096; /* Reserved for the null page and the initfs header prepended by redox-initfs-ar */
+  __initfs_header = . - 4096;
   . += SIZEOF_HEADERS;
   . = ALIGN(4096);
 

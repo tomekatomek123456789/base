@@ -104,7 +104,7 @@ dependencies = [
 [[package]]
 name = "redox-initfs"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/redox-initfs.git#89b8fb8984cf96c418880b7dcd9ce3d6afc3f71c"
+source = "git+https://gitlab.redox-os.org/redox-os/redox-initfs.git#7dd9b2e84d983a444518218f3ec74d3e9ac900b3"
 dependencies = [
  "plain",
 ]
