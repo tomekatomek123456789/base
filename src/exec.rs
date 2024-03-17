@@ -41,6 +41,8 @@ pub fn main() -> ! {
     const CWD: &[u8] = b"/scheme/initfs";
     let extrainfo = redox_exec::ExtraInfo {
         cwd: Some(CWD),
+        sigprocmask: 0,
+        sigignmask: 0,
     };
 
     let path = "/scheme/initfs/bin/init";
