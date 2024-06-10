@@ -1,7 +1,9 @@
 #![no_std]
+#![allow(internal_features)]
 #![feature(
     asm_const,
     core_intrinsics,
+    str_from_raw_parts,
 )]
 
 #[cfg(target_arch = "aarch64")]
