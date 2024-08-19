@@ -74,7 +74,7 @@ impl Filesystem {
     pub fn new() -> Result<Self> {
         Ok(Self {
             files: iter::once((Self::ROOT_INODE, Self::create_root_inode())).collect(),
-            memory_file: fs::File::open("memory:").or(Err(Error::new(EIO)))?,
+            memory_file: fs::File::open("/scheme/memory").or(Err(Error::new(EIO)))?,
             last_inode_number: Self::ROOT_INODE,
         })
     }
