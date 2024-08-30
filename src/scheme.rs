@@ -10,18 +10,19 @@ use syscall::error::{
 use syscall::flag::{
     O_ACCMODE, O_CREAT, O_DIRECTORY, O_EXCL, O_RDONLY, O_RDWR, O_STAT, O_TRUNC, O_WRONLY,
 };
+use syscall::schemev2::NewFdFlags;
 use syscall::{Error, EventFlags, Map, Result, Stat, StatVfs, TimeSpec};
 use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE, SEEK_CUR, SEEK_END, SEEK_SET};
 
-use redox_scheme::SchemeMut;
+use redox_scheme::{CallerCtx, OpenResult, SchemeMut};
 
 use crate::filesystem::{self, DirEntry, File, FileData, Filesystem};
 
 #[derive(Clone)]
 struct Handle {
     inode: usize,
-    offset: usize,
 
+    // TODO: fcntl_flags?
     opened_as_read: bool,  // opened with O_RDONLY or O_RDWR
     opened_as_write: bool, // opened with O_WRONLY or O_RDWR
 
@@ -167,7 +168,6 @@ impl Scheme {
 
         Ok(Handle {
             inode,
-            offset: 0,
             opened_as_read,
             opened_as_write,
             current_perm,
@@ -176,14 +176,14 @@ impl Scheme {
 }
 
 impl SchemeMut for Scheme {
-    fn open(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> Result<usize> {
+    fn xopen(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let exists = self.filesystem.resolve(path.as_bytes(), 0, 0).is_ok();
         if flags & O_CREAT != 0 && flags & O_EXCL != 0 && exists {
             return Err(Error::new(EEXIST));
         }
 
         let handle = if flags & O_CREAT != 0 && exists {
-            self.open_existing(path.as_bytes(), flags, uid, gid)?
+            self.open_existing(path.as_bytes(), flags, ctx.uid, ctx.gid)?
         } else if flags & O_CREAT != 0 {
             if flags & O_STAT != 0 {
                 return Err(Error::new(EINVAL));
@@ -191,7 +191,7 @@ impl SchemeMut for Scheme {
 
             let (parent_dir_inode, new_name) =
                 self.filesystem
-                    .resolve_except_last(path.as_bytes(), uid, gid)?;
+                    .resolve_except_last(path.as_bytes(), ctx.uid, ctx.gid)?;
             let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
 
             let current_time = filesystem::current_time();
@@ -213,8 +213,8 @@ impl SchemeMut for Scheme {
                     crtime: current_time,
                     ctime: current_time,
                     mtime: current_time,
-                    gid,
-                    uid,
+                    gid: ctx.gid,
+                    uid: ctx.uid,
                     ino: new_inode_number,
                     mode,
                     nlink: 2, // parent entry, "."
@@ -234,8 +234,8 @@ impl SchemeMut for Scheme {
                     crtime: current_time,
                     ctime: current_time,
                     mtime: current_time,
-                    gid,
-                    uid,
+                    gid: ctx.gid,
+                    uid: ctx.uid,
                     ino: new_inode_number,
                     mode,
                     nlink: 1,
@@ -243,7 +243,7 @@ impl SchemeMut for Scheme {
                     open_handles: 1,
                 }
             };
-            let current_perm = current_perm(&new_inode, uid, gid);
+            let current_perm = current_perm(&new_inode, ctx.uid, ctx.gid);
             check_permissions(flags, current_perm)?;
 
             self.filesystem.files.insert(new_inode_number, new_inode);
@@ -263,13 +263,12 @@ impl SchemeMut for Scheme {
 
             Handle {
                 inode: new_inode_number,
-                offset: 0,
                 opened_as_read: flags & O_ACCMODE == O_RDONLY || flags & O_ACCMODE == O_RDWR,
                 opened_as_write: flags & O_ACCMODE == O_WRONLY || flags & O_ACCMODE == O_RDWR,
                 current_perm,
             }
         } else {
-            self.open_existing(path.as_bytes(), flags, uid, gid)?
+            self.open_existing(path.as_bytes(), flags, ctx.uid, ctx.gid)?
         };
 
         let fd = self.next_fd;
@@ -277,7 +276,10 @@ impl SchemeMut for Scheme {
 
         self.handles.insert(fd, handle);
 
-        Ok(fd)
+        Ok(OpenResult::ThisScheme {
+            number: fd,
+            flags: NewFdFlags::POSITIONED,
+        })
     }
     fn rmdir(&mut self, path: &str, uid: u32, gid: u32) -> Result<usize> {
         self.remove_dentry(path.as_bytes(), uid, gid, true)
@@ -298,8 +300,11 @@ impl SchemeMut for Scheme {
         self.handles.insert(fd, handle);
         Ok(fd)
     }
-    fn read(&mut self, fd: usize, buf: &mut [u8]) -> Result<usize> {
+    fn read(&mut self, fd: usize, buf: &mut [u8], offset: u64, _fcntl_flags: u32) -> Result<usize> {
         let handle = self.handles.get_mut(&fd).ok_or(Error::new(EBADF))?;
+        let Ok(offset) = usize::try_from(offset) else {
+            return Ok(0);
+        };
         let file = self
             .filesystem
             .files
@@ -316,15 +321,13 @@ impl SchemeMut for Scheme {
                     return Err(Error::new(EBADFD));
                 }
 
-                if handle.offset >= bytes.len() {
+                if offset >= bytes.len() {
                     return Ok(0);
                 }
-                let bytes_to_read =
-                    cmp::min(bytes.len(), buf.len() + handle.offset) - handle.offset;
-                buf[..bytes_to_read]
-                    .copy_from_slice(&bytes[handle.offset..handle.offset + bytes_to_read]);
-                handle.offset += bytes_to_read;
-                Ok(bytes_to_read)
+                let src = buf.get(..offset).unwrap_or(&[]);
+                let to_copy = src.len().min(buf.len());
+                buf[..to_copy].copy_from_slice(&bytes[offset..][..to_copy]);
+                Ok(to_copy)
             }
             FileData::Directory(ref entries) => {
                 if file.mode & MODE_TYPE != MODE_DIR {
@@ -335,7 +338,7 @@ impl SchemeMut for Scheme {
                     return Err(Error::new(EBADF));
                 }
 
-                let mut bytes_to_skip = handle.offset;
+                let mut bytes_to_skip = offset;
                 let mut bytes_left_to_read = buf.len();
                 let mut bytes_read = 0;
 
@@ -361,14 +364,16 @@ impl SchemeMut for Scheme {
                     buf[bytes_read + bytes_to_read - 1] = b'\n';
                     bytes_left_to_read -= bytes_to_read;
                     bytes_read += bytes_to_read;
-                    handle.offset += bytes_read;
                 }
                 Ok(bytes_read)
             }
         }
     }
-    fn write(&mut self, fd: usize, buf: &[u8]) -> Result<usize> {
+    fn write(&mut self, fd: usize, buf: &[u8], offset: u64, _fcntl_flags: u32) -> Result<usize> {
         let handle = self.handles.get_mut(&fd).ok_or(Error::new(EBADF))?;
+        let Ok(offset) = usize::try_from(offset) else {
+            return Ok(0);
+        };
         let file = self
             .filesystem
             .files
@@ -381,21 +386,20 @@ impl SchemeMut for Scheme {
             }
 
             // if there's a seek hole, fill it with 0 and continue writing.
-            let end_off = handle.offset.checked_add(buf.len()).ok_or(Error::new(EOVERFLOW))?;
+            let end_off = offset.checked_add(buf.len()).ok_or(Error::new(EOVERFLOW))?;
             if end_off > bytes.len() {
                 let additional = end_off - bytes.len();
                 bytes.try_reserve(additional).or(Err(Error::new(ENOMEM)))?;
                 bytes.resize(end_off, 0u8);
             }
-            bytes[handle.offset..][..buf.len()].copy_from_slice(buf);
-            handle.offset = end_off;
+            bytes[offset..][..buf.len()].copy_from_slice(buf);
 
             Ok(buf.len())
         } else {
             Err(Error::new(EISDIR))
         }
     }
-    fn seek(&mut self, fd: usize, pos: isize, whence: usize) -> Result<isize> {
+    fn fsize(&mut self, fd: usize) -> Result<u64> {
         let handle = self.handles.get_mut(&fd).ok_or(Error::new(EBADF))?;
         let file = self
             .filesystem
@@ -403,19 +407,10 @@ impl SchemeMut for Scheme {
             .get_mut(&handle.inode)
             .ok_or(Error::new(EBADFD))?;
 
-        handle.offset = match whence {
-            SEEK_SET => cmp::max(0, pos),
-            SEEK_CUR => cmp::max(
-                0,
-                pos + isize::try_from(handle.offset).or(Err(Error::new(EOVERFLOW)))?,
-            ),
-            SEEK_END => cmp::max(
-                0,
-                pos + isize::try_from(file.data.size()).or(Err(Error::new(EOVERFLOW)))?,
-            ),
-            _ => return Err(Error::new(EINVAL)),
-        } as usize;
-        Ok(handle.offset as isize)
+        file.data
+            .size()
+            .try_into()
+            .map_err(|_| Error::new(EOVERFLOW))
     }
     fn fchmod(&mut self, fd: usize, mode: u16) -> Result<usize> {
         let handle = self.handles.get_mut(&fd).ok_or(Error::new(EBADF))?;
@@ -462,7 +457,13 @@ impl SchemeMut for Scheme {
         }
         Err(Error::new(ENOSYS))
     }
-    fn mmap_prep(&mut self, fd: usize, _offset: u64, _size: usize, _flags: syscall::MapFlags) -> Result<usize> {
+    fn mmap_prep(
+        &mut self,
+        fd: usize,
+        _offset: u64,
+        _size: usize,
+        _flags: syscall::MapFlags,
+    ) -> Result<usize> {
         if !self.handles.contains_key(&fd) {
             return Err(Error::new(EBADF));
         }
