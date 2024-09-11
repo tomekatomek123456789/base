@@ -17,6 +17,9 @@ use redox_scheme::SignalBehavior;
 use redox_scheme::Socket;
 use redox_scheme::V2;
 use syscall::data::Stat;
+use syscall::dirent::DirEntry;
+use syscall::dirent::DirentBuf;
+use syscall::dirent::DirentKind;
 use syscall::error::*;
 use syscall::flag::*;
 use syscall::schemev2::NewFdFlags;
@@ -147,7 +150,7 @@ impl SchemeMut for InitFsScheme {
         Ok(OpenResult::ThisScheme { number: id, flags: NewFdFlags::POSITIONED })
     }
 
-    fn read(&mut self, id: usize, mut buffer: &mut [u8], offset: u64, _fcntl_flags: u32) -> Result<usize> {
+    fn read(&mut self, id: usize, buffer: &mut [u8], offset: u64, _fcntl_flags: u32) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
         };
@@ -155,35 +158,6 @@ impl SchemeMut for InitFsScheme {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
 
         match Self::get_inode(&self.fs, handle.inode)?.kind() {
-            InodeKind::Dir(dir) => {
-                let mut bytes_read = 0;
-                let mut total_to_skip = offset;
-
-                for entry_res in (Iter { dir, idx: 0 }) {
-                    let entry = entry_res?;
-                    let name = entry.name().map_err(|_| Error::new(EIO))?;
-
-                    let to_skip = core::cmp::min(total_to_skip, name.len() + 1);
-                    if to_skip == name.len() + 1 { continue; }
-
-                    let name = &name[to_skip..];
-
-                    let to_copy = core::cmp::min(name.len(), buffer.len());
-                    buffer[..to_copy].copy_from_slice(&name[..to_copy]);
-                    bytes_read += to_copy;
-                    buffer = &mut buffer[to_copy..];
-
-                    if !buffer.is_empty() {
-                        buffer[0] = b'\n';
-                        bytes_read += 1;
-                        buffer = &mut buffer[1..];
-                    }
-
-                    total_to_skip -= to_skip;
-                }
-
-                Ok(bytes_read)
-            }
             InodeKind::File(file) => {
                 let data = file.data().map_err(|_| Error::new(EIO))?;
                 let src_buf = &data[core::cmp::min(offset, data.len())..];
@@ -193,8 +167,32 @@ impl SchemeMut for InitFsScheme {
 
                 Ok(to_copy)
             }
-            InodeKind::Unknown => return Err(Error::new(EIO)),
+            InodeKind::Dir(_) => Err(Error::new(EISDIR)),
+            InodeKind::Unknown => Err(Error::new(EIO)),
         }
+    }
+    fn getdents<'buf>(&mut self, id: usize, mut buf: DirentBuf<&'buf mut [u8]>, opaque_offset: u64) -> Result<DirentBuf<&'buf mut [u8]>> {
+        let Ok(offset) = u32::try_from(opaque_offset) else {
+            return Ok(buf);
+        };
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let InodeKind::Dir(dir) = Self::get_inode(&self.fs, handle.inode)?.kind() else {
+            return Err(Error::new(ENOTDIR));
+        };
+        let iter = Iter { dir, idx: offset };
+        for (index, entry) in iter.enumerate() {
+            let entry = entry?;
+            buf.entry(DirEntry {
+                // TODO: Add getter
+                //inode: entry.inode(),
+                inode: 0,
+
+                name: entry.name().ok().and_then(|utf8| core::str::from_utf8(utf8).ok()).ok_or(Error::new(EIO))?,
+                next_opaque_id: index as u64 + 1,
+                kind: DirentKind::Unspecified,
+            })?;
+        }
+        Ok(buf)
     }
 
     fn fsize(&mut self, id: usize) -> Result<u64> {
@@ -213,7 +211,7 @@ impl SchemeMut for InitFsScheme {
         let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 
         // TODO: Copy scheme part in kernel
-        let scheme_path = b"initfs:";
+        let scheme_path = b"/scheme/initfs";
         let scheme_bytes = core::cmp::min(scheme_path.len(), buf.len());
         buf[..scheme_bytes].copy_from_slice(&scheme_path[..scheme_bytes]);
 

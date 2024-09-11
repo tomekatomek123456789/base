@@ -13,7 +13,7 @@ crate-type = ["staticlib"]
 hashbrown = { version = "0.14", default-features = false, features = ["inline-more"] }
 linked_list_allocator = "0.10"
 redox-initfs = { git = "https://gitlab.redox-os.org/redox-os/redox-initfs.git", default-features = false }
-redox_syscall = "0.5.3"
+redox_syscall = "0.5.4"
 redox-scheme = { git = "https://gitlab.redox-os.org/redox-os/redox-scheme.git" }
 redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", rev = "e97f26c7" }
 
