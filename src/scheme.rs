@@ -1,4 +1,6 @@
 use std::convert::{TryFrom, TryInto};
+use std::io::{Cursor, Seek};
+use std::iter;
 use std::os::unix::io::AsRawFd;
 
 use indexmap::IndexMap;
@@ -191,6 +193,7 @@ impl SchemeMut for Scheme {
                     nlink: 2, // parent entry, "."
                     data: FileData::Directory(IndexMap::new()),
                     open_handles: 1,
+                    parent: Inode(parent_dir_inode),
                 }
             } else {
                 if mode & MODE_TYPE == 0 {
@@ -211,6 +214,7 @@ impl SchemeMut for Scheme {
                     nlink: 1,
                     data: FileData::File(Vec::new()),
                     open_handles: 1,
+                    parent: Inode(parent_dir_inode),
                 }
             };
             let current_perm = current_perm(&new_inode, ctx.uid, ctx.gid);
@@ -369,9 +373,40 @@ impl SchemeMut for Scheme {
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn fpath(&mut self, _inode: usize, _buf: &mut [u8]) -> Result<usize> {
-        // TODO
-        Err(Error::new(ENOSYS))
+    fn fpath(&mut self, mut current_inode: usize, buf: &mut [u8]) -> Result<usize> {
+        let mut chain = Vec::new();
+
+        let mut current_info = self
+            .filesystem
+            .files
+            .get(&current_inode)
+            .ok_or(Error::new(EBADFD))?;
+
+        while current_inode != Filesystem::ROOT_INODE {
+            let parent_info = self
+                .filesystem
+                .files
+                .get(&current_info.parent.0)
+                .ok_or(Error::new(EBADFD))?;
+
+            let FileData::Directory(ref dir) = parent_info.data else {
+                return Err(Error::new(EBADFD));
+            };
+            // TODO: error handling?
+            let (name, _) = dir.iter().find(|(_name, inode)| inode.0 == current_inode).ok_or(Error::new(ENOENT))?;
+            chain.push(&**name);
+
+            current_inode = current_info.parent.0;
+            current_info = parent_info;
+        }
+
+        let mut cursor = Cursor::new(buf);
+        for component in iter::once(self.scheme_name.trim_start_matches('/')).chain(chain.iter().copied().rev()) {
+            use std::io::Write;
+
+            write!(cursor, "/{component}").unwrap();
+        }
+        Ok(cursor.stream_position().unwrap() as usize)
     }
     fn frename(&mut self, _inode: usize, _path: &str, _uid: u32, _gid: u32) -> Result<usize> {
         // TODO

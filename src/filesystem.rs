@@ -16,6 +16,7 @@ pub struct File {
     pub uid: u32,
     pub gid: u32,
     pub nlink: usize,
+    pub parent: Inode,
 
     pub open_handles: usize,
 
@@ -76,6 +77,7 @@ impl Filesystem {
             gid: 0,
 
             data: FileData::Directory(IndexMap::new()),
+            parent: Inode(Self::ROOT_INODE),
         }
     }
     pub fn get_block_size(&self) -> Result<u32> {
