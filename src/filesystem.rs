@@ -1,14 +1,12 @@
 use std::collections::BTreeMap;
 use std::convert::TryInto;
-use std::ffi::OsStr;
 use std::{fs, iter, time};
 
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::AsRawFd;
 
+use indexmap::IndexMap;
 use syscall::error::{EACCES, EIO, ENFILE, ENOENT};
-use syscall::flag::{O_RDONLY, O_STAT};
-use syscall::{Error, Result, StatVfs, TimeSpec, MODE_DIR};
+use syscall::{Error, Result, TimeSpec, MODE_DIR};
 
 use super::scheme::current_perm;
 
@@ -17,8 +15,8 @@ pub struct File {
     pub mode: u16,
     pub uid: u32,
     pub gid: u32,
-    pub ino: usize,
     pub nlink: usize,
+    pub parent: Inode,
 
     pub open_handles: usize,
 
@@ -31,33 +29,18 @@ pub struct File {
 }
 
 #[derive(Clone, Debug)]
-pub struct DirEntry {
-    pub name: Vec<u8>,
-    pub inode: usize,
-}
+pub struct Inode(pub usize);
 
 #[derive(Debug)]
 pub enum FileData {
     File(Vec<u8>),
-    Directory(Vec<DirEntry>),
+    Directory(IndexMap<String, Inode>),
 }
 impl FileData {
     pub fn size(&self) -> usize {
         match self {
             &Self::File(ref data) => data.len(),
-            &Self::Directory(ref names) => names.iter().map(|dentry| dentry.name.len()).sum(),
-        }
-    }
-    pub fn as_directory(&self) -> Option<&[DirEntry]> {
-        match self {
-            &Self::Directory(ref inner) => Some(inner),
-            _ => None,
-        }
-    }
-    pub fn as_directory_mut(&mut self) -> Option<&mut Vec<DirEntry>> {
-        match self {
-            &mut Self::Directory(ref mut inner) => Some(inner),
-            _ => None,
+            &Self::Directory(_) => 0,
         }
     }
 }
@@ -87,14 +70,14 @@ impl Filesystem {
             mtime: cur_time,
 
             mode: MODE_DIR | 0o755,
-            ino: Self::ROOT_INODE,
             nlink: 1,
             open_handles: 0,
 
             uid: 0,
             gid: 0,
 
-            data: FileData::Directory(Vec::new()),
+            data: FileData::Directory(IndexMap::new()),
+            parent: Inode(Self::ROOT_INODE),
         }
     }
     pub fn get_block_size(&self) -> Result<u32> {
@@ -111,7 +94,7 @@ impl Filesystem {
         self.last_inode_number = next;
         Ok(next)
     }
-    fn resolve_generic(&self, mut parts: Vec<&[u8]>, uid: u32, gid: u32) -> Result<usize> {
+    fn resolve_generic(&self, mut parts: Vec<&str>, uid: u32, gid: u32) -> Result<usize> {
         let mut current_file = self
             .files
             .get(&Self::ROOT_INODE)
@@ -121,9 +104,8 @@ impl Filesystem {
         let mut i = 0;
 
         loop {
-            let part = match parts.get(i) {
-                Some(p) => p,
-                None => break,
+            let Some(&part) = parts.get(i) else {
+                break;
             };
             let dentries = match current_file.data {
                 FileData::Directory(ref dentries) => dentries,
@@ -134,25 +116,19 @@ impl Filesystem {
                 return Err(Error::new(EACCES));
             }
 
-            if part == b"." || part == b".." {
+            if part == "." || part == ".." {
                 parts.remove(i);
             }
 
-            let part = parts.get(i).unwrap();
-            if part == b".." {
-                if i > 0 {
-                    i -= 1;
-                    parts.remove(i);
-                }
+            let part = *parts.get(i).unwrap();
+            if part == ".." && i > 0 {
+                i -= 1;
+                parts.remove(i);
             }
-            let part = parts.get(i).unwrap();
+            let part = *parts.get(i).unwrap();
 
-            let entry = dentries
-                .iter()
-                .find(|dentry| &dentry.name == part)
-                .ok_or(Error::new(ENOENT))?;
-            current_file = self.files.get(&entry.inode).ok_or(Error::new(EIO))?;
-            current_inode = entry.inode;
+            current_inode = dentries.get(part).ok_or(Error::new(ENOENT))?.0;
+            current_file = self.files.get(&current_inode).ok_or(Error::new(EIO))?;
 
             i += 1;
         }
@@ -160,14 +136,11 @@ impl Filesystem {
     }
     pub fn resolve_except_last<'a>(
         &self,
-        mut path_bytes: &'a [u8],
+        path_bytes: &'a str,
         uid: u32,
         gid: u32,
-    ) -> Result<(usize, Option<&'a [u8]>)> {
-        if path_bytes.first() == Some(&b'/') {
-            path_bytes = &path_bytes[1..]
-        }
-        let mut parts = path_components_iter(path_bytes).collect::<Vec<_>>();
+    ) -> Result<(usize, Option<&'a str>)> {
+        let mut parts = path_components_iter(path_bytes.trim_start_matches('/')).collect::<Vec<_>>();
 
         let last = if parts.len() >= 1 {
             Some(parts.pop().unwrap())
@@ -177,17 +150,14 @@ impl Filesystem {
 
         Ok((self.resolve_generic(parts, uid, gid)?, last))
     }
-    pub fn resolve(&self, mut path_bytes: &[u8], uid: u32, gid: u32) -> Result<usize> {
-        if path_bytes.first() == Some(&b'/') {
-            path_bytes = &path_bytes[1..]
-        }
-        let parts = path_components_iter(path_bytes).collect::<Vec<_>>();
+    pub fn resolve(&self, path: &str, uid: u32, gid: u32) -> Result<usize> {
+        let parts = path_components_iter(path.trim_start_matches('/')).collect::<Vec<_>>();
 
         self.resolve_generic(parts, uid, gid)
     }
 }
-pub fn path_components_iter(bytes: &[u8]) -> impl Iterator<Item = &[u8]> + '_ {
-    let components_iter = bytes.split(|c| c == &b'/');
+pub fn path_components_iter(bytes: &str) -> impl Iterator<Item = &str> + '_ {
+    let components_iter = bytes.split(|c| c == '/');
     components_iter.filter(|item| !item.is_empty())
 }
 pub fn current_time() -> TimeSpec {
@@ -196,7 +166,7 @@ pub fn current_time() -> TimeSpec {
     let duration = match sys_time.duration_since(time::SystemTime::UNIX_EPOCH) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("Apparently the signed 32-bit integer has overflowed; the time is now before the Unix epoch...");
+            eprintln!("The time is apparently now before the Unix epoch...");
 
             let negative_duration = e.duration();
 

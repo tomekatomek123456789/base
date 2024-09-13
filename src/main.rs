@@ -3,7 +3,7 @@ use std::{env, process};
 mod filesystem;
 mod scheme;
 
-use redox_scheme::{RequestKind, SignalBehavior};
+use redox_scheme::{RequestKind, SignalBehavior, V2};
 
 use self::scheme::Scheme;
 
@@ -11,8 +11,7 @@ fn main() {
     let scheme_name = env::args().nth(1).expect("Usage:\n\tramfs SCHEME_NAME");
 
     redox_daemon::Daemon::new(move |daemon| {
-        let socket = redox_scheme::Socket::<redox_scheme::V2>::create(&scheme_name)
-            .expect("ramfs: failed to create socket");
+        let socket = redox_scheme::Socket::<V2>::create(&scheme_name).expect("ramfs: failed to create socket");
 
         let mut scheme = Scheme::new(scheme_name).expect("ramfs: failed to initialize scheme");
 
