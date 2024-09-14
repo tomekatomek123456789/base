@@ -17,6 +17,7 @@ fn main() -> Result<()> {
                 .required(false)
                 .help("Set the upper limit for how large the image can become (default 64 MiB)."),
         )
+        // TODO: support non-utf8 paths (applies to other paths as well)
         .arg(
             Arg::new("SOURCE")
                 .required(true)

@@ -17,6 +17,7 @@ fn main() -> Result<()> {
         )
         .get_matches();
 
+    // TODO: support non-utf8 paths
     let source = matches
         .get_one::<String>("IMAGE")
         .expect("expected the required arg IMAGE to exist");
