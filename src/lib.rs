@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(offset_of)]
 //! A super simple initfs, only meant to be loaded into RAM by the bootloader, and then directly be
 //! read.
 
@@ -92,6 +91,20 @@ impl<'initfs> InodeDir<'initfs> {
 }
 
 #[derive(Clone, Copy)]
+pub struct InodeLink<'initfs> {
+    inner: InodeStruct<'initfs>,
+}
+
+impl<'initfs> InodeLink<'initfs> {
+    pub fn inode(self) -> InodeStruct<'initfs> {
+        self.inner
+    }
+    pub fn data(&self) -> Result<&'initfs [u8]> {
+        self.inner.data()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct Entry<'initfs> {
     initfs: InitFs<'initfs>,
     entry: &'initfs DirEntry,
@@ -109,7 +122,7 @@ impl<'initfs> Entry<'initfs> {
             .get()
             .try_into()
             .map_err(|_| Error)?;
-        let name_length: usize = self.entry.name_len.get().try_into().map_err(|_| Error)?;
+        let name_length: usize = self.entry.name_len.get().into();
 
         let name_end = name_offset.checked_add(name_length).ok_or(Error)?;
 
@@ -121,6 +134,7 @@ impl<'initfs> Entry<'initfs> {
 pub enum InodeKind<'initfs> {
     File(InodeFile<'initfs>),
     Dir(InodeDir<'initfs>),
+    Link(InodeLink<'initfs>),
     Unknown,
 }
 
@@ -150,14 +164,18 @@ impl<'initfs> InodeStruct<'initfs> {
             InodeType::Dir
         } else if raw == InodeType::RegularFile as u32 {
             InodeType::RegularFile
+        } else if raw == InodeType::Link as u32 {
+            InodeType::Link
         } else {
             return None;
         })
     }
     pub fn kind(&self) -> InodeKind<'initfs> {
+        let inner = *self;
         match self.ty() {
-            Some(InodeType::Dir) => InodeKind::Dir(InodeDir { inner: *self }),
-            Some(InodeType::RegularFile) => InodeKind::File(InodeFile { inner: *self }),
+            Some(InodeType::Dir) => InodeKind::Dir(InodeDir { inner }),
+            Some(InodeType::RegularFile) => InodeKind::File(InodeFile { inner }),
+            Some(InodeType::Link) => InodeKind::Link(InodeLink { inner }),
             None => InodeKind::Unknown,
         }
     }

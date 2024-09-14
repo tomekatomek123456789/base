@@ -101,7 +101,8 @@ pub const TYPE_MASK: u32 = 0xF000_0000;
 pub enum InodeType {
     RegularFile = 0x0,
     Dir = 0x1,
-    // All other bit patterns are reserved... for now. TODO: Add symlinks?
+    Link = 0x2,
+    // All other bit patterns are reserved... for now.
 }
 
 #[repr(C, packed)]

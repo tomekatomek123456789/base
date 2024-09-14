@@ -1,4 +1,4 @@
-use std::ffi::OsString;
+use std::{ffi::OsStr, path::Path};
 
 use anyhow::{Context, Result};
 use clap::{Arg, Command};
@@ -18,7 +18,7 @@ fn main() -> Result<()> {
         .get_matches();
 
     let source = matches
-        .get_one::<OsString>("IMAGE")
+        .get_one::<String>("IMAGE")
         .expect("expected the required arg IMAGE to exist");
 
     let bytes = std::fs::read(source).context("failed to read image into memory")?;
@@ -97,6 +97,19 @@ fn main() -> Result<()> {
                     }
                 }
 
+                println!("}}");
+            }
+            InodeKind::Link(link) => {
+                print!("link{{");
+                match link.data().ok() {
+                    Some(d) => {
+                        use std::os::unix::ffi::OsStrExt;
+                        print!("dst={}", Path::new(OsStr::from_bytes(d)).display());
+                    }
+                    None => {
+                        print!("(failed to get data)");
+                    }
+                }
                 println!("}}");
             }
         }

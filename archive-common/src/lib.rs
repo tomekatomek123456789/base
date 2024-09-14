@@ -1,12 +1,12 @@
 use std::convert::{TryFrom, TryInto};
 use std::fs::{DirEntry, File, Metadata, OpenOptions};
 use std::io::{prelude::*, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileExt, FileTypeExt, MetadataExt};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use redox_initfs::types as initfs;
 
@@ -17,6 +17,7 @@ pub const DEFAULT_MAX_SIZE: u64 = 64 * MEBIBYTE;
 enum EntryKind {
     File(File),
     Dir(Dir),
+    Link(PathBuf),
 }
 
 struct Entry {
@@ -39,11 +40,16 @@ struct State<'path> {
 
 fn write_all_at(file: &File, buf: &[u8], offset: u64, r#where: &str) -> Result<()> {
     file.write_all_at(buf, offset)?;
-    log::trace!("Wrote {}..{} within {}", offset, offset + buf.len() as u64, r#where);
+    log::trace!(
+        "Wrote {}..{} within {}",
+        offset,
+        offset + buf.len() as u64,
+        r#where
+    );
     Ok(())
 }
 
-fn read_directory(state: &mut State, path: &Path) -> Result<Dir> {
+fn read_directory(state: &mut State, path: &Path, root_path: &Path) -> Result<Dir> {
     let read_dir = path
         .read_dir()
         .with_context(|| anyhow!("failed to read directory `{}`", path.to_string_lossy(),))?;
@@ -79,9 +85,7 @@ fn read_directory(state: &mut State, path: &Path) -> Result<Dir> {
                 .as_bytes()
                 .to_owned();
 
-            let entry_kind = if file_type.is_symlink() {
-                return unsupported_type("symlink", &entry);
-            } else if file_type.is_socket() {
+            let entry_kind = if file_type.is_socket() {
                 return unsupported_type("socket", &entry);
             } else if file_type.is_fifo() {
                 return unsupported_type("FIFO", &entry);
@@ -90,11 +94,35 @@ fn read_directory(state: &mut State, path: &Path) -> Result<Dir> {
             } else if file_type.is_char_device() {
                 return unsupported_type("character device", &entry);
             } else if file_type.is_file() {
-                EntryKind::File(File::open(&entry.path()).with_context(|| {
+                EntryKind::File(File::open(entry.path()).with_context(|| {
                     anyhow!("failed to open file `{}`", entry.path().to_string_lossy(),)
                 })?)
             } else if file_type.is_dir() {
-                EntryKind::Dir(read_directory(state, &entry.path())?)
+                EntryKind::Dir(read_directory(state, &entry.path(), root_path)?)
+            } else if file_type.is_symlink() {
+                let link_file_path = entry.path();
+
+                let link_path = std::fs::read_link(&link_file_path)?;
+                let cannonical = if link_path.is_absolute() {
+                    link_path.clone()
+                } else {
+                    let Some(link_parent) = link_file_path.parent() else {
+                        bail!("Link at `{}` has no parent", link_file_path.display())
+                    };
+                    link_parent.canonicalize()?.join(link_path.clone())
+                };
+
+                let root_path = root_path
+                    .canonicalize()
+                    .context("Failed to cannonicalize root path")?;
+                let path = pathdiff::diff_paths(cannonical, &root_path).ok_or_else(|| {
+                    anyhow!(
+                        "Failed to diff symlink path [{}] to root path [{}]",
+                        link_path.display(),
+                        root_path.display()
+                    )
+                })?;
+                EntryKind::Link(path)
             } else {
                 return Err(anyhow!(
                     "unknown file type at `{}`",
@@ -164,14 +192,40 @@ fn allocate_and_write_file(state: &mut State, mut file: &File) -> Result<WriteRe
         file.read(&mut state.buffer[..allowed_length])
             .context("failed to read from source file")?;
 
-        write_all_at(&*state.file, &state.buffer[..allowed_length], u64::from(offset + relative_offset), "allocate_and_write_file buffer chunk")
-            .context("failed to write source file into destination image")?;
+        write_all_at(
+            &state.file,
+            &state.buffer[..allowed_length],
+            u64::from(offset + relative_offset),
+            "allocate_and_write_file buffer chunk",
+        )
+        .context("failed to write source file into destination image")?;
 
         relative_offset += buffer_size;
     }
 
     Ok(WriteResult { size, offset })
 }
+
+fn allocate_and_write_link(state: &mut State, link: &Path) -> Result<WriteResult> {
+    let data = link.as_os_str().as_bytes();
+    let size: u32 = data.len().try_into().unwrap();
+
+    let offset: u32 = bump_alloc(state, size.into(), "allocate space for file")
+        .context("failed to allocate space for file")?
+        .try_into()
+        .context("file offset too high")?;
+
+    write_all_at(
+        &state.file,
+        data,
+        u64::from(offset),
+        "allocate_and_write_link target path",
+    )
+    .context("failed to write source file into destination image")?;
+
+    Ok(WriteResult { size, offset })
+}
+
 fn write_inode(
     state: &mut State,
     ty: initfs::InodeType,
@@ -183,7 +237,7 @@ fn write_inode(
         .try_into()
         .expect("inode header length cannot fit within u32");
 
-    let type_and_mode = ((ty as u32) << initfs::TYPE_SHIFT) | u32::from(metadata.mode() & 0xFFF);
+    let type_and_mode = ((ty as u32) << initfs::TYPE_SHIFT) | (metadata.mode() & 0xFFF);
 
     // TODO: Use main buffer and write in bulk.
     let mut inode_buf = [0_u8; std::mem::size_of::<initfs::InodeHeader>()];
@@ -196,13 +250,17 @@ fn write_inode(
         length: write_result.size.into(),
         offset: initfs::Offset(write_result.offset.into()),
 
-        gid: 0.into(),//metadata.gid().into(),
-        uid: 0.into(),//metadata.uid().into(),
+        gid: 0.into(), //metadata.gid().into(),
+        uid: 0.into(), //metadata.uid().into(),
     };
 
-    log::debug!("Writing inode index {} from offset {}", inode, state.inode_table_offset);
+    log::debug!(
+        "Writing inode index {} from offset {}",
+        inode,
+        state.inode_table_offset
+    );
     write_all_at(
-        &*state.file,
+        &state.file,
         &inode_buf,
         u64::from(state.inode_table_offset + u32::from(inode) * inode_size),
         "write_inode",
@@ -222,22 +280,22 @@ fn allocate_and_write_dir(
         .checked_mul(u32::from(entry_size))
         .ok_or_else(|| anyhow!("entry table length too large when multiplying by size"))?;
 
-    let entry_table_offset: u32 = bump_alloc(state, entry_table_length.into(), "allocate entry table")
-        .context("failed to allocate entry table")?
-        .try_into()
-        .context("directory entries offset too high")?;
+    let entry_table_offset: u32 =
+        bump_alloc(state, entry_table_length.into(), "allocate entry table")
+            .context("failed to allocate entry table")?
+            .try_into()
+            .context("directory entries offset too high")?;
 
     for (index, entry) in dir.entries.iter().enumerate() {
         let (write_result, ty) = match entry.kind {
             EntryKind::Dir(ref subdir) => {
-                let write_result =
-                    allocate_and_write_dir(state, subdir, current_inode)
-                        .with_context(|| {
-                            anyhow!(
-                                "failed to copy directory entries from `{}` into image",
-                                String::from_utf8_lossy(&entry.name)
-                            )
-                        })?;
+                let write_result = allocate_and_write_dir(state, subdir, current_inode)
+                    .with_context(|| {
+                        anyhow!(
+                            "failed to copy directory entries from `{}` into image",
+                            String::from_utf8_lossy(&entry.name)
+                        )
+                    })?;
 
                 (write_result, initfs::InodeType::Dir)
             }
@@ -248,6 +306,12 @@ fn allocate_and_write_dir(
 
                 (write_result, initfs::InodeType::RegularFile)
             }
+
+            EntryKind::Link(ref path) => {
+                let write_result = allocate_and_write_link(state, path)
+                    .context("failed to copy symbolic link into image")?;
+                (write_result, initfs::InodeType::Link)
+            }
         };
 
         let index: u16 = index
@@ -255,13 +319,7 @@ fn allocate_and_write_dir(
             .expect("expected dir entry count not to exceed u32");
 
         *current_inode += 1;
-        write_inode(
-            state,
-            ty,
-            &entry.metadata,
-            write_result,
-            *current_inode,
-        )?;
+        write_inode(state, ty, &entry.metadata, write_result, *current_inode)?;
 
         let (name_offset, name_len) = {
             let name_len: u16 = entry.name.len().try_into().context("file name too long")?;
@@ -271,7 +329,8 @@ fn allocate_and_write_dir(
                 .try_into()
                 .context("file name offset too high up")?;
 
-            write_all_at(&*state.file, &entry.name, offset.into(), "writing file name").context("failed to write file name")?;
+            write_all_at(&state.file, &entry.name, offset.into(), "writing file name")
+                .context("failed to write file name")?;
 
             (offset, name_len)
         };
@@ -281,7 +340,12 @@ fn allocate_and_write_dir(
             let direntry = plain::from_mut_bytes::<initfs::DirEntry>(&mut direntry_buf)
                 .expect("expected dir entry struct to have alignment 1, and buffer size to match");
 
-            log::debug!("Linking inode {} into dir entry index {}, file name `{}`", current_inode, index, String::from_utf8_lossy(&entry.name));
+            log::debug!(
+                "Linking inode {} into dir entry index {}, file name `{}`",
+                current_inode,
+                index,
+                String::from_utf8_lossy(&entry.name)
+            );
 
             *direntry = initfs::DirEntry {
                 inode: (*current_inode).into(),
@@ -290,7 +354,7 @@ fn allocate_and_write_dir(
             };
 
             write_all_at(
-                &*state.file,
+                &state.file,
                 &direntry_buf,
                 u64::from(entry_table_offset + u32::from(index) * u32::from(entry_size)),
                 "allocate_and_write_dir entry",
@@ -384,6 +448,7 @@ pub fn archive(
         .read(false)
         .write(true)
         .create(true)
+        .truncate(true)
         .create_new(false)
         .open(&destination_temp_path)
         .context("failed to open destination file")?;
@@ -410,7 +475,7 @@ pub fn archive(
     let root_metadata = root_path
         .metadata()
         .context("failed to obtain metadata for root")?;
-    let root = read_directory(&mut state, root_path).context("failed to read root")?;
+    let root = read_directory(&mut state, root_path, root_path).context("failed to read root")?;
 
     log::debug!("there are {} inodes", state.inode_count);
 
@@ -461,11 +526,7 @@ pub fn archive(
 
     state.inode_table_offset = inode_table_offset.0.get();
 
-    allocate_contents_and_write_inodes(
-        &mut state,
-        &root,
-        root_metadata,
-    )?;
+    allocate_contents_and_write_inodes(&mut state, &root, root_metadata)?;
 
     let current_system_time = std::time::SystemTime::now();
 
@@ -487,9 +548,14 @@ pub fn archive(
             inode_count: state.inode_count.into(),
             inode_table_offset,
             bootstrap_entry: bootstrap_entry.into(),
-            initfs_size: state.file.metadata().context("failed to get initfs size")?.len().into(),
+            initfs_size: state
+                .file
+                .metadata()
+                .context("failed to get initfs size")?
+                .len()
+                .into(),
         };
-        write_all_at(&*state.file, &header_bytes, header_offset, "writing header")
+        write_all_at(&state.file, &header_bytes, header_offset, "writing header")
             .context("failed to write header")?;
     }
 

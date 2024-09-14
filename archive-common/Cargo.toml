@@ -1,0 +1,12 @@
+[package]
+name = "archive-common"
+version = "0.1.0"
+authors = ["4lDO2 <4lDO2@protonmail.com>", "Kamil Koczurek <koczurekk@gmail.com>"]
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+log = "0.4"
+pathdiff = "*"
+plain = "0.2"
+redox-initfs = {path = ".."}
