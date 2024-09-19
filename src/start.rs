@@ -13,13 +13,28 @@ mod offsets {
         static __bss_end: u8;
     }
     pub fn text() -> (usize, usize) {
-        unsafe { (&__text_start as *const u8 as usize, &__text_end as *const u8 as usize) }
+        unsafe {
+            (
+                &__text_start as *const u8 as usize,
+                &__text_end as *const u8 as usize,
+            )
+        }
     }
     pub fn rodata() -> (usize, usize) {
-        unsafe { (&__rodata_start as *const u8 as usize, &__rodata_end as *const u8 as usize) }
+        unsafe {
+            (
+                &__rodata_start as *const u8 as usize,
+                &__rodata_end as *const u8 as usize,
+            )
+        }
     }
     pub fn data_and_bss() -> (usize, usize) {
-        unsafe { (&__data_start as *const u8 as usize, &__bss_end as *const u8 as usize) }
+        unsafe {
+            (
+                &__data_start as *const u8 as usize,
+                &__bss_end as *const u8 as usize,
+            )
+        }
     }
 }
 
@@ -35,12 +50,33 @@ pub unsafe extern "C" fn start() -> ! {
     let _ = syscall::open("/scheme/debug", syscall::O_WRONLY); // stdout
     let _ = syscall::open("/scheme/debug", syscall::O_WRONLY); // stderr
 
-    let _ = syscall::mprotect(4096, 4096, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for initfs header page");
+    let _ = syscall::mprotect(4096, 4096, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE)
+        .expect("mprotect failed for initfs header page");
 
-    let _ = syscall::mprotect(text_start, text_end - text_start, MapFlags::PROT_READ | MapFlags::PROT_EXEC | MapFlags::MAP_PRIVATE).expect("mprotect failed for .text");
-    let _ = syscall::mprotect(rodata_start, rodata_end - rodata_start, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for .rodata");
-    let _ = syscall::mprotect(data_start, data_end - data_start, MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_PRIVATE).expect("mprotect failed for .data/.bss");
-    let _ = syscall::mprotect(data_end, crate::arch::STACK_START - data_end, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE).expect("mprotect failed for rest of memory");
+    let _ = syscall::mprotect(
+        text_start,
+        text_end - text_start,
+        MapFlags::PROT_READ | MapFlags::PROT_EXEC | MapFlags::MAP_PRIVATE,
+    )
+    .expect("mprotect failed for .text");
+    let _ = syscall::mprotect(
+        rodata_start,
+        rodata_end - rodata_start,
+        MapFlags::PROT_READ | MapFlags::MAP_PRIVATE,
+    )
+    .expect("mprotect failed for .rodata");
+    let _ = syscall::mprotect(
+        data_start,
+        data_end - data_start,
+        MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_PRIVATE,
+    )
+    .expect("mprotect failed for .data/.bss");
+    let _ = syscall::mprotect(
+        data_end,
+        crate::arch::STACK_START - data_end,
+        MapFlags::PROT_READ | MapFlags::MAP_PRIVATE,
+    )
+    .expect("mprotect failed for rest of memory");
 
     redox_rt::initialize_freestanding();
 

@@ -1,8 +1,8 @@
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
-use syscall::{Error, EINTR};
 use syscall::flag::{O_CLOEXEC, O_RDONLY};
+use syscall::{Error, EINTR};
 
 use redox_rt::proc::*;
 
@@ -28,27 +28,41 @@ pub fn main() -> ! {
         iter().map(|var| var.to_owned()).collect::<Vec<_>>()
     };
 
-    extern {
+    extern "C" {
         // The linker script will define this as the location of the initfs header.
         static __initfs_header: u8;
     }
 
-    let initfs_length = unsafe { (*(core::ptr::addr_of!(__initfs_header) as *const redox_initfs::types::Header)).initfs_size };
+    let initfs_length = unsafe {
+        (*(core::ptr::addr_of!(__initfs_header) as *const redox_initfs::types::Header)).initfs_size
+    };
 
     unsafe {
         // Creating a reference to NULL is UB. Mask the UB for now using black_box.
         // FIXME use a raw pointer and inline asm for reading instead for the initfs header.
-        spawn_initfs(core::ptr::addr_of!(__initfs_header), initfs_length.get() as usize);
+        spawn_initfs(
+            core::ptr::addr_of!(__initfs_header),
+            initfs_length.get() as usize,
+        );
     }
     const CWD: &[u8] = b"/scheme/initfs";
+    const DEFAULT_SCHEME: &[u8] = b"initfs";
     let extrainfo = ExtraInfo {
         cwd: Some(CWD),
+        default_scheme: Some(DEFAULT_SCHEME),
         sigprocmask: 0,
         sigignmask: 0,
     };
 
     let path = "/scheme/initfs/bin/init";
-    let total_args_envs_auxvpointee_size = path.len() + 1 + envs.len() + envs.iter().map(|v| v.len()).sum::<usize>() + CWD.len() + 1;
+    let total_args_envs_auxvpointee_size = path.len()
+        + 1
+        + envs.len()
+        + envs.iter().map(|v| v.len()).sum::<usize>()
+        + CWD.len()
+        + 1
+        + DEFAULT_SCHEME.len()
+        + 1;
 
     let image_file = FdGuard::new(syscall::open(path, O_RDONLY).expect("failed to open init"));
     let open_via_dup = FdGuard::new(
@@ -57,7 +71,18 @@ pub fn main() -> ! {
     );
     let memory = FdGuard::new(syscall::open("/scheme/memory", 0).expect("failed to open memory"));
 
-    fexec_impl(image_file, open_via_dup, &memory, path.as_bytes(), [path], envs.iter(), total_args_envs_auxvpointee_size, &extrainfo, None).expect("failed to execute init");
+    fexec_impl(
+        image_file,
+        open_via_dup,
+        &memory,
+        path.as_bytes(),
+        [path],
+        envs.iter(),
+        total_args_envs_auxvpointee_size,
+        &extrainfo,
+        None,
+    )
+    .expect("failed to execute init");
 
     unreachable!()
 }
@@ -89,5 +114,8 @@ unsafe fn spawn_initfs(initfs_start: *const u8, initfs_length: usize) {
             return;
         }
     }
-    crate::initfs::run(core::slice::from_raw_parts(initfs_start, initfs_length), write);
+    crate::initfs::run(
+        core::slice::from_raw_parts(initfs_start, initfs_length),
+        write,
+    );
 }

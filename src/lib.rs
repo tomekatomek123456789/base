@@ -1,10 +1,6 @@
 #![no_std]
 #![allow(internal_features)]
-#![feature(
-    asm_const,
-    core_intrinsics,
-    str_from_raw_parts,
-)]
+#![feature(asm_const, core_intrinsics, str_from_raw_parts, iter_intersperse)]
 
 #[cfg(target_arch = "aarch64")]
 #[path = "aarch64.rs"]
@@ -35,7 +31,9 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 
     impl Write for Writer {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            syscall::write(1, s.as_bytes()).map_err(|_| core::fmt::Error).map(|_| ())
+            syscall::write(1, s.as_bytes())
+                .map_err(|_| core::fmt::Error)
+                .map(|_| ())
         }
     }
 
@@ -62,8 +60,19 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
         let heap = HEAP.get_or_insert_with(|| {
             HEAP_TOP = HEAP_OFF + SIZE;
-            let _ = syscall::fmap(!0, &Map { offset: 0, size: SIZE, address: HEAP_OFF, flags: MapFlags::PROT_WRITE | MapFlags::PROT_READ | MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED_NOREPLACE })
-                .expect("failed to map initial heap");
+            let _ = syscall::fmap(
+                !0,
+                &Map {
+                    offset: 0,
+                    size: SIZE,
+                    address: HEAP_OFF,
+                    flags: MapFlags::PROT_WRITE
+                        | MapFlags::PROT_READ
+                        | MapFlags::MAP_PRIVATE
+                        | MapFlags::MAP_FIXED_NOREPLACE,
+                },
+            )
+            .expect("failed to map initial heap");
             linked_list_allocator::Heap::new(HEAP_OFF as *mut u8, SIZE)
         });
 
@@ -74,8 +83,19 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
                     return core::ptr::null_mut();
                 }
 
-                let _ = syscall::fmap(!0, &Map { offset: 0, size: HEAP_INCREASE_BY, address: HEAP_TOP, flags: MapFlags::PROT_WRITE | MapFlags::PROT_READ | MapFlags::MAP_PRIVATE | MapFlags::MAP_FIXED_NOREPLACE })
-                    .expect("failed to extend heap");
+                let _ = syscall::fmap(
+                    !0,
+                    &Map {
+                        offset: 0,
+                        size: HEAP_INCREASE_BY,
+                        address: HEAP_TOP,
+                        flags: MapFlags::PROT_WRITE
+                            | MapFlags::PROT_READ
+                            | MapFlags::MAP_PRIVATE
+                            | MapFlags::MAP_FIXED_NOREPLACE,
+                    },
+                )
+                .expect("failed to extend heap");
                 heap.extend(HEAP_INCREASE_BY);
                 HEAP_TOP += HEAP_INCREASE_BY;
 
@@ -84,6 +104,8 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
-        HEAP.as_mut().unwrap().deallocate(core::ptr::NonNull::new(ptr).unwrap(), layout)
+        HEAP.as_mut()
+            .unwrap()
+            .deallocate(core::ptr::NonNull::new(ptr).unwrap(), layout)
     }
 }
