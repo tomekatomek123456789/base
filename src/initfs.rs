@@ -6,8 +6,9 @@ use core::str;
 use alloc::string::String;
 
 use hashbrown::HashMap;
-use redox_initfs::{InitFs, InodeStruct, Inode, InodeDir, InodeKind, types::Timespec};
+use redox_initfs::{types::Timespec, InitFs, Inode, InodeDir, InodeKind, InodeStruct};
 
+use redox_path::canonicalize_to_standard;
 use redox_scheme::CallerCtx;
 use redox_scheme::OpenResult;
 use redox_scheme::RequestKind;
@@ -55,7 +56,6 @@ impl InitFsScheme {
     }
 }
 
-
 struct Iter {
     dir: InodeDir<'static>,
     idx: u32,
@@ -71,7 +71,8 @@ impl Iterator for Iter {
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self.dir.entry_count().ok() {
             Some(size) => {
-                let size = usize::try_from(size).expect("expected u32 to be convertible into usize");
+                let size =
+                    usize::try_from(size).expect("expected u32 to be convertible into usize");
                 (size, Some(size))
             }
             None => (0, None),
@@ -82,14 +83,18 @@ impl Iterator for Iter {
 fn inode_len(inode: InodeStruct<'static>) -> Result<usize> {
     Ok(match inode.kind() {
         InodeKind::File(file) => file.data().map_err(|_| Error::new(EIO))?.len(),
-        InodeKind::Dir(dir) => (Iter { dir, idx: 0 })
-            .fold(0, |len, entry| len + entry.and_then(|entry| entry.name().map_err(|_| Error::new(EIO))).map_or(0, |name| name.len() + 1)),
+        InodeKind::Dir(dir) => (Iter { dir, idx: 0 }).fold(0, |len, entry| {
+            len + entry
+                .and_then(|entry| entry.name().map_err(|_| Error::new(EIO)))
+                .map_or(0, |name| name.len() + 1)
+        }),
+        InodeKind::Link(link) => link.data().map_err(|_| Error::new(EIO))?.len(),
         InodeKind::Unknown => return Err(Error::new(EIO)),
     })
 }
 
 impl SchemeMut for InitFsScheme {
-    fn xopen(&mut self, path: &str, _flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn xopen(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let mut components = path
             // trim leading and trailing slash
             .trim_matches('/')
@@ -105,7 +110,7 @@ impl SchemeMut for InitFsScheme {
                 "." => continue,
                 ".." => {
                     let _ = components.next_back();
-                    continue
+                    continue;
                 }
 
                 _ => (),
@@ -116,16 +121,18 @@ impl SchemeMut for InitFsScheme {
             let dir = match current_inode_struct.kind() {
                 InodeKind::Dir(dir) => dir,
 
+                // TODO: Support symlinks in other position than xopen target
+                InodeKind::Link(link) => {
+                    return Err(Error::new(EOPNOTSUPP));
+                }
+
                 // If we still have more components in the path, and the file tree for that
                 // particular branch is not all directories except the last, then that file cannot
                 // exist.
                 InodeKind::File(_) | InodeKind::Unknown => return Err(Error::new(ENOENT)),
             };
 
-            let mut entries = Iter {
-                dir,
-                idx: 0,
-            };
+            let mut entries = Iter { dir, idx: 0 };
 
             current_inode = loop {
                 let entry_res = match entries.next() {
@@ -140,17 +147,40 @@ impl SchemeMut for InitFsScheme {
             };
         }
 
+        // xopen target is link -- return EXDEV so that the file is opened as a link.
+        // TODO: Maybe follow initfs-local symlinks here? Would be faster
+        let is_link = matches!(
+            Self::get_inode(&self.fs, current_inode)?.kind(),
+            InodeKind::Link(_)
+        );
+        let o_symlink = flags & O_SYMLINK != 0;
+        if is_link && !o_symlink {
+            return Err(Error::new(EXDEV));
+        }
+
         let id = self.next_id();
-        let old = self.handles.insert(id, Handle {
-            inode: current_inode,
-            filename: path.into(),
-        });
+        let old = self.handles.insert(
+            id,
+            Handle {
+                inode: current_inode,
+                filename: path.into(),
+            },
+        );
         assert!(old.is_none());
 
-        Ok(OpenResult::ThisScheme { number: id, flags: NewFdFlags::POSITIONED })
+        Ok(OpenResult::ThisScheme {
+            number: id,
+            flags: NewFdFlags::POSITIONED,
+        })
     }
 
-    fn read(&mut self, id: usize, buffer: &mut [u8], offset: u64, _fcntl_flags: u32) -> Result<usize> {
+    fn read(
+        &mut self,
+        id: usize,
+        buffer: &mut [u8],
+        offset: u64,
+        _fcntl_flags: u32,
+    ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
         };
@@ -168,10 +198,29 @@ impl SchemeMut for InitFsScheme {
                 Ok(to_copy)
             }
             InodeKind::Dir(_) => Err(Error::new(EISDIR)),
+            InodeKind::Link(link) => {
+                let link_data = link.data().map_err(|_| Error::new(EIO))?;
+                let path = core::str::from_utf8(link_data).map_err(|_| Error::new(ENOENT))?;
+                let cannonical =
+                    canonicalize_to_standard(Some("/"), path).ok_or_else(|| Error::new(ENOENT))?;
+                let data = cannonical.as_bytes();
+
+                let src_buf = &data[core::cmp::min(offset, data.len())..];
+
+                let to_copy = core::cmp::min(src_buf.len(), buffer.len());
+                buffer[..to_copy].copy_from_slice(&src_buf[..to_copy]);
+
+                Ok(to_copy)
+            }
             InodeKind::Unknown => Err(Error::new(EIO)),
         }
     }
-    fn getdents<'buf>(&mut self, id: usize, mut buf: DirentBuf<&'buf mut [u8]>, opaque_offset: u64) -> Result<DirentBuf<&'buf mut [u8]>> {
+    fn getdents<'buf>(
+        &mut self,
+        id: usize,
+        mut buf: DirentBuf<&'buf mut [u8]>,
+        opaque_offset: u64,
+    ) -> Result<DirentBuf<&'buf mut [u8]>> {
         let Ok(offset) = u32::try_from(opaque_offset) else {
             return Ok(buf);
         };
@@ -187,7 +236,11 @@ impl SchemeMut for InitFsScheme {
                 //inode: entry.inode(),
                 inode: 0,
 
-                name: entry.name().ok().and_then(|utf8| core::str::from_utf8(utf8).ok()).ok_or(Error::new(EIO))?,
+                name: entry
+                    .name()
+                    .ok()
+                    .and_then(|utf8| core::str::from_utf8(utf8).ok())
+                    .ok_or(Error::new(EIO))?,
                 next_opaque_id: index as u64 + 1,
                 kind: DirentKind::Unspecified,
             })?;
@@ -229,7 +282,12 @@ impl SchemeMut for InitFsScheme {
 
         let inode = Self::get_inode(&self.fs, handle.inode)?;
 
-        stat.st_mode = inode.mode() | match inode.kind() { InodeKind::Dir(_) => MODE_DIR, InodeKind::File(_) => MODE_FILE, _ => 0 };
+        stat.st_mode = inode.mode()
+            | match inode.kind() {
+                InodeKind::Dir(_) => MODE_DIR,
+                InodeKind::File(_) => MODE_FILE,
+                _ => 0,
+            };
         stat.st_uid = inode.uid();
         stat.st_gid = inode.gid();
         stat.st_size = u64::try_from(inode_len(inode)?).unwrap_or(u64::MAX);
@@ -259,14 +317,16 @@ impl SchemeMut for InitFsScheme {
 pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
     let mut scheme = InitFsScheme::new(bytes);
 
-    let socket = Socket::<V2>::create("initfs")
-        .expect("failed to open initfs scheme socket");
+    let socket = Socket::<V2>::create("initfs").expect("failed to open initfs scheme socket");
 
     let _ = syscall::write(sync_pipe, &[0]);
     let _ = syscall::close(sync_pipe);
 
     loop {
-        let RequestKind::Call(req) = (match socket.next_request(SignalBehavior::Restart).expect("bootstrap: failed to read scheme request from kernel") {
+        let RequestKind::Call(req) = (match socket
+            .next_request(SignalBehavior::Restart)
+            .expect("bootstrap: failed to read scheme request from kernel")
+        {
             Some(req) => req.kind(),
             None => break,
         }) else {
@@ -274,7 +334,10 @@ pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
         };
         let resp = req.handle_scheme_mut(&mut scheme);
 
-        if !socket.write_response(resp, SignalBehavior::Restart).expect("bootstrap: failed to write scheme response to kernel") {
+        if !socket
+            .write_response(resp, SignalBehavior::Restart)
+            .expect("bootstrap: failed to write scheme response to kernel")
+        {
             break;
         }
     }
