@@ -15,7 +15,8 @@ use redox_scheme::{
 use slab::Slab;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, FobtainFdFlags, Result, EBADF, EBADFD, EEXIST, EINVAL, ENOENT, O_CLOEXEC, O_CREAT,
+    Error, FobtainFdFlags, ProcSchemeAttrs, Result, EBADF, EBADFD, EEXIST, EINVAL, ENOENT,
+    O_CLOEXEC, O_CREAT,
 };
 
 pub fn run(write_fd: usize, auth: &FdGuard) {
@@ -156,6 +157,19 @@ impl<'a> ProcScheme<'a> {
         } = *self.processes.get(&parent_pid).ok_or(Error::new(EBADFD))?;
 
         let new_ctxt_fd = FdGuard::new(syscall::dup(**self.auth, b"new-context")?);
+        let attr_fd = FdGuard::new(syscall::dup(
+            *new_ctxt_fd,
+            alloc::format!("attrs-{}", **self.auth).as_bytes(),
+        )?);
+        let _ = syscall::write(
+            *attr_fd,
+            &ProcSchemeAttrs {
+                pid: child_pid.0 as u32,
+                euid,
+                egid,
+                ens,
+            },
+        )?;
 
         self.processes.insert(
             child_pid,
