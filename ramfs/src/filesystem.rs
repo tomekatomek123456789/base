@@ -140,7 +140,8 @@ impl Filesystem {
         uid: u32,
         gid: u32,
     ) -> Result<(usize, Option<&'a str>)> {
-        let mut parts = path_components_iter(path_bytes.trim_start_matches('/')).collect::<Vec<_>>();
+        let mut parts =
+            path_components_iter(path_bytes.trim_start_matches('/')).collect::<Vec<_>>();
 
         let last = if parts.len() >= 1 {
             Some(parts.pop().unwrap())

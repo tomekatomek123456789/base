@@ -123,7 +123,7 @@ version = "0.1.0"
 dependencies = [
  "libredox",
  "redox-daemon",
- "redox-scheme",
+ "redox-scheme 0.2.4",
  "redox_syscall",
 ]
 
@@ -167,7 +167,7 @@ dependencies = [
  "indexmap",
  "libredox",
  "redox-daemon",
- "redox-scheme",
+ "redox-scheme 0.4.0",
  "redox_syscall",
  "slab",
 ]
@@ -197,7 +197,7 @@ dependencies = [
  "rand_core",
  "raw-cpuid",
  "redox-daemon",
- "redox-scheme",
+ "redox-scheme 0.2.4",
  "redox_syscall",
  "sha2",
 ]
@@ -232,10 +232,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_syscall"
-version = "0.5.8"
+name = "redox-scheme"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03a862b389f93e68874fbf580b9de08dd02facb9a788ebadaf4a3fd33cf58834"
+checksum = "a28d292981c8f3338cb772b6024b08bcc597d0dd81020de17080a9a7b470ebb2"
+dependencies = [
+ "libredox",
+ "redox_syscall",
+]
+
+[[package]]
+name = "redox_syscall"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b568323e98e49e2a0899dcee453dd679fae22d69adf9b11dd508d1549b7e2f"
 dependencies = [
  "bitflags",
 ]
@@ -280,9 +290,9 @@ checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.16"
+version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a210d160f08b701c8721ba1c726c11662f877ea6b7094007e1ca9a1041945034"
+checksum = "00e2473a93778eb0bad35909dff6a10d28e63f792f16ed15e404fca9d5eeedbe"
 
 [[package]]
 name = "zerocopy"
@@ -311,6 +321,6 @@ version = "0.1.0"
 dependencies = [
  "libredox",
  "redox-daemon",
- "redox-scheme",
+ "redox-scheme 0.2.4",
  "redox_syscall",
 ]

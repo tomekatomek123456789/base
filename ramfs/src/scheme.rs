@@ -16,7 +16,7 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{Error, EventFlags, Result, Stat, StatVfs, TimeSpec, ENOENT};
 use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE};
 
-use redox_scheme::{CallerCtx, OpenResult, SchemeMut};
+use redox_scheme::{CallerCtx, OpenResult, Scheme as SchemeTrait};
 
 use crate::filesystem::{self, File, FileData, Filesystem, Inode};
 
@@ -60,7 +60,9 @@ impl Scheme {
                 return Err(Error::new(ENOTDIR));
             };
 
-            let Inode(entry_inode) = dentries.shift_remove(name_to_delete).ok_or(Error::new(ENOENT))?;
+            let Inode(entry_inode) = dentries
+                .shift_remove(name_to_delete)
+                .ok_or(Error::new(ENOENT))?;
 
             if let Some(File {
                 data: FileData::Directory(ref data),
@@ -149,7 +151,7 @@ impl Scheme {
     }
 }
 
-impl SchemeMut for Scheme {
+impl SchemeTrait for Scheme {
     fn xopen(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let exists = self.filesystem.resolve(path, 0, 0).is_ok();
         if flags & O_CREAT != 0 && flags & O_EXCL != 0 && exists {
@@ -163,9 +165,9 @@ impl SchemeMut for Scheme {
                 return Err(Error::new(EINVAL));
             }
 
-            let (parent_dir_inode, new_name) =
-                self.filesystem
-                    .resolve_except_last(path, ctx.uid, ctx.gid)?;
+            let (parent_dir_inode, new_name) = self
+                .filesystem
+                .resolve_except_last(path, ctx.uid, ctx.gid)?;
             let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
 
             let current_time = filesystem::current_time();
@@ -238,7 +240,10 @@ impl SchemeMut for Scheme {
         } else {
             self.open_existing(path, flags, ctx.uid, ctx.gid)?.0
         };
-        Ok(OpenResult::ThisScheme { number: inode, flags: NewFdFlags::POSITIONED })
+        Ok(OpenResult::ThisScheme {
+            number: inode,
+            flags: NewFdFlags::POSITIONED,
+        })
     }
     fn rmdir(&mut self, path: &str, uid: u32, gid: u32) -> Result<usize> {
         self.remove_dentry(path, uid, gid, true)
@@ -249,7 +254,13 @@ impl SchemeMut for Scheme {
     fn dup(&mut self, old_inode: usize, _buf: &[u8]) -> Result<usize> {
         Ok(old_inode)
     }
-    fn read(&mut self, inode: usize, buf: &mut [u8], offset: u64, fcntl_flags: u32) -> Result<usize> {
+    fn read(
+        &mut self,
+        inode: usize,
+        buf: &mut [u8],
+        offset: u64,
+        fcntl_flags: u32,
+    ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
         };
@@ -277,7 +288,12 @@ impl SchemeMut for Scheme {
             FileData::Directory(_) => return Err(Error::new(EISDIR)),
         }
     }
-    fn getdents<'buf>(&mut self, inode: usize, mut buf: DirentBuf<&'buf mut [u8]>, opaque_offset: u64) -> Result<DirentBuf<&'buf mut [u8]>> {
+    fn getdents<'buf>(
+        &mut self,
+        inode: usize,
+        mut buf: DirentBuf<&'buf mut [u8]>,
+        opaque_offset: u64,
+    ) -> Result<DirentBuf<&'buf mut [u8]>> {
         let Ok(offset) = usize::try_from(opaque_offset) else {
             return Ok(buf);
         };
@@ -369,7 +385,13 @@ impl SchemeMut for Scheme {
         // TODO?
         Err(Error::new(ENOSYS))
     }
-    fn mmap_prep(&mut self, _inode: usize, _offset: u64, _size: usize, _flags: syscall::MapFlags) -> Result<usize> {
+    fn mmap_prep(
+        &mut self,
+        _inode: usize,
+        _offset: u64,
+        _size: usize,
+        _flags: syscall::MapFlags,
+    ) -> Result<usize> {
         // TODO
         Err(Error::new(ENOSYS))
     }
@@ -393,7 +415,10 @@ impl SchemeMut for Scheme {
                 return Err(Error::new(EBADFD));
             };
             // TODO: error handling?
-            let (name, _) = dir.iter().find(|(_name, inode)| inode.0 == current_inode).ok_or(Error::new(ENOENT))?;
+            let (name, _) = dir
+                .iter()
+                .find(|(_name, inode)| inode.0 == current_inode)
+                .ok_or(Error::new(ENOENT))?;
             chain.push(&**name);
 
             current_inode = current_info.parent.0;
@@ -401,7 +426,9 @@ impl SchemeMut for Scheme {
         }
 
         let mut cursor = Cursor::new(buf);
-        for component in iter::once(self.scheme_name.trim_start_matches('/')).chain(chain.iter().copied().rev()) {
+        for component in
+            iter::once(self.scheme_name.trim_start_matches('/')).chain(chain.iter().copied().rev())
+        {
             use std::io::Write;
 
             write!(cursor, "/{component}").unwrap();
@@ -524,19 +551,18 @@ impl SchemeMut for Scheme {
 
         Ok(0)
     }
-    fn close(&mut self, inode: usize) -> Result<usize> {
-        let inode_info = self
-            .filesystem
-            .files
-            .get_mut(&inode)
-            .ok_or(Error::new(EIO))?;
+}
+impl Scheme {
+    pub fn on_close(&mut self, inode: usize) {
+        let Some(inode_info) = self.filesystem.files.get_mut(&inode) else {
+            return;
+        };
 
         inode_info.open_handles -= 1;
 
         if inode_info.nlink == 0 && inode_info.open_handles == 0 {
             self.filesystem.files.remove(&inode);
         }
-        Ok(0)
     }
 }
 pub fn current_perm(file: &crate::filesystem::File, uid: u32, gid: u32) -> u8 {
