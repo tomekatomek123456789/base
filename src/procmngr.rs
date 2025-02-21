@@ -11,22 +11,35 @@ use alloc::vec::Vec;
 
 use hashbrown::hash_map::{DefaultHashBuilder, Entry, OccupiedEntry};
 use hashbrown::{HashMap, HashSet};
+
 use redox_rt::proc::FdGuard;
 use redox_rt::protocol::{ProcCall, ProcMeta, WaitFlags};
 use redox_scheme::scheme::Op;
 use redox_scheme::{
-    CallerCtx, Id, OpenResult, RequestKind, Response, SendFdRequest, SignalBehavior, Socket,
+    CallerCtx, Id, OpenResult, Request, RequestKind, Response, SendFdRequest, SignalBehavior,
+    Socket,
 };
 use slab::Slab;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, FobtainFdFlags, ProcSchemeAttrs, Result, EAGAIN, EBADF, EBADFD, EEXIST, EINVAL, ENOENT,
-    ENOSYS, EOPNOTSUPP, EPERM, ESRCH, O_CLOEXEC, O_CREAT,
+    Error, Event, EventFlags, FobtainFdFlags, ProcSchemeAttrs, Result, EAGAIN, EBADF, EBADFD,
+    EEXIST, EINTR, EINVAL, ENOENT, ENOSYS, EOPNOTSUPP, EPERM, ESRCH, EWOULDBLOCK, O_CLOEXEC,
+    O_CREAT,
 };
 
 pub fn run(write_fd: usize, auth: &FdGuard) {
-    let socket = Socket::create("proc").expect("failed to open proc scheme socket");
-    let mut scheme = ProcScheme::new(auth);
+    let socket = Socket::nonblock("proc").expect("failed to open proc scheme socket");
+
+    // TODO?
+    let socket_ident = socket.inner().raw();
+
+    let queue = RawEventQueue::new().expect("failed to create event queue");
+
+    queue
+        .subscribe(socket.inner().raw(), socket_ident, EventFlags::EVENT_READ)
+        .expect("failed to listen to scheme socket events");
+
+    let mut scheme = ProcScheme::new(auth, &queue);
 
     let _ = syscall::write(1, b"process manager started\n").unwrap();
     let _ = syscall::write(write_fd, &[0]);
@@ -35,69 +48,101 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
     let mut states = HashMap::<Id, PendingState, DefaultHashBuilder>::new();
     let mut awoken = VecDeque::<Id>::new();
 
-    loop {
+    'outer: loop {
         for awoken in awoken.drain(..) {
             let Entry::Occupied(entry) = states.entry(awoken) else {
                 continue;
             };
             match scheme.work_on(entry) {
-                Ready(resp) => {
-                    socket
-                        .write_response(resp, SignalBehavior::Restart)
-                        .expect("bootstrap: failed to write scheme response to kernel");
-                }
+                Ready(resp) => loop {
+                    match socket.write_response(resp, SignalBehavior::Interrupt) {
+                        Ok(false) => break 'outer,
+                        Ok(_) => break,
+                        Err(err) if err.errno == EINTR => continue,
+                        Err(err) => {
+                            panic!("bootstrap: failed to write scheme response to kernel: {err}")
+                        }
+                    }
+                },
                 Pending => continue,
             }
         }
+        // TODO: multiple events?
+        let event = queue.next_event().expect("failed to get next event");
 
-        let Some(req) = socket
-            .next_request(SignalBehavior::Restart)
-            .expect("bootstrap: failed to read scheme request from kernel")
-        else {
-            continue;
-        };
-        let resp = match req.kind() {
-            RequestKind::Call(req) => {
-                let res = req.with(|req, caller, op| match op {
-                    Op::Open { path, flags } => {
-                        Ready(Response::open_dup_like(&req, scheme.on_open(path, flags)))
+        if event.data == socket_ident {
+            let req = loop {
+                match socket.next_request(SignalBehavior::Interrupt) {
+                    Ok(None) => break 'outer,
+                    Ok(Some(req)) => break req,
+                    Err(e) if e.errno == EINTR => continue,
+                    // spurious event
+                    Err(e) if e.errno == EWOULDBLOCK || e.errno == EAGAIN => continue 'outer,
+                    Err(other) => {
+                        panic!("bootstrap: failed to read scheme request from kernel: {other}")
                     }
-                    Op::Dup { old_fd, buf } => {
-                        Ready(Response::open_dup_like(&req, scheme.on_dup(old_fd, buf)))
+                }
+            };
+            let Some(resp) = handle_scheme(req, &socket, &mut scheme, &mut states) else {
+                continue 'outer;
+            };
+            loop {
+                match socket.write_response(resp, SignalBehavior::Interrupt) {
+                    Ok(false) => break 'outer,
+                    Ok(_) => break,
+                    Err(err) if err.errno == EINTR => continue,
+                    Err(err) => {
+                        panic!("bootstrap: failed to write scheme response to kernel: {err}")
                     }
-                    Op::Read { fd, buf, .. } => Ready(Response::new(&req, scheme.on_read(fd, buf))),
-                    Op::Call {
-                        fd,
-                        payload,
-                        metadata,
-                    } => scheme
-                        .on_call(
-                            fd,
-                            payload,
-                            metadata,
-                            states.entry(req.request().request_id()),
-                        )
-                        .map(|r| Response::new(&req, r)),
-                    _ => Ready(Response::new(&req, Err(Error::new(ENOSYS)))),
-                });
-                match res {
-                    Ok(Ready(r)) | Err(r) => r,
-                    Ok(Pending) => continue,
                 }
             }
-            RequestKind::SendFd(req) => scheme.on_sendfd(&socket, &req),
-            _ => continue,
-        };
-
-        if !socket
-            .write_response(resp, SignalBehavior::Restart)
-            .expect("bootstrap: failed to write scheme response to kernel")
-        {
-            break;
+        } else {
+            let _ = syscall::write(1, b"\nTODO: EVENT\n");
         }
     }
 
     unreachable!()
+}
+fn handle_scheme<'a>(
+    req: Request,
+    socket: &'a Socket,
+    scheme: &mut ProcScheme<'a>,
+    states: &mut HashMap<Id, PendingState>,
+) -> Option<Response> {
+    match req.kind() {
+        RequestKind::Call(req) => {
+            let res = req.with(|req, caller, op| match op {
+                Op::Open { path, flags } => {
+                    Ready(Response::open_dup_like(&req, scheme.on_open(path, flags)))
+                }
+                Op::Dup { old_fd, buf } => {
+                    Ready(Response::open_dup_like(&req, scheme.on_dup(old_fd, buf)))
+                }
+                Op::Read { fd, buf, .. } => Ready(Response::new(&req, scheme.on_read(fd, buf))),
+                Op::Call {
+                    fd,
+                    payload,
+                    metadata,
+                } => scheme
+                    .on_call(
+                        fd,
+                        payload,
+                        metadata,
+                        states.entry(req.request().request_id()),
+                    )
+                    .map(|r| Response::new(&req, r)),
+                _ => Ready(Response::new(&req, Err(Error::new(ENOSYS)))),
+            });
+            match res {
+                Ok(Ready(r)) | Err(r) => Some(r),
+                // waker has already been registered, so the logic for the caller is to not send a
+                // response and continue with remaining events
+                Ok(Pending) => None,
+            }
+        }
+        RequestKind::SendFd(req) => Some(scheme.on_sendfd(socket, &req)),
+        _ => None,
+    }
 }
 enum PendingState {
     AwaitingStatusChange {
@@ -152,6 +197,7 @@ struct ProcScheme<'a> {
     next_id: ProcessId,
 
     waitpgid: HashMap<ProcessId, Vec<Id>, DefaultHashBuilder>,
+    queue: &'a RawEventQueue,
     auth: &'a FdGuard,
 }
 
@@ -167,9 +213,40 @@ enum WaitpidTarget {
     AnyChild,
     AnyGroupMember,
 }
+// TODO: Add 'syscall' backend for redox-event so it can act both as library-ABI frontend and
+// backend
+struct RawEventQueue(FdGuard);
+impl RawEventQueue {
+    pub fn new() -> Result<Self> {
+        syscall::open("/scheme/event", O_CREAT)
+            .map(FdGuard::new)
+            .map(Self)
+    }
+    pub fn subscribe(&self, fd: usize, ident: usize, flags: EventFlags) -> Result<()> {
+        let _ = syscall::write(
+            *self.0,
+            &Event {
+                id: fd,
+                data: ident,
+                flags,
+            },
+        )?;
+        Ok(())
+    }
+    pub fn next_event(&self) -> Result<Event> {
+        let mut event = Event::default();
+        let read = syscall::read(*self.0, &mut event)?;
+        assert_eq!(
+            read,
+            size_of::<Event>(),
+            "event queue EOF currently undefined"
+        );
+        Ok(event)
+    }
+}
 
 impl<'a> ProcScheme<'a> {
-    pub fn new(auth: &'a FdGuard) -> ProcScheme {
+    pub fn new(auth: &'a FdGuard, queue: &'a RawEventQueue) -> ProcScheme<'a> {
         ProcScheme {
             processes: HashMap::new(),
             sessions: HashSet::new(),
@@ -177,6 +254,7 @@ impl<'a> ProcScheme<'a> {
             handles: Slab::new(),
             init_claimed: false,
             next_id: ProcessId(2),
+            queue,
             auth,
         }
     }
@@ -192,9 +270,14 @@ impl<'a> ProcScheme<'a> {
                 if let Err(e) = req.obtain_fd(socket, FobtainFdFlags::empty(), Err(&mut fd_out)) {
                     return Response::for_sendfd(&req, Err(e));
                 };
-                let thread = Rc::new(RefCell::new(Thread {
-                    fd: FdGuard::new(fd_out),
-                }));
+                let fd = FdGuard::new(fd_out);
+
+                // TODO: Use global thread id etc. rather than reusing fd for identifier?
+                self.queue
+                    .subscribe(*fd, fd_out, EventFlags::EVENT_READ)
+                    .expect("TODO");
+
+                let thread = Rc::new(RefCell::new(Thread { fd }));
                 self.processes.insert(
                     INIT_PID,
                     Process {
