@@ -20,7 +20,7 @@ pub mod arch;
 
 pub mod exec;
 pub mod initfs;
-pub mod procmngr;
+pub mod procmgr;
 pub mod start;
 
 extern crate alloc;

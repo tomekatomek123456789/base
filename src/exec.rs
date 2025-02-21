@@ -63,7 +63,7 @@ pub fn main() -> ! {
     );
 
     spawn("process manager", &auth, &this_thr_fd, |write_fd| {
-        crate::procmngr::run(write_fd, &auth)
+        crate::procmgr::run(write_fd, &auth)
     });
     let init_proc_fd = unsafe { redox_rt::proc::make_init() };
 
