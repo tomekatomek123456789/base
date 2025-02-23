@@ -303,11 +303,6 @@ impl SchemeSync for InitFsScheme {
 
         Ok(())
     }
-
-    fn close(&mut self, id: usize) -> Result<()> {
-        let _ = self.handles.remove(&id).ok_or(Error::new(EBADF))?;
-        Ok(())
-    }
 }
 
 pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
@@ -319,24 +314,29 @@ pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
     let _ = syscall::close(sync_pipe);
 
     loop {
-        let RequestKind::Call(req) = (match socket
+        let Some(req) = socket
             .next_request(SignalBehavior::Restart)
             .expect("bootstrap: failed to read scheme request from kernel")
-        {
-            Some(req) => req.kind(),
-            None => break,
-        }) else {
-            continue;
-        };
-        let resp = req
-            .handle_sync(&mut scheme)
-            .expect("failed to handle request");
-
-        if !socket
-            .write_response(resp, SignalBehavior::Restart)
-            .expect("bootstrap: failed to write scheme response to kernel")
-        {
+        else {
             break;
+        };
+        match req.kind() {
+            RequestKind::Call(req) => {
+                let resp = req
+                    .handle_sync(&mut scheme)
+                    .expect("failed to handle request");
+
+                if !socket
+                    .write_response(resp, SignalBehavior::Restart)
+                    .expect("bootstrap: failed to write scheme response to kernel")
+                {
+                    break;
+                }
+            }
+            RequestKind::OnClose { id } => {
+                scheme.handles.remove(&id);
+            }
+            _ => (),
         }
     }
 

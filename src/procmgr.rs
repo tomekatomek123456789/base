@@ -131,7 +131,10 @@ fn handle_scheme<'a>(
                         states.entry(req.request().request_id()),
                     )
                     .map(|r| Response::new(&req, r)),
-                _ => Ready(Response::new(&req, Err(Error::new(ENOSYS)))),
+                _ => {
+                    let _ = syscall::write(1, alloc::format!("\nUNKNOWN: {op:?}\n").as_bytes());
+                    Ready(Response::new(&req, Err(Error::new(ENOSYS))))
+                }
             });
             match res {
                 Ok(Ready(r)) | Err(r) => Some(r),
@@ -181,6 +184,7 @@ enum ProcessStatus {
 #[derive(Debug)]
 struct Thread {
     fd: FdGuard,
+    status_hndl: FdGuard,
     // sig_ctrl: MmapGuard<...>
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -276,8 +280,9 @@ impl<'a> ProcScheme<'a> {
                 self.queue
                     .subscribe(*fd, fd_out, EventFlags::EVENT_READ)
                     .expect("TODO");
+                let status_hndl = FdGuard::new(syscall::dup(*fd, b"status").expect("TODO"));
 
-                let thread = Rc::new(RefCell::new(Thread { fd }));
+                let thread = Rc::new(RefCell::new(Thread { fd, status_hndl }));
                 self.processes.insert(
                     INIT_PID,
                     Process {
@@ -334,11 +339,19 @@ impl<'a> ProcScheme<'a> {
                 ens,
             },
         )?;
+        let status_fd = FdGuard::new(syscall::dup(*new_ctxt_fd, b"status")?);
+
+        self.queue
+            .subscribe(*new_ctxt_fd, *new_ctxt_fd, EventFlags::EVENT_READ)
+            .expect("TODO");
 
         self.processes.insert(
             child_pid,
             Process {
-                threads: vec![Rc::new(RefCell::new(Thread { fd: new_ctxt_fd }))],
+                threads: vec![Rc::new(RefCell::new(Thread {
+                    fd: new_ctxt_fd,
+                    status_hndl: status_fd,
+                }))],
                 ppid: parent_pid,
                 pgid,
                 sid,
@@ -359,7 +372,9 @@ impl<'a> ProcScheme<'a> {
     fn new_thread(&mut self, pid: ProcessId) -> Result<FdGuard> {
         let proc = self.processes.get_mut(&pid).ok_or(Error::new(EBADFD))?;
         let fd = todo!();
-        proc.threads.push(Rc::new(RefCell::new(Thread { fd })));
+        let status_hndl = todo!();
+        proc.threads
+            .push(Rc::new(RefCell::new(Thread { fd, status_hndl })));
         Ok(fd)
     }
     fn on_open(&mut self, path: &str, flags: usize) -> Result<OpenResult> {
@@ -468,7 +483,7 @@ impl<'a> ProcScheme<'a> {
                         self.on_waitpid(
                             pid,
                             target,
-                            plain::from_mut_bytes(payload).map_err(|_| Error::new(EINVAL))?,
+                            plain::from_mut_bytes(payload).unwrap(), //.map_err(|_| Error::new(EINVAL))?,
                             WaitFlags::from_bits(metadata[2] as usize).ok_or(Error::new(EINVAL))?,
                             state,
                         )
@@ -495,6 +510,12 @@ impl<'a> ProcScheme<'a> {
             Self::on_exit_complete();
             Ready(Ok(0))
         } else {
+            // terminate all threads
+            for thread in &process.threads {
+                let mut thread = thread.borrow_mut();
+                syscall::write(*thread.status_hndl, &usize::MAX.to_ne_bytes()).expect("TODO");
+            }
+
             let _ = syscall::write(1, b"\nEXIT PENDING\n");
             self.debug();
             // TODO: check?
