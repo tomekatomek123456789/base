@@ -5,7 +5,7 @@ use core::task::Poll;
 use core::task::Poll::*;
 
 use alloc::collections::VecDeque;
-use alloc::rc::Rc;
+use alloc::rc::{Rc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -96,8 +96,25 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
                     }
                 }
             }
+        } else if let Some(thread) = scheme.thread_lookup.get(&event.data) {
+            let Some(thread) = thread.upgrade() else {
+                let _ = syscall::write(
+                    1,
+                    alloc::format!("\nDEAD THREAD EVENT FROM {}\n", event.data).as_bytes(),
+                );
+                continue;
+            };
+            let _ = syscall::write(
+                1,
+                alloc::format!(
+                    "\nTHREAD EVENT FROM {}, {}, \n",
+                    event.data,
+                    thread.borrow().pid.0
+                )
+                .as_bytes(),
+            );
         } else {
-            let _ = syscall::write(1, b"\nTODO: EVENT\n");
+            let _ = syscall::write(1, b"\nTODO: UNKNOWN EVENT\n");
         }
     }
 
@@ -185,6 +202,7 @@ enum ProcessStatus {
 struct Thread {
     fd: FdGuard,
     status_hndl: FdGuard,
+    pid: ProcessId,
     // sig_ctrl: MmapGuard<...>
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -196,6 +214,8 @@ struct ProcScheme<'a> {
     processes: HashMap<ProcessId, Process, DefaultHashBuilder>,
     sessions: HashSet<ProcessId, DefaultHashBuilder>,
     handles: Slab<Handle>,
+
+    thread_lookup: HashMap<usize, Weak<RefCell<Thread>>>,
 
     init_claimed: bool,
     next_id: ProcessId,
@@ -255,6 +275,7 @@ impl<'a> ProcScheme<'a> {
             processes: HashMap::new(),
             sessions: HashSet::new(),
             waitpgid: HashMap::new(),
+            thread_lookup: HashMap::new(),
             handles: Slab::new(),
             init_claimed: false,
             next_id: ProcessId(2),
@@ -282,7 +303,12 @@ impl<'a> ProcScheme<'a> {
                     .expect("TODO");
                 let status_hndl = FdGuard::new(syscall::dup(*fd, b"status").expect("TODO"));
 
-                let thread = Rc::new(RefCell::new(Thread { fd, status_hndl }));
+                let thread = Rc::new(RefCell::new(Thread {
+                    fd,
+                    status_hndl,
+                    pid: INIT_PID,
+                }));
+                let thread_weak = Rc::downgrade(&thread);
                 self.processes.insert(
                     INIT_PID,
                     Process {
@@ -303,6 +329,8 @@ impl<'a> ProcScheme<'a> {
                     },
                 );
                 self.sessions.insert(INIT_PID);
+
+                self.thread_lookup.insert(fd_out, thread_weak);
 
                 *st = Handle::Proc(INIT_PID);
                 Response::for_sendfd(&req, Ok(0))
@@ -345,13 +373,18 @@ impl<'a> ProcScheme<'a> {
             .subscribe(*new_ctxt_fd, *new_ctxt_fd, EventFlags::EVENT_READ)
             .expect("TODO");
 
+        let thread_ident = *new_ctxt_fd;
+        let thread = Rc::new(RefCell::new(Thread {
+            fd: new_ctxt_fd,
+            status_hndl: status_fd,
+            pid: child_pid,
+        }));
+        let thread_weak = Rc::downgrade(&thread);
+
         self.processes.insert(
             child_pid,
             Process {
-                threads: vec![Rc::new(RefCell::new(Thread {
-                    fd: new_ctxt_fd,
-                    status_hndl: status_fd,
-                }))],
+                threads: vec![thread],
                 ppid: parent_pid,
                 pgid,
                 sid,
@@ -367,14 +400,22 @@ impl<'a> ProcScheme<'a> {
                 children_waitpid: Vec::new(),
             },
         );
+        self.thread_lookup.insert(thread_ident, thread_weak);
         Ok(child_pid)
     }
     fn new_thread(&mut self, pid: ProcessId) -> Result<FdGuard> {
         let proc = self.processes.get_mut(&pid).ok_or(Error::new(EBADFD))?;
-        let fd = todo!();
+        let fd: FdGuard = todo!();
         let status_hndl = todo!();
-        proc.threads
-            .push(Rc::new(RefCell::new(Thread { fd, status_hndl })));
+        let ident = *fd;
+        let thread = Rc::new(RefCell::new(Thread {
+            fd,
+            status_hndl,
+            pid,
+        }));
+        let thread_weak = Rc::downgrade(&thread);
+        proc.threads.push(thread);
+        self.thread_lookup.insert(ident, thread_weak);
         Ok(fd)
     }
     fn on_open(&mut self, path: &str, flags: usize) -> Result<OpenResult> {
