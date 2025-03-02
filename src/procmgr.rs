@@ -595,7 +595,7 @@ impl<'a> ProcScheme<'a> {
         let (payload, metadata) = op.payload_and_metadata();
         match self.handles[id] {
             Handle::Init => Response::ready_err(EBADF, op),
-            Handle::Proc(pid) => {
+            Handle::Proc(fd_pid) => {
                 let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
                     return Response::ready_err(EINVAL, op);
                 };
@@ -609,7 +609,7 @@ impl<'a> ProcScheme<'a> {
                 match verb {
                     ProcCall::Setrens => Ready(Response::new(
                         self.on_setrens(
-                            pid,
+                            fd_pid,
                             cvt_u32(metadata[1] as u32),
                             cvt_u32(metadata[2] as u32),
                         )
@@ -617,7 +617,7 @@ impl<'a> ProcScheme<'a> {
                         op,
                     )),
                     ProcCall::Exit => {
-                        self.on_exit_start(pid, metadata[1] as i32, state, awoken, op.into_tag())
+                        self.on_exit_start(fd_pid, metadata[1] as i32, state, awoken, op.into_tag())
                     }
                     ProcCall::Waitpid | ProcCall::Waitpgid => {
                         let req_pid = ProcessId(metadata[1] as usize);
@@ -630,10 +630,12 @@ impl<'a> ProcScheme<'a> {
                         };
                         let flags = match WaitFlags::from_bits(metadata[2] as usize) {
                             Some(fl) => fl,
-                            None => return Response::ready_err(EINVAL, op),
+                            None => {
+                                return Response::ready_err(EINVAL, op);
+                            }
                         };
                         let state = state.insert_entry(PendingState::AwaitingStatusChange {
-                            waiter: req_pid,
+                            waiter: fd_pid,
                             target,
                             flags,
                             op,
