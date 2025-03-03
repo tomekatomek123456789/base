@@ -3,7 +3,6 @@ use std::io::{Cursor, Seek};
 use std::iter;
 use std::os::unix::io::AsRawFd;
 
-use indexmap::IndexMap;
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::error::{
     EACCES, EBADF, EBADFD, EEXIST, EINVAL, EIO, EISDIR, ENOMEM, ENOSYS, ENOTDIR, ENOTEMPTY,
@@ -16,7 +15,10 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{Error, EventFlags, Result, Stat, StatVfs, TimeSpec, ENOENT};
 use syscall::{MODE_DIR, MODE_FILE, MODE_PERM, MODE_TYPE};
 
-use redox_scheme::{CallerCtx, OpenResult, Scheme as SchemeTrait};
+use indexmap::IndexMap;
+
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult};
 
 use crate::filesystem::{self, File, FileData, Filesystem, Inode};
 
@@ -34,13 +36,7 @@ impl Scheme {
     }
     /// Remove a directory entry, where the entry can be both a file or a directory. Used by both
     /// `unlink` and `rmdir`.
-    pub fn remove_dentry(
-        &mut self,
-        path: &str,
-        uid: u32,
-        gid: u32,
-        directory: bool,
-    ) -> Result<usize> {
+    pub fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
         let removed_inode = {
             let (parent_dir_inode, name_to_delete) =
                 self.filesystem.resolve_except_last(path, uid, gid)?;
@@ -107,7 +103,7 @@ impl Scheme {
             self.filesystem.files.remove(&removed_inode);
         }
 
-        Ok(0)
+        Ok(())
     }
 
     fn open_existing(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> Result<Inode> {
@@ -151,8 +147,8 @@ impl Scheme {
     }
 }
 
-impl SchemeTrait for Scheme {
-    fn xopen(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+impl SchemeSync for Scheme {
+    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let exists = self.filesystem.resolve(path, 0, 0).is_ok();
         if flags & O_CREAT != 0 && flags & O_EXCL != 0 && exists {
             return Err(Error::new(EEXIST));
@@ -245,14 +241,17 @@ impl SchemeTrait for Scheme {
             flags: NewFdFlags::POSITIONED,
         })
     }
-    fn rmdir(&mut self, path: &str, uid: u32, gid: u32) -> Result<usize> {
-        self.remove_dentry(path, uid, gid, true)
+    fn rmdir(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
+        self.remove_dentry(path, ctx.uid, ctx.gid, true)
     }
-    fn unlink(&mut self, path: &str, uid: u32, gid: u32) -> Result<usize> {
-        self.remove_dentry(path, uid, gid, false)
+    fn unlink(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
+        self.remove_dentry(path, ctx.uid, ctx.gid, false)
     }
-    fn dup(&mut self, old_inode: usize, _buf: &[u8]) -> Result<usize> {
-        Ok(old_inode)
+    fn dup(&mut self, old_inode: usize, _buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
+        Ok(OpenResult::ThisScheme {
+            number: old_inode,
+            flags: NewFdFlags::POSITIONED,
+        })
     }
     fn read(
         &mut self,
@@ -260,6 +259,7 @@ impl SchemeTrait for Scheme {
         buf: &mut [u8],
         offset: u64,
         fcntl_flags: u32,
+        _ctx: &CallerCtx,
     ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
@@ -317,7 +317,14 @@ impl SchemeTrait for Scheme {
         }
         Ok(buf)
     }
-    fn write(&mut self, inode: usize, buf: &[u8], offset: u64, _fcntl_flags: u32) -> Result<usize> {
+    fn write(
+        &mut self,
+        inode: usize,
+        buf: &[u8],
+        offset: u64,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
         };
@@ -347,7 +354,7 @@ impl SchemeTrait for Scheme {
             Err(Error::new(EISDIR))
         }
     }
-    fn fchmod(&mut self, inode: usize, mode: u16) -> Result<usize> {
+    fn fchmod(&mut self, inode: usize, mode: u16, _ctx: &CallerCtx) -> Result<()> {
         let file = self
             .filesystem
             .files
@@ -364,9 +371,9 @@ impl SchemeTrait for Scheme {
 
         file.mode = mode | cur_type;
 
-        Ok(0)
+        Ok(())
     }
-    fn fchown(&mut self, inode: usize, uid: u32, gid: u32) -> Result<usize> {
+    fn fchown(&mut self, inode: usize, uid: u32, gid: u32, _ctx: &CallerCtx) -> Result<()> {
         let file = self
             .filesystem
             .files
@@ -376,12 +383,23 @@ impl SchemeTrait for Scheme {
         file.uid = uid;
         file.gid = gid;
 
+        Ok(())
+    }
+    fn fcntl(
+        &mut self,
+        _inode: usize,
+        _cmd: usize,
+        _arg: usize,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         Ok(0)
     }
-    fn fcntl(&mut self, _inode: usize, _cmd: usize, _arg: usize) -> Result<usize> {
-        Ok(0)
-    }
-    fn fevent(&mut self, _inode: usize, _flags: EventFlags) -> Result<EventFlags> {
+    fn fevent(
+        &mut self,
+        _inode: usize,
+        _flags: EventFlags,
+        _ctx: &CallerCtx,
+    ) -> Result<EventFlags> {
         // TODO?
         Err(Error::new(ENOSYS))
     }
@@ -391,11 +409,17 @@ impl SchemeTrait for Scheme {
         _offset: u64,
         _size: usize,
         _flags: syscall::MapFlags,
+        _ctx: &CallerCtx,
     ) -> Result<usize> {
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn fpath(&mut self, mut current_inode: usize, buf: &mut [u8]) -> Result<usize> {
+    fn fpath(
+        &mut self,
+        mut current_inode: usize,
+        buf: &mut [u8],
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         let mut chain = Vec::new();
 
         let mut current_info = self
@@ -435,11 +459,11 @@ impl SchemeTrait for Scheme {
         }
         Ok(cursor.stream_position().unwrap() as usize)
     }
-    fn frename(&mut self, _inode: usize, _path: &str, _uid: u32, _gid: u32) -> Result<usize> {
+    fn frename(&mut self, _inode: usize, _path: &str, _ctx: &CallerCtx) -> Result<usize> {
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn fstat(&mut self, inode: usize, stat: &mut Stat) -> Result<usize> {
+    fn fstat(&mut self, inode: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         let block_size = self.filesystem.block_size();
         let file = self
             .filesystem
@@ -495,9 +519,9 @@ impl SchemeTrait for Scheme {
                 .or(Err(Error::new(EOVERFLOW)))?,
         };
 
-        Ok(0)
+        Ok(())
     }
-    fn fstatvfs(&mut self, _inode: usize, stat: &mut StatVfs) -> Result<usize> {
+    fn fstatvfs(&mut self, _inode: usize, stat: &mut StatVfs, _ctx: &CallerCtx) -> Result<()> {
         let abi_stat = libredox::call::fstatvfs(self.filesystem.memory_file.as_raw_fd() as usize)?;
         // TODO: From impl
         *stat = StatVfs {
@@ -507,12 +531,12 @@ impl SchemeTrait for Scheme {
             f_bsize: abi_stat.f_bsize as u32,
         };
 
-        Ok(0)
+        Ok(())
     }
-    fn fsync(&mut self, _inode: usize) -> Result<usize> {
-        Ok(0)
+    fn fsync(&mut self, _inode: usize, _ctx: &CallerCtx) -> Result<()> {
+        Ok(())
     }
-    fn ftruncate(&mut self, inode: usize, size: usize) -> Result<usize> {
+    fn ftruncate(&mut self, inode: usize, size: u64, _ctx: &CallerCtx) -> Result<()> {
         let file = self
             .filesystem
             .files
@@ -522,6 +546,7 @@ impl SchemeTrait for Scheme {
         if file.mode & MODE_TYPE == MODE_DIR {
             return Err(Error::new(EISDIR));
         }
+        let size = usize::try_from(size).map_err(|_| Error::new(EOVERFLOW))?;
         match &mut file.data {
             &mut FileData::File(ref mut bytes) => {
                 if size > bytes.len() {
@@ -534,9 +559,9 @@ impl SchemeTrait for Scheme {
             }
             &mut FileData::Directory(_) => return Err(Error::new(EBADFD)),
         }
-        Ok(0)
+        Ok(())
     }
-    fn futimens(&mut self, inode: usize, times: &[TimeSpec]) -> Result<usize> {
+    fn futimens(&mut self, inode: usize, times: &[TimeSpec], _ctx: &CallerCtx) -> Result<()> {
         let file = self
             .filesystem
             .files
@@ -549,7 +574,7 @@ impl SchemeTrait for Scheme {
         file.atime = new_atime;
         file.mtime = new_mtime;
 
-        Ok(0)
+        Ok(())
     }
 }
 impl Scheme {

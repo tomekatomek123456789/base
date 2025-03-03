@@ -31,7 +31,7 @@ fn main() {
             };
             match request.kind() {
                 RequestKind::Call(call) => {
-                    let response = call.handle_scheme(&mut scheme);
+                    let response = call.handle_sync(&mut scheme);
 
                     socket
                         .write_responses(&[response], SignalBehavior::Restart)
