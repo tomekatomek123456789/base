@@ -2,6 +2,7 @@ use core::cell::RefCell;
 use core::cmp::Ordering;
 use core::hash::BuildHasherDefault;
 use core::mem::size_of;
+use core::num::NonZeroU8;
 use core::task::Poll;
 use core::task::Poll::*;
 
@@ -301,8 +302,14 @@ impl Eq for WaitpidKey {}
 enum ProcessStatus {
     PossiblyRunnable,
     Stopped(usize),
-    Exiting { signal: Option<u8>, status: u8 },
-    Exited { signal: Option<u8>, status: u8 },
+    Exiting {
+        signal: Option<NonZeroU8>,
+        status: u8,
+    },
+    Exited {
+        signal: Option<NonZeroU8>,
+        status: u8,
+    },
 }
 #[derive(Debug)]
 struct Thread {
@@ -332,8 +339,13 @@ struct ProcScheme<'a> {
 #[derive(Clone, Copy, Debug)]
 enum WaitpidStatus {
     Continued,
-    Stopped { signal: u8 },
-    Terminated { signal: Option<u8>, status: u8 },
+    Stopped {
+        signal: NonZeroU8,
+    },
+    Terminated {
+        signal: Option<NonZeroU8>,
+        status: u8,
+    },
 }
 
 #[derive(Debug)]
@@ -732,24 +744,25 @@ impl<'a> ProcScheme<'a> {
             }
         };
         let grim_reaper = |w_pid: ProcessId, status: WaitpidStatus| {
-            let ret: i32 = todo!();
             match status {
                 WaitpidStatus::Continued => {
                     // TODO: Handle None, i.e. restart everything until a match is found
                     if flags.contains(WaitFlags::WCONTINUED) {
-                        Ready((w_pid.0, ret))
+                        Ready((w_pid.0, 0xffff))
                     } else {
                         Pending
                     }
                 }
                 WaitpidStatus::Stopped { signal } => {
                     if flags.contains(WaitFlags::WUNTRACED) {
-                        Ready((w_pid.0, ret))
+                        Ready((w_pid.0, 0x7f | (i32::from(signal.get()) << 8)))
                     } else {
                         Pending
                     }
                 }
-                WaitpidStatus::Terminated { signal, status } => Ready((w_pid.0, ret)),
+                WaitpidStatus::Terminated { signal, status } => {
+                    Ready((w_pid.0, signal.map_or(0, NonZeroU8::get).into()))
+                }
             }
         };
 
