@@ -32,6 +32,7 @@ version = "0.0.0"
 dependencies = [
  "hashbrown",
  "linked_list_allocator",
+ "log",
  "plain",
  "redox-initfs",
  "redox-path",

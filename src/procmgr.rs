@@ -44,7 +44,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
 
     let mut scheme = ProcScheme::new(auth, &queue);
 
-    let _ = syscall::write(1, b"process manager started\n").unwrap();
+    log::info!("process manager started");
     let _ = syscall::write(write_fd, &[0]);
     let _ = syscall::close(write_fd);
 
@@ -53,15 +53,14 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
     let mut new_awoken = VecDeque::new();
 
     'outer: loop {
-        let _ = syscall::write(1, alloc::format!("\n{awoken:#?}\n").as_bytes());
+        log::trace!("{awoken:#?}");
         while !awoken.is_empty() || !new_awoken.is_empty() {
             awoken.append(&mut new_awoken);
             for awoken in awoken.drain(..) {
-                //let _ = syscall::write(1, alloc::format!("\nALL STATES {states:#?}, AWOKEN {awoken:#?}\n").as_bytes());
+                //log::trace!("ALL STATES {states:#?}, AWOKEN {awoken:#?}");
                 let Entry::Occupied(state) = states.entry(awoken) else {
                     continue;
                 };
-                //let _ = syscall::write(1, alloc::format!("\nSTATE {state:#?}\n").as_bytes());
                 match scheme.work_on(state, &mut new_awoken) {
                     Ready(resp) => {
                         loop {
@@ -111,10 +110,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             }
         } else if let Some(thread) = scheme.thread_lookup.get(&event.data) {
             let Some(thread_rc) = thread.upgrade() else {
-                let _ = syscall::write(
-                    1,
-                    alloc::format!("\nDEAD THREAD EVENT FROM {}\n", event.data).as_bytes(),
-                );
+                log::trace!("DEAD THREAD EVENT FROM {}", event.data,);
                 continue;
             };
             let thread = thread_rc.borrow();
@@ -122,16 +118,12 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
                 // TODO?
                 continue;
             };
-            let _ = syscall::write(
-                1,
-                alloc::format!("\nTHREAD EVENT FROM {}, {}, \n", event.data, thread.pid.0)
-                    .as_bytes(),
-            );
+            log::trace!("THREAD EVENT FROM {}, {}", event.data, thread.pid.0);
             let mut buf = 0_usize.to_ne_bytes();
             let _ = syscall::read(*thread.status_hndl, &mut buf).unwrap();
             let status = usize::from_ne_bytes(buf);
 
-            let _ = syscall::write(1, alloc::format!("\nSTATUS {status}\n",).as_bytes());
+            log::trace!("STATUS {status}");
 
             if status != ContextStatus::Dead as usize {
                 // spurious event
@@ -139,13 +131,10 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             }
             scheme.thread_lookup.remove(&event.data);
             proc.threads.retain(|rc| !Rc::ptr_eq(rc, &thread_rc));
-            let _ = syscall::write(
-                1,
-                alloc::format!("\nAWAITING {}\n", proc.awaiting_threads_term.len()).as_bytes(),
-            );
+            log::trace!("AWAITING {}", proc.awaiting_threads_term.len(),);
             awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
         } else {
-            let _ = syscall::write(1, b"\nTODO: UNKNOWN EVENT\n");
+            log::debug!("TODO: UNKNOWN EVENT");
         }
     }
 
@@ -186,7 +175,7 @@ fn handle_scheme<'a>(
                     awoken,
                 ),
                 _ => {
-                    let _ = syscall::write(1, alloc::format!("\nUNKNOWN: {op:?}\n").as_bytes());
+                    log::trace!("UNKNOWN: {op:?}");
                     Ready(Response::new(Err(Error::new(ENOSYS)), op))
                 }
             }
@@ -583,6 +572,7 @@ impl<'a> ProcScheme<'a> {
         match self.handles[old_id] {
             Handle::Proc(pid) => match buf {
                 b"fork" => {
+                    log::trace!("Forking {pid:?}");
                     let child_pid = self.fork(pid)?;
                     Ok(OpenResult::ThisScheme {
                         number: self.handles.insert(Handle::Proc(child_pid)),
@@ -702,7 +692,7 @@ impl<'a> ProcScheme<'a> {
                 }
             }
 
-            let _ = syscall::write(1, b"\nEXIT PENDING\n");
+            log::trace!("EXIT PENDING");
             //self.debug();
             // TODO: check?
             process.awaiting_threads_term.push(*state.key());
@@ -731,7 +721,7 @@ impl<'a> ProcScheme<'a> {
         }
 
         let proc = self.processes.get_mut(&this_pid).ok_or(Error::new(ESRCH))?;
-        let _ = syscall::write(1, b"\nWAITPID\n");
+        log::trace!("WAITPID");
 
         let recv_nonblock = |waitpid: &mut BTreeMap<WaitpidKey, (ProcessId, WaitpidStatus)>,
                              key: &WaitpidKey|
@@ -940,7 +930,7 @@ impl<'a> ProcScheme<'a> {
                     return Response::ready_err(ESRCH, tag);
                 };
                 if proc.threads.is_empty() {
-                    let _ = syscall::write(1, b"\nWORKING ON AWAIT TERM\n");
+                    log::trace!("WORKING ON AWAIT TERM");
                     let (signal, status) = match proc.status {
                         ProcessStatus::Exiting { signal, status } => (signal, status),
                         ProcessStatus::Exited { .. } => return Response::ready_ok(0, tag),
@@ -960,13 +950,13 @@ impl<'a> ProcScheme<'a> {
                             },
                             (current_pid, WaitpidStatus::Terminated { signal, status }),
                         );
-                        //let _ = syscall::write(1, alloc::format!("\nAWAKING WAITPID {:?}\n", parent.waitpid_waiting).as_bytes());
+                        //log::trace!("AWAKING WAITPID {:?}", parent.waitpid_waiting);
                         // TODO: inefficient
                         awoken.extend(parent.waitpid_waiting.drain(..));
                     }
                     Ready(Response::new(Ok(0), tag))
                 } else {
-                    let _ = syscall::write(1, b"\nWAITING AGAIN\n");
+                    log::trace!("WAITING AGAIN");
                     proc.awaiting_threads_term.push(req_id);
                     *state = PendingState::AwaitingThreadsTermination(current_pid, tag);
                     Pending
@@ -978,7 +968,7 @@ impl<'a> ProcScheme<'a> {
                 flags,
                 mut op,
             } => {
-                let _ = syscall::write(1, b"\nWORKING ON AWAIT STS CHANGE\n");
+                log::trace!("WORKING ON AWAIT STS CHANGE");
 
                 match self.on_waitpid(waiter, target, flags, req_id) {
                     Ready(Ok((pid, status))) => {
@@ -1002,13 +992,7 @@ impl<'a> ProcScheme<'a> {
         }
     }
     fn debug(&self) {
-        let _ = syscall::write(
-            1,
-            alloc::format!("PROCESSES\n\n{:#?}\n\n", self.processes).as_bytes(),
-        );
-        let _ = syscall::write(
-            1,
-            alloc::format!("HANDLES\n\n{:#?}\n\n", self.handles).as_bytes(),
-        );
+        log::trace!("PROCESSES\n{:#?}", self.processes,);
+        log::trace!("HANDLES\n{:#?}", self.handles,);
     }
 }

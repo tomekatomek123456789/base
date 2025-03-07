@@ -15,6 +15,7 @@ hashbrown = { version = "0.15", default-features = false, features = [
     "default-hasher",
 ] }
 linked_list_allocator = "0.10"
+log = { version = "0.4", default-features = false }
 plain = "0.2"
 redox-initfs = { git = "https://gitlab.redox-os.org/redox-os/redox-initfs.git", default-features = false }
 redox_syscall = { version = "0.5.4", default-features = false }

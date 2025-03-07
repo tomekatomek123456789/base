@@ -6,6 +6,21 @@ use syscall::{Error, EINTR};
 
 use redox_rt::proc::*;
 
+struct Logger;
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::max_level()
+    }
+    fn log(&self, record: &log::Record) {
+        let module = record.module_path().unwrap_or("");
+        let level = record.level();
+        let msg = record.args();
+        let _ = syscall::write(1, alloc::format!("[{module} {level}] {msg}\n").as_bytes());
+    }
+    fn flush(&self) {}
+}
+
 pub fn main() -> ! {
     let auth = FdGuard::new(
         syscall::open("/scheme/kernel.proc/authority", O_CLOEXEC)
@@ -14,6 +29,9 @@ pub fn main() -> ! {
     let this_thr_fd =
         FdGuard::new(syscall::dup(*auth, b"cur-context").expect("failed to open open_via_dup"));
     let this_thr_fd = unsafe { redox_rt::initialize_freestanding(this_thr_fd) };
+
+    log::set_max_level(log::LevelFilter::Trace);
+    let _ = log::set_logger(&Logger);
 
     let envs = {
         let mut env = [0_u8; 4096];
