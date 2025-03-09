@@ -7,11 +7,7 @@ extern crate redox_netstack;
 extern crate smoltcp;
 extern crate syscall;
 
-use std::cell::RefCell;
-use std::fs::File;
-use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
-use std::rc::Rc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use event::{EventFlags, EventQueue};

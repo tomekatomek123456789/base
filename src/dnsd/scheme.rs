@@ -318,7 +318,7 @@ impl<'q> Dnsd<'q> {
     const REQUEST_TIMEOUT_S: i64 = 30;
     const TIME_EVENT_TIMEOUT_S: i64 = 5;
 
-    pub fn new(dns_file: File, time_file: File, queue: &'q EventQueue<EventSource>) -> Dnsd {
+    pub fn new(dns_file: File, time_file: File, queue: &'q EventQueue<EventSource>) -> Self {
         Dnsd {
             dns_file,
             time_file,

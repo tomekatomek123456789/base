@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::{Context, Error, Result};
+use anyhow::{Context, Result};
 use event::EventQueue;
 use ioslice::IoSlice;
 use libredox::Fd;
