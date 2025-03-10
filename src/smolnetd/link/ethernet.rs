@@ -137,7 +137,11 @@ impl EthernetLink {
                     return;
                 }
 
-                if !source_hardware_addr.is_unicast() || !source_protocol_addr.is_unicast() {
+                if !source_hardware_addr.is_unicast()
+                    || source_protocol_addr.is_broadcast()
+                    || source_protocol_addr.is_multicast()
+                    || source_protocol_addr.is_unspecified()
+                {
                     return;
                 }
 

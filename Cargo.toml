@@ -32,13 +32,13 @@ default-features = false
 features = ["release_max_level_warn"]
 
 [dependencies.smoltcp]
-version = "0.10.0"
+version = "0.12.0"
 default-features = false
 features = [
     "std",
     "medium-ethernet", "medium-ip",
     "proto-ipv4",
-    "socket-raw", "socket-icmp", "socket-udp", "socket-tcp",
+    "socket-raw", "socket-icmp", "socket-udp", "socket-tcp", "socket-tcp-cubic",
     "iface-max-addr-count-8",
     "log"
 ]

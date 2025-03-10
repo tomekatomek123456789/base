@@ -82,7 +82,7 @@ fn mk_root_node(
                     if cur_value.is_none() {
                         let ip = Ipv4Address::from_str(line.trim())
                             .map_err(|_| SyscallError::new(syscall::EINVAL))?;
-                        if !ip.is_unicast() {
+                        if ip.is_broadcast() || ip.is_multicast() || ip.is_unspecified() {
                             return Err(SyscallError::new(syscall::EINVAL));
                         }
                         *cur_value = Some(ip);
