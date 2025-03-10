@@ -43,9 +43,3 @@ features = [
     "log"
 ]
 #For debugging: "log", "verbose"
-
-[profile.release]
-lto = true
-
-[patch.crates-io]
-net2 = { git = "https://gitlab.redox-os.org/redox-os/net2-rs.git", branch = "master" }
