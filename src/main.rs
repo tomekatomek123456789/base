@@ -51,7 +51,7 @@ fn daemon(daemon: Daemon) -> Result<()> {
 
     let pid = libredox::call::getpid()?;
 
-    let hw_file = Fd::open("audiohw:", flag::O_WRONLY | flag::O_CLOEXEC, 0)?;
+    let hw_file = Fd::open("/scheme/audiohw", flag::O_WRONLY | flag::O_CLOEXEC, 0)?;
 
     let socket = Socket::create("audio")?;
 
