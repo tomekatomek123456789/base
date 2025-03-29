@@ -2,7 +2,7 @@ use core::cell::RefCell;
 use core::cmp::Ordering;
 use core::hash::BuildHasherDefault;
 use core::mem::size_of;
-use core::num::NonZeroU8;
+use core::num::{NonZeroU8, NonZeroUsize};
 use core::task::Poll;
 use core::task::Poll::*;
 
@@ -682,9 +682,82 @@ impl<'a> ProcScheme<'a> {
                         });
                         self.work_on(state, awoken)
                     }
+                    ProcCall::SetResugid => {
+                        log::error!("SETRESGUID STUB");
+                        Ready(Response::ok(0, op))
+                    }
+                    ProcCall::Setpgid => {
+                        let target_pid = NonZeroUsize::new(metadata[1] as usize)
+                            .map_or(fd_pid, |n| ProcessId(n.get()));
+
+                        let new_pgid = NonZeroUsize::new(metadata[2] as usize)
+                            .map_or(target_pid, |n| ProcessId(n.get()));
+                        if new_pgid.0 == usize::wrapping_neg(1) {
+                            Ready(Response::new(
+                                self.on_getpgid(fd_pid, target_pid).map(|ProcessId(p)| p),
+                                op,
+                            ))
+                        } else {
+                            Ready(Response::new(
+                                self.on_setpgid(fd_pid, target_pid, new_pgid).map(|()| 0),
+                                op,
+                            ))
+                        }
+                    }
+                    ProcCall::Getsid => {
+                        log::error!("GETSID STUB");
+                        Ready(Response::ok(0, op))
+                    }
+                    ProcCall::Setsid => {
+                        log::error!("SETSID STUB");
+                        Ready(Response::ok(0, op))
+                    }
+                    ProcCall::SetResugid => Ready(Response::new(
+                        self.on_setresugid(fd_pid, payload).map(|()| 0),
+                        op,
+                    )),
                 }
             }
         }
+    }
+    pub fn on_getpgid(
+        &mut self,
+        caller_pid: ProcessId,
+        target_pid: ProcessId,
+    ) -> Result<ProcessId> {
+        let caller_proc = self.processes.get(&caller_pid).ok_or(Error::new(ESRCH))?;
+        let target_proc = self.processes.get(&target_pid).ok_or(Error::new(ESRCH))?;
+
+        // Although not required, POSIX allows the impl to forbid getting the pgid of processes
+        // outside of the caller's session.
+        if caller_proc.sid != target_proc.sid && caller_proc.euid != 0 {
+            return Err(Error::new(EPERM));
+        }
+
+        Ok(target_proc.pgid)
+    }
+    pub fn on_setpgid(
+        &mut self,
+        caller_pid: ProcessId,
+        target_pid: ProcessId,
+        new_pgid: ProcessId,
+    ) -> Result<()> {
+        let caller_proc = self.processes.get(&caller_pid).ok_or(Error::new(ESRCH))?;
+
+        let proc = self
+            .processes
+            .get_mut(&target_pid)
+            .ok_or(Error::new(ESRCH))?;
+
+        // Session leaders cannot have their pgid changed.
+        if proc.sid == target_pid {
+            return Err(Error::new(EPERM));
+        }
+
+        // TODO: other security checks
+
+        proc.pgid = new_pgid;
+        Ok(())
     }
     pub fn on_exit_start(
         &mut self,
@@ -852,6 +925,19 @@ impl<'a> ProcScheme<'a> {
                 }
             }
         }
+    }
+    pub fn on_setresugid(&mut self, pid: ProcessId, raw_buf: &[u8]) -> Result<()> {
+        log::info!("ON_SETRESUGID {pid:?} {raw_buf:?}");
+        let ids = {
+            let raw_ids: [u32; 6] = plain::slice_from_bytes::<u32>(raw_buf)
+                .unwrap()
+                .try_into()
+                .map_err(|_| Error::new(EINVAL))?;
+            raw_ids.map(|i| if i == u32::MAX { None } else { Some(i) })
+        };
+        let proc = self.processes.get_mut(&pid).ok_or(Error::new(ESRCH))?;
+        log::warn!("TODO: on_setresugid({pid:?}): {ids:?}");
+        Ok(())
     }
     fn ancestors(&self, pid: ProcessId) -> impl Iterator<Item = ProcessId> + '_ {
         struct Iter<'a> {
