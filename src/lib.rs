@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(internal_features)]
-#![feature(asm_const, core_intrinsics, str_from_raw_parts, iter_intersperse)]
+#![feature(core_intrinsics, let_chains, iter_intersperse, str_from_raw_parts)]
 
 #[cfg(target_arch = "aarch64")]
 #[path = "aarch64.rs"]

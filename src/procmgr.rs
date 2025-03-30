@@ -1,8 +1,10 @@
 use core::cell::RefCell;
-use core::cmp::Ordering;
+use core::cmp;
 use core::hash::BuildHasherDefault;
 use core::mem::size_of;
 use core::num::{NonZeroU8, NonZeroUsize};
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering;
 use core::task::Poll;
 use core::task::Poll::*;
 
@@ -16,7 +18,7 @@ use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 
 use redox_rt::proc::FdGuard;
-use redox_rt::protocol::{ProcCall, ProcMeta, WaitFlags};
+use redox_rt::protocol::{ProcCall, ProcKillTarget, ProcMeta, WaitFlags};
 use redox_scheme::scheme::{IntoTag, Op, OpCall};
 use redox_scheme::{
     CallerCtx, Id, OpenResult, Request, RequestKind, Response, SendFdRequest, SignalBehavior,
@@ -25,9 +27,10 @@ use redox_scheme::{
 use slab::Slab;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    ContextStatus, Error, Event, EventFlags, FobtainFdFlags, ProcSchemeAttrs, Result, EAGAIN,
-    EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM, ESRCH,
-    EWOULDBLOCK, O_CLOEXEC, O_CREAT,
+    sig_bit, ContextStatus, Error, Event, EventFlags, FobtainFdFlags, MapFlags, ProcSchemeAttrs,
+    Result, RtSigInfo, SigProcControl, Sigcontrol, EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR,
+    EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM, ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT,
+    PAGE_SIZE, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
 };
 
 pub fn run(write_fd: usize, auth: &FdGuard) {
@@ -212,6 +215,39 @@ impl IntoTag for PendingState {
 }
 
 #[derive(Debug)]
+pub struct Page<T> {
+    ptr: NonNull<T>,
+}
+impl<T> Page<T> {
+    pub fn map(fd: &FdGuard) -> Result<Self> {
+        Ok(Self {
+            ptr: NonNull::new(unsafe {
+                syscall::fmap(
+                    **fd,
+                    &syscall::Map {
+                        offset: 0,
+                        size: PAGE_SIZE,
+                        flags: MapFlags::PROT_READ,
+                        address: 0,
+                    },
+                )? as *mut T
+            })
+            .unwrap(),
+        })
+    }
+    pub fn get(&self) -> &T {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+impl<T> Drop for Page<T> {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = syscall::funmap(self.ptr.as_ptr() as usize, PAGE_SIZE);
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Process {
     threads: Vec<Rc<RefCell<Thread>>>,
     ppid: ProcessId,
@@ -231,6 +267,8 @@ struct Process {
 
     waitpid: BTreeMap<WaitpidKey, (ProcessId, WaitpidStatus)>,
     waitpid_waiting: VecDeque<Id>,
+
+    pctl: Option<Page<SigProcControl>>,
 }
 #[derive(Copy, Clone, Debug)]
 pub struct WaitpidKey {
@@ -240,7 +278,7 @@ pub struct WaitpidKey {
 
 // TODO: Is this valid? (transitive?)
 impl Ord for WaitpidKey {
-    fn cmp(&self, other: &WaitpidKey) -> Ordering {
+    fn cmp(&self, other: &WaitpidKey) -> cmp::Ordering {
         // If both have pid set, compare that
         if let Some(s_pid) = self.pid {
             if let Some(o_pid) = other.pid {
@@ -257,36 +295,36 @@ impl Ord for WaitpidKey {
 
         // If either has pid set, it is greater
         if self.pid.is_some() {
-            return Ordering::Greater;
+            return cmp::Ordering::Greater;
         }
 
         if other.pid.is_some() {
-            return Ordering::Less;
+            return cmp::Ordering::Less;
         }
 
         // If either has pgid set, it is greater
         if self.pgid.is_some() {
-            return Ordering::Greater;
+            return cmp::Ordering::Greater;
         }
 
         if other.pgid.is_some() {
-            return Ordering::Less;
+            return cmp::Ordering::Less;
         }
 
         // If all pid and pgid are None, they are equal
-        Ordering::Equal
+        cmp::Ordering::Equal
     }
 }
 
 impl PartialOrd for WaitpidKey {
-    fn partial_cmp(&self, other: &WaitpidKey) -> Option<Ordering> {
+    fn partial_cmp(&self, other: &WaitpidKey) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl PartialEq for WaitpidKey {
     fn eq(&self, other: &WaitpidKey) -> bool {
-        self.cmp(other) == Ordering::Equal
+        self.cmp(other) == cmp::Ordering::Equal
     }
 }
 
@@ -309,7 +347,7 @@ struct Thread {
     fd: FdGuard,
     status_hndl: FdGuard,
     pid: ProcessId,
-    // sig_ctrl: MmapGuard<...>
+    sig_ctrl: Option<Page<Sigcontrol>>,
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct ProcessId(usize);
@@ -423,6 +461,7 @@ impl<'a> ProcScheme<'a> {
                     fd,
                     status_hndl,
                     pid: INIT_PID,
+                    sig_ctrl: None,
                 }));
                 let thread_weak = Rc::downgrade(&thread);
                 self.processes.insert(
@@ -443,6 +482,8 @@ impl<'a> ProcScheme<'a> {
                         awaiting_threads_term: Vec::new(),
                         waitpid: BTreeMap::new(),
                         waitpid_waiting: VecDeque::new(),
+
+                        pctl: None,
                     },
                 );
                 self.sessions.insert(INIT_PID);
@@ -495,6 +536,7 @@ impl<'a> ProcScheme<'a> {
             fd: new_ctxt_fd,
             status_hndl: status_fd,
             pid: child_pid,
+            sig_ctrl: None, // TODO
         }));
         let thread_weak = Rc::downgrade(&thread);
 
@@ -517,6 +559,8 @@ impl<'a> ProcScheme<'a> {
 
                 waitpid: BTreeMap::new(),
                 waitpid_waiting: VecDeque::new(),
+
+                pctl: None, // TODO
             },
         );
         self.thread_lookup.insert(thread_ident, thread_weak);
@@ -552,6 +596,7 @@ impl<'a> ProcScheme<'a> {
             fd: FdGuard::new(syscall::dup(*ctxt_fd, &[])?),
             status_hndl,
             pid,
+            sig_ctrl: None,
         }));
         let thread_weak = Rc::downgrade(&thread);
         proc.threads.push(thread);
@@ -716,13 +761,33 @@ impl<'a> ProcScheme<'a> {
                         self.on_setresugid(fd_pid, payload).map(|()| 0),
                         op,
                     )),
-                    ProcCall::Kill => {
-                        log::error!("KILL STUB");
-                        Ready(Response::ok(0, op))
-                    }
-                    ProcCall::Sigq => {
-                        log::error!("SIGQ STUB");
-                        Ready(Response::ok(0, op))
+                    ProcCall::Kill | ProcCall::Sigq => {
+                        let (payload, metadata) = op.payload_and_metadata();
+                        let target = ProcKillTarget::from_raw(metadata[1] as usize);
+                        let Some(signal) = u8::try_from(metadata[2]).ok().filter(|s| *s <= 64)
+                        else {
+                            return Response::ready_err(EINVAL, op);
+                        };
+                        let mut killed_self = false;
+
+                        let mode = match verb {
+                            ProcCall::Kill => KillMode::Idempotent,
+                            ProcCall::Sigq => KillMode::Queued({
+                                let mut buf = RtSigInfo::default();
+                                if payload.len() != buf.len() {
+                                    return Response::ready_err(EINVAL, op);
+                                }
+                                buf.copy_from_slice(payload);
+                                buf
+                            }),
+                            _ => unreachable!(),
+                        };
+
+                        let is_sigchld_to_parent = false;
+                        Ready(Response::new(
+                            self.on_kill(fd_pid, target, signal, mode).map(|()| 0),
+                            op,
+                        ))
                     }
                 }
             }
@@ -1115,4 +1180,296 @@ impl<'a> ProcScheme<'a> {
         log::trace!("PROCESSES\n{:#?}", self.processes,);
         log::trace!("HANDLES\n{:#?}", self.handles,);
     }
+    pub fn on_kill(
+        &mut self,
+        caller_pid: ProcessId,
+        target: ProcKillTarget,
+        signal: u8,
+        mode: KillMode,
+    ) -> Result<()> {
+        let mut num_succeeded = 0;
+
+        match target {
+            ProcKillTarget::SingleProc(proc) => (),
+            ProcKillTarget::ProcGroup(grp) => {
+                for (pid, proc) in self.processes.iter().filter(|(_, p)| p.pgid == grp) {
+                    self.on_send_sig(caller_pid);
+                }
+            }
+            ProcKillTarget::All => {
+                for (pid, proc) in self.processes.iter() {
+                    self.on_send_sig(caller_pid);
+                }
+            }
+        }
+
+        Ok(())
+    }
+    pub fn on_send_sig(
+        &mut self,
+        caller_pid: ProcessId,
+        target: KillTarget,
+        signal: u8,
+        killed_self: &mut bool,
+        mode: KillMode,
+        is_sigchld_to_parent: bool,
+    ) -> Result<()> {
+        debug_assert!(sig <= 64);
+
+        let sig = usize::from(signal);
+        let sig_group = (sig - 1) / 32;
+        let sig_idx = sig - 1;
+
+        /*let (context_lock, process_lock) = match target {
+            KillTarget::Thread(ref c) => (Arc::clone(&c), Arc::clone(&c.read().process)),
+            KillTarget::Process(ref p) => (
+                p.read()
+                    .threads
+                    .iter()
+                    .filter_map(|t| t.upgrade())
+                    .next()
+                    .ok_or(Error::new(ESRCH))?,
+                Arc::clone(p),
+            ),
+        };*/
+        let proc_info = process_lock.read().info;
+
+        enum SendResult {
+            Succeeded,
+            SucceededSigchld { orig_signal: usize },
+            SucceededSigcont { ppid: ProcessId, pgid: ProcessId },
+            FullQ,
+            Invalid,
+        }
+
+        let result = (|| {
+            let is_self = context::is_current(&context_lock);
+
+            // If sig = 0, test that process exists and can be signalled, but don't send any
+            // signal.
+            if sig == 0 {
+                return SendResult::Succeeded;
+            }
+
+            let mut process_guard = process_lock.write();
+
+            if sig == SIGCONT
+                && let ProcessStatus::Stopped(_sig) = process_guard.status
+            {
+                // Convert stopped processes to blocked if sending SIGCONT, regardless of whether
+                // SIGCONT is blocked or ignored. It can however be controlled whether the process
+                // will additionally ignore, defer, or handle that signal.
+                process_guard.status = ProcessStatus::PossiblyRunnable;
+                drop(process_guard);
+
+                let mut context_guard = context_lock.write();
+                if let Some((_, pctl, _)) = context_guard.sigcontrol() {
+                    if !pctl.signal_will_ign(SIGCONT, false) {
+                        pctl.pending.fetch_or(sig_bit(SIGCONT), Ordering::Relaxed);
+                    }
+                    drop(context_guard);
+
+                    // TODO: which threads should become Runnable?
+                    for thread in process_lock
+                        .read()
+                        .threads
+                        .iter()
+                        .filter_map(|t| t.upgrade())
+                    {
+                        let mut thread = thread.write();
+                        if let Some((tctl, _, _)) = thread.sigcontrol() {
+                            tctl.word[0].fetch_and(
+                                !(sig_bit(SIGSTOP)
+                                    | sig_bit(SIGTTIN)
+                                    | sig_bit(SIGTTOU)
+                                    | sig_bit(SIGTSTP)),
+                                Ordering::Relaxed,
+                            );
+                        }
+                        thread.unblock();
+                    }
+                }
+                // POSIX XSI allows but does not reqiure SIGCHLD to be sent when SIGCONT occurs.
+                return SendResult::SucceededSigcont {};
+            }
+            drop(process_guard);
+            let mut context_guard = context_lock.write();
+            if sig == SIGSTOP
+                || (matches!(sig, SIGTTIN | SIGTTOU | SIGTSTP)
+                    && context_guard
+                        .sigcontrol()
+                        .map_or(false, |(_, proc, _)| proc.signal_will_stop(sig)))
+            {
+                todo!("tell kernel to stop process");
+                /*
+                context_guard.status = context::Status::Blocked;
+                drop(context_guard);
+                process_lock.write().status = ProcessStatus::Stopped(sig);
+                */
+
+                // TODO: Actually wait for, or IPI the context first, then clear bit. Not atomically safe otherwise.
+                let mut already = false;
+                for thread in process_lock
+                    .read()
+                    .threads
+                    .iter()
+                    .filter_map(|t| t.upgrade())
+                {
+                    let mut thread = thread.write();
+                    if let Some((tctl, pctl, _)) = thread.sigcontrol() {
+                        if !already {
+                            pctl.pending.fetch_and(!sig_bit(SIGCONT), Ordering::Relaxed);
+                            already = true;
+                        }
+                        tctl.word[0].fetch_and(!sig_bit(SIGCONT), Ordering::Relaxed);
+                    }
+                }
+
+                return SendResult::SucceededSigchld { orig_signal: sig };
+            }
+            if sig == SIGKILL {
+                todo!("tell kernel to kill context");
+                /*
+                context_guard.being_sigkilled = true;
+                context_guard.unblock();
+                drop(context_guard);
+                */
+                *killed_self |= is_self;
+
+                // exit() will signal the parent, rather than immediately in kill()
+                return SendResult::Succeeded;
+            }
+            if let Some((tctl, pctl, sigst)) = context_guard.sigcontrol()
+                && !pctl.signal_will_ign(sig, is_sigchld_to_parent)
+            {
+                match target {
+                    KillTarget::Thread => {
+                        tctl.sender_infos[sig_idx].store(sender.raw(), Ordering::Relaxed);
+
+                        let _was_new =
+                            tctl.word[sig_group].fetch_or(sig_bit(sig), Ordering::Release);
+                        if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig) != 0
+                        {
+                            context_guard.unblock();
+                            *killed_self |= is_self;
+                        }
+                    }
+                    KillTarget::Proc(proc) => {
+                        match mode {
+                            KillMode::Queued(arg) => {
+                                if sig_group != 1 || sig_idx < 32 || sig_idx >= 64 {
+                                    return SendResult::Invalid;
+                                }
+                                let rtidx = sig_idx - 32;
+                                //log::info!("QUEUEING {arg:?} RTIDX {rtidx}");
+                                if rtidx >= sigst.rtqs.len() {
+                                    sigst.rtqs.resize_with(rtidx + 1, VecDeque::new);
+                                }
+                                let rtq = sigst.rtqs.get_mut(rtidx).unwrap();
+
+                                // TODO: configurable limit?
+                                if rtq.len() > 32 {
+                                    return SendResult::FullQ;
+                                }
+
+                                rtq.push_back(arg);
+                            }
+                            KillMode::Idempotent => {
+                                if pctl.pending.load(Ordering::Acquire) & sig_bit(sig) != 0 {
+                                    // If already pending, do not send this signal. While possible that
+                                    // another thread is concurrently clearing pending, and that other
+                                    // spuriously awoken threads would benefit from actually receiving
+                                    // this signal, there is no requirement by POSIX for such signals
+                                    // not to be mergeable. So unless the signal handler is observed to
+                                    // happen-before this syscall, it can be ignored. The pending bits
+                                    // would certainly have been cleared, thus contradicting this
+                                    // already reached statement.
+                                    return SendResult::Succeeded;
+                                }
+
+                                if sig_group != 0 {
+                                    return SendResult::Invalid;
+                                }
+                                pctl.sender_infos[sig_idx].store(sender.raw(), Ordering::Relaxed);
+                            }
+                        }
+
+                        pctl.pending.fetch_or(sig_bit(sig), Ordering::Release);
+                        drop(context_guard);
+
+                        for thread in proc.read().threads.iter().filter_map(|t| t.upgrade()) {
+                            let mut thread = thread.write();
+                            let Some((tctl, _, _)) = thread.sigcontrol() else {
+                                continue;
+                            };
+                            if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig)
+                                != 0
+                            {
+                                thread.unblock();
+                                *killed_self |= is_self;
+                                break;
+                            }
+                        }
+                    }
+                }
+                SendResult::Succeeded
+            } else {
+                // Discard signals if sighandler is unset. This includes both special contexts such
+                // as bootstrap, and child processes or threads that have not yet been started.
+                // This is semantically equivalent to having all signals except SIGSTOP and SIGKILL
+                // blocked/ignored (SIGCONT can be ignored and masked, but will always continue
+                // stopped processes first).
+                SendResult::Succeeded
+            }
+        })();
+
+        match result {
+            SendResult::Succeeded => (),
+            SendResult::FullQ => return Err(Error::new(EAGAIN)),
+            SendResult::Invalid => return Err(Error::new(EINVAL)),
+            SendResult::SucceededSigchld {
+                ppid,
+                pgid,
+                orig_signal,
+            } => {}
+            SendResult::SucceededSigcont { ppid, pgid } => {
+                // POSIX XSI allows but does not require SIGCONT to send signals to the parent.
+                //send_signal(KillTarget::Process(parent), SIGCHLD, true, killed_self)?;
+            }
+        }
+
+        Ok(())
+    }
 }
+#[derive(Clone, Copy)]
+pub enum KillMode {
+    Idempotent,
+    Queued(RtSigInfo),
+}
+pub enum KillTarget {
+    Proc(ProcessId),
+    Thread(Rc<RefCell<Thread>>),
+}
+/*
+pub fn sigdequeue(out: &mut [u8], sig_idx: u32) -> Result<()> {
+    let Some((_tctl, pctl, st)) = current.sigcontrol() else {
+        return Err(Error::new(ESRCH));
+    };
+    if sig_idx >= 32 {
+        return Err(Error::new(EINVAL));
+    }
+    let q = st
+        .rtqs
+        .get_mut(sig_idx as usize)
+        .ok_or(Error::new(EAGAIN))?;
+    let Some(front) = q.pop_front() else {
+        return Err(Error::new(EAGAIN));
+    };
+    if q.is_empty() {
+        pctl.pending
+            .fetch_and(!(1 << (32 + sig_idx as usize)), Ordering::Relaxed);
+    }
+    out.copy_exactly(&front)?;
+    Ok(())
+}
+*/
