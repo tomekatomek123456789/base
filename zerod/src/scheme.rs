@@ -10,14 +10,6 @@ impl SchemeMut for ZeroScheme {
         Ok(0)
     }
 
-    fn dup(&mut self, _file: usize, buf: &[u8]) -> Result<usize> {
-        if !buf.is_empty() {
-            return Err(Error::new(EINVAL));
-        }
-
-        Ok(0)
-    }
-
     fn read(&mut self, _file: usize, buf: &mut [u8], _offset: u64, _flags: u32) -> Result<usize> {
         match self.0 {
             Ty::Null => Ok(0),

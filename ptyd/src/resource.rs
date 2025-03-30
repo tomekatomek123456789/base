@@ -7,7 +7,6 @@ use syscall::flag::EventFlags;
 use crate::pty::Pty;
 
 pub trait Resource {
-    fn boxed_clone(&self) -> Box<dyn Resource>;
     fn pty(&self) -> Weak<RefCell<Pty>>;
     fn flags(&self) -> usize;
 

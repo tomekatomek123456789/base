@@ -8,7 +8,6 @@ use crate::pty::Pty;
 use crate::resource::Resource;
 
 /// Read side of a pipe
-#[derive(Clone)]
 pub struct PtyControlTerm {
     pty: Rc<RefCell<Pty>>,
     flags: usize,
@@ -28,10 +27,6 @@ impl PtyControlTerm {
 }
 
 impl Resource for PtyControlTerm {
-    fn boxed_clone(&self) -> Box<dyn Resource> {
-        Box::new(self.clone())
-    }
-
     fn pty(&self) -> Weak<RefCell<Pty>> {
         Rc::downgrade(&self.pty)
     }
@@ -45,7 +40,6 @@ impl Resource for PtyControlTerm {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
-        
         self.notified_read = false;
 
         let mut pty = self.pty.borrow_mut();

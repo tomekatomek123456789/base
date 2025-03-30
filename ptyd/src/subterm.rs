@@ -8,7 +8,6 @@ use crate::pty::Pty;
 use crate::resource::Resource;
 
 /// Read side of a pipe
-#[derive(Clone)]
 pub struct PtySubTerm {
     pty: Weak<RefCell<Pty>>,
     flags: usize,
@@ -28,10 +27,6 @@ impl PtySubTerm {
 }
 
 impl Resource for PtySubTerm {
-    fn boxed_clone(&self) -> Box<dyn Resource> {
-        Box::new(self.clone())
-    }
-
     fn pty(&self) -> Weak<RefCell<Pty>> {
         self.pty.clone()
     }
@@ -49,7 +44,6 @@ impl Resource for PtySubTerm {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
-        
         self.notified_read = false;
 
         if let Some(pty_lock) = self.pty.upgrade() {

@@ -57,30 +57,6 @@ impl SchemeMut for LogScheme {
         Ok(id)
     }
 
-    fn dup(&mut self, old_id: usize, buf: &[u8]) -> Result<usize> {
-        if !buf.is_empty() {
-            return Err(Error::new(EINVAL));
-        }
-
-        let context = {
-            let handle = self.handles.get(&old_id).ok_or(Error::new(EBADF))?;
-            handle.context.clone()
-        };
-
-        let id = self.next_id;
-        self.next_id += 1;
-
-        self.handles.insert(
-            id,
-            LogHandle {
-                context,
-                bufs: BTreeMap::new(),
-            },
-        );
-
-        Ok(id)
-    }
-
     fn read(&mut self, id: usize, _buf: &mut [u8], _offset: u64, _flags: u32) -> Result<usize> {
         let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 

@@ -9,7 +9,6 @@ use crate::pty::Pty;
 use crate::resource::Resource;
 
 /// Read side of a pipe
-#[derive(Clone)]
 pub struct PtyTermios {
     pty: Weak<RefCell<Pty>>,
     flags: usize,
@@ -25,10 +24,6 @@ impl PtyTermios {
 }
 
 impl Resource for PtyTermios {
-    fn boxed_clone(&self) -> Box<dyn Resource> {
-        Box::new(self.clone())
-    }
-
     fn pty(&self) -> Weak<RefCell<Pty>> {
         self.pty.clone()
     }

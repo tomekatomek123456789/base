@@ -247,12 +247,6 @@ impl SchemeSync for Scheme {
     fn unlink(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
         self.remove_dentry(path, ctx.uid, ctx.gid, false)
     }
-    fn dup(&mut self, old_inode: usize, _buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
-        Ok(OpenResult::ThisScheme {
-            number: old_inode,
-            flags: NewFdFlags::POSITIONED,
-        })
-    }
     fn read(
         &mut self,
         inode: usize,
