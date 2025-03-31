@@ -262,8 +262,10 @@ struct Process {
 
     ruid: u32,
     euid: u32,
+    suid: u32,
     rgid: u32,
     egid: u32,
+    sgid: u32,
     rns: u32,
     ens: u32,
 
@@ -480,8 +482,10 @@ impl<'a> ProcScheme<'a> {
                         pgid: INIT_PID,
                         ruid: 0,
                         euid: 0,
+                        suid: 0,
                         rgid: 0,
                         egid: 0,
+                        sgid: 0,
                         rns: 1,
                         ens: 1,
 
@@ -512,10 +516,12 @@ impl<'a> ProcScheme<'a> {
         let Process {
             pgid,
             sid,
-            euid,
             ruid,
-            egid,
+            euid,
+            suid,
             rgid,
+            egid,
+            sgid,
             ens,
             rns,
             ..
@@ -558,9 +564,11 @@ impl<'a> ProcScheme<'a> {
                 pgid,
                 sid,
                 ruid,
-                rgid,
                 euid,
+                suid,
+                rgid,
                 egid,
+                sgid,
                 rns,
                 ens,
 
@@ -1076,16 +1084,56 @@ impl<'a> ProcScheme<'a> {
         }
     }
     pub fn on_setresugid(&mut self, pid: ProcessId, raw_buf: &[u8]) -> Result<()> {
-        log::info!("ON_SETRESUGID {pid:?} {raw_buf:?}");
-        let ids = {
+        let [new_ruid, new_euid, new_suid, new_rgid, new_egid, new_sgid] = {
             let raw_ids: [u32; 6] = plain::slice_from_bytes::<u32>(raw_buf)
                 .unwrap()
                 .try_into()
                 .map_err(|_| Error::new(EINVAL))?;
             raw_ids.map(|i| if i == u32::MAX { None } else { Some(i) })
         };
-        let proc = self.processes.get_mut(&pid).ok_or(Error::new(ESRCH))?;
-        log::warn!("TODO: on_setresugid({pid:?}): {ids:?}");
+        let mut proc = self
+            .processes
+            .get(&pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow_mut();
+
+        let check = |new_ugid: u32, proc: &Process, gid_not_uid: bool| {
+            if proc.euid == 0 {
+                return Ok(());
+            }
+            if gid_not_uid && ![proc.rgid, proc.egid, proc.sgid].contains(&new_ugid) {
+                return Err(Error::new(EPERM));
+            }
+            if !gid_not_uid && ![proc.ruid, proc.euid, proc.suid].contains(&new_ugid) {
+                return Err(Error::new(EPERM));
+            }
+            Ok(())
+        };
+
+        if let Some(new_ruid) = new_ruid {
+            check(new_ruid, &*proc, false)?;
+            proc.ruid = new_ruid;
+        }
+        if let Some(new_euid) = new_euid {
+            check(new_euid, &*proc, false)?;
+            proc.euid = new_euid;
+        }
+        if let Some(new_suid) = new_suid {
+            check(new_suid, &*proc, false)?;
+            proc.suid = new_suid;
+        }
+        if let Some(new_rgid) = new_rgid {
+            check(new_rgid, &*proc, true)?;
+            proc.rgid = new_rgid;
+        }
+        if let Some(new_egid) = new_egid {
+            check(new_egid, &*proc, true)?;
+            proc.egid = new_egid;
+        }
+        if let Some(new_sgid) = new_sgid {
+            check(new_sgid, &*proc, true)?;
+            proc.sgid = new_sgid;
+        }
         Ok(())
     }
     fn ancestors(&self, pid: ProcessId) -> impl Iterator<Item = ProcessId> + '_ {
