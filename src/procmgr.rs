@@ -841,6 +841,16 @@ impl<'a> ProcScheme<'a> {
         Ok(target_proc.pgid)
     }
     pub fn on_setsid(&mut self, caller_pid: ProcessId) -> Result<()> {
+        // TODO: more efficient?
+        // POSIX: any other process's pgid matches the caller pid
+        if self
+            .processes
+            .values()
+            .any(|p| p.borrow().pgid == caller_pid)
+        {
+            return Err(Error::new(EPERM));
+        }
+
         let mut caller_proc = self
             .processes
             .get(&caller_pid)
@@ -849,15 +859,6 @@ impl<'a> ProcScheme<'a> {
 
         // POSIX: already a process group leader
         if caller_proc.pgid == caller_pid {
-            return Err(Error::new(EPERM));
-        }
-        // TODO: more efficient?
-        // POSIX: any other process's pgid matches the caller pid
-        if self
-            .processes
-            .values()
-            .any(|p| p.borrow().pgid == caller_pid)
-        {
             return Err(Error::new(EPERM));
         }
 
@@ -1059,8 +1060,9 @@ impl<'a> ProcScheme<'a> {
                 let this_pgid = proc.pgid;
                 if !self
                     .processes
-                    .values()
-                    .any(|p| p.borrow().pgid == this_pgid)
+                    .iter()
+                    .filter(|(pid, _)| **pid != this_pid)
+                    .any(|(_, p)| p.borrow().pgid == this_pgid)
                 {
                     return Ready(Err(Error::new(ECHILD)));
                 }
