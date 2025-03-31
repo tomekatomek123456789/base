@@ -764,8 +764,12 @@ impl<'a> ProcScheme<'a> {
                         }
                     }
                     ProcCall::Getsid => {
-                        log::error!("GETSID STUB");
-                        Ready(Response::ok(0, op))
+                        let req_pid = NonZeroUsize::new(metadata[1] as usize)
+                            .map_or(fd_pid, |n| ProcessId(n.get()));
+                        Ready(Response::new(
+                            self.on_getsid(fd_pid, req_pid).map(|ProcessId(s)| s),
+                            op,
+                        ))
                     }
                     ProcCall::Setsid => {
                         log::error!("SETSID STUB");
@@ -830,6 +834,26 @@ impl<'a> ProcScheme<'a> {
         }
 
         Ok(target_proc.pgid)
+    }
+    pub fn on_getsid(&mut self, caller_pid: ProcessId, req_pid: ProcessId) -> Result<ProcessId> {
+        let caller_proc = self
+            .processes
+            .get(&caller_pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow();
+        let requested_proc = self
+            .processes
+            .get(&req_pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow();
+
+        // POSIX allows, but does not require, the implementation to forbid getting the session ID of processes outside
+        // the current session.
+        if caller_proc.sid != requested_proc.sid && caller_proc.euid != 0 {
+            return Err(Error::new(EPERM));
+        }
+
+        Ok(requested_proc.sid)
     }
     pub fn on_setpgid(
         &mut self,
