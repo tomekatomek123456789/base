@@ -19,7 +19,7 @@ use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 
 use redox_rt::proc::FdGuard;
-use redox_rt::protocol::{ProcCall, ProcKillTarget, ProcMeta, WaitFlags};
+use redox_rt::protocol::{ProcCall, ProcKillTarget, ProcMeta, ThreadCall, WaitFlags};
 use redox_scheme::scheme::{IntoTag, Op, OpCall};
 use redox_scheme::{
     CallerCtx, Id, OpenResult, Request, RequestKind, Response, SendFdRequest, SignalBehavior,
@@ -221,13 +221,13 @@ pub struct Page<T> {
     ptr: NonNull<T>,
 }
 impl<T> Page<T> {
-    pub fn map(fd: &FdGuard) -> Result<Self> {
+    pub fn map(fd: &FdGuard, offset: usize) -> Result<Self> {
         Ok(Self {
             ptr: NonNull::new(unsafe {
                 syscall::fmap(
                     **fd,
                     &syscall::Map {
-                        offset: 0,
+                        offset,
                         size: PAGE_SIZE,
                         flags: MapFlags::PROT_READ,
                         address: 0,
@@ -392,6 +392,7 @@ enum WaitpidStatus {
 enum Handle {
     Init,
     Proc(ProcessId),
+    Thread(Rc<RefCell<Thread>>),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -585,7 +586,7 @@ impl<'a> ProcScheme<'a> {
         self.thread_lookup.insert(thread_ident, thread_weak);
         Ok(child_pid)
     }
-    fn new_thread(&mut self, pid: ProcessId) -> Result<FdGuard> {
+    fn new_thread(&mut self, pid: ProcessId) -> Result<Rc<RefCell<Thread>>> {
         // TODO: deduplicate code with fork
         let proc_rc = self.processes.get_mut(&pid).ok_or(Error::new(EBADFD))?;
         let mut proc = proc_rc.borrow_mut();
@@ -614,15 +615,15 @@ impl<'a> ProcScheme<'a> {
 
         let ident = *ctxt_fd;
         let thread = Rc::new(RefCell::new(Thread {
-            fd: FdGuard::new(syscall::dup(*ctxt_fd, &[])?),
+            fd: ctxt_fd,
             status_hndl,
             pid,
             sig_ctrl: None,
         }));
         let thread_weak = Rc::downgrade(&thread);
-        proc.threads.push(thread);
+        proc.threads.push(Rc::clone(&thread));
         self.thread_lookup.insert(ident, thread_weak);
-        Ok(ctxt_fd)
+        Ok(thread)
     }
     fn on_open(&mut self, path: &str, flags: usize) -> Result<OpenResult> {
         if path == "init" {
@@ -659,7 +660,7 @@ impl<'a> ProcScheme<'a> {
                     .ok_or(Error::new(EINVAL))? = metadata;
                 Ok(size_of::<ProcMeta>())
             }
-            Handle::Init => return Err(Error::new(EBADF)),
+            Handle::Init | Handle::Thread(_) => return Err(Error::new(EBADF)),
         }
     }
     fn on_dup(&mut self, old_id: usize, buf: &[u8]) -> Result<OpenResult> {
@@ -674,23 +675,37 @@ impl<'a> ProcScheme<'a> {
                         flags: NewFdFlags::empty(),
                     })
                 }
-                b"new-thread" => Ok(OpenResult::OtherScheme {
-                    fd: self.new_thread(pid)?.take(),
-                }),
+                b"new-thread" => {
+                    let thread = self.new_thread(pid)?;
+                    Ok(OpenResult::ThisScheme {
+                        number: self.handles.insert(Handle::Thread(thread)),
+                        flags: NewFdFlags::empty(),
+                    })
+                }
                 w if w.starts_with(b"thread-") => {
                     let idx = core::str::from_utf8(&w["thread-".len()..])
                         .ok()
                         .and_then(|s| s.parse::<usize>().ok())
                         .ok_or(Error::new(EINVAL))?;
                     let process = self.processes.get(&pid).ok_or(Error::new(EBADFD))?.borrow();
-                    let thread = process.threads.get(idx).ok_or(Error::new(ENOENT))?.borrow();
+                    let thread = Rc::clone(process.threads.get(idx).ok_or(Error::new(ENOENT))?);
 
-                    return Ok(OpenResult::OtherScheme {
-                        fd: syscall::dup(*thread.fd, &[])?,
+                    return Ok(OpenResult::ThisScheme {
+                        number: self.handles.insert(Handle::Thread(thread)),
+                        flags: NewFdFlags::empty(),
                     });
                 }
                 _ => return Err(Error::new(EINVAL)),
             },
+            Handle::Thread(ref thread_rc) => {
+                let thread = thread_rc.borrow();
+
+                // By forwarding all dup calls to the kernel, this fd is now effectively the same
+                // as the underlying fd since that fd can't do anything itself.
+                Ok(OpenResult::OtherScheme {
+                    fd: syscall::dup(*thread.fd, buf)?,
+                })
+            }
             Handle::Init => Err(Error::new(EBADF)),
         }
     }
@@ -704,6 +719,17 @@ impl<'a> ProcScheme<'a> {
         let (payload, metadata) = op.payload_and_metadata();
         match self.handles[id] {
             Handle::Init => Response::ready_err(EBADF, op),
+            Handle::Thread(ref thr) => {
+                let Some(verb) = ThreadCall::try_from_raw(metadata[0] as usize) else {
+                    return Response::ready_err(EINVAL, op);
+                };
+                match verb {
+                    ThreadCall::SyncSigTctl => Ready(Response::new(
+                        Self::on_sync_sigtctl(&mut *thr.borrow_mut()).map(|()| 0),
+                        op,
+                    )),
+                }
+            }
             Handle::Proc(fd_pid) => {
                 let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
                     return Response::ready_err(EINVAL, op);
@@ -811,6 +837,9 @@ impl<'a> ProcScheme<'a> {
                             self.on_kill(fd_pid, target, signal, mode).map(|()| 0),
                             op,
                         ))
+                    }
+                    ProcCall::SyncSigPctl => {
+                        Ready(Response::new(self.on_sync_sigpctl(fd_pid).map(|()| 0), op))
                     }
                 }
             }
@@ -1603,6 +1632,22 @@ impl<'a> ProcScheme<'a> {
             }
         }
 
+        Ok(())
+    }
+    pub fn on_sync_sigtctl(thread: &mut Thread) -> Result<()> {
+        let sigcontrol_fd = FdGuard::new(syscall::dup(*thread.fd, b"sigcontrol")?);
+        thread.sig_ctrl.replace(Page::map(&sigcontrol_fd, 0)?);
+        Ok(())
+    }
+    pub fn on_sync_sigpctl(&mut self, pid: ProcessId) -> Result<()> {
+        let mut proc = self
+            .processes
+            .get(&pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow_mut();
+        let any_thread = proc.threads.first().ok_or(Error::new(EINVAL))?;
+        let sigcontrol_fd = FdGuard::new(syscall::dup(*any_thread.borrow().fd, b"sigcontrol")?);
+        proc.sig_pctl.replace(Page::map(&sigcontrol_fd, PAGE_SIZE)?);
         Ok(())
     }
 }
