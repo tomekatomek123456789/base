@@ -29,9 +29,10 @@ use slab::Slab;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
     sig_bit, ContextStatus, Error, Event, EventFlags, FobtainFdFlags, MapFlags, ProcSchemeAttrs,
-    Result, RtSigInfo, SenderInfo, SigProcControl, Sigcontrol, EAGAIN, EBADF, EBADFD, ECHILD,
-    EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM, ESRCH, EWOULDBLOCK, O_CLOEXEC,
-    O_CREAT, PAGE_SIZE, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
+    Result, RtSigInfo, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol, EAGAIN, EBADF,
+    EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM, ESRCH,
+    EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN,
+    SIGTTOU,
 };
 
 pub fn run(write_fd: usize, auth: &FdGuard) {
@@ -143,7 +144,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             log::trace!("AWAITING {}", proc.awaiting_threads_term.len(),);
             awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
         } else {
-            log::debug!("TODO: UNKNOWN EVENT");
+            log::warn!("TODO: UNKNOWN EVENT");
         }
     }
 
@@ -219,17 +220,19 @@ impl IntoTag for PendingState {
 #[derive(Debug)]
 pub struct Page<T> {
     ptr: NonNull<T>,
+    off: u16,
 }
 impl<T> Page<T> {
-    pub fn map(fd: &FdGuard, offset: usize) -> Result<Self> {
+    pub fn map(fd: &FdGuard, req_offset: usize, displacement: u16) -> Result<Self> {
         Ok(Self {
+            off: displacement,
             ptr: NonNull::new(unsafe {
                 syscall::fmap(
                     **fd,
                     &syscall::Map {
-                        offset,
+                        offset: req_offset,
                         size: PAGE_SIZE,
-                        flags: MapFlags::PROT_READ,
+                        flags: MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_SHARED,
                         address: 0,
                     },
                 )? as *mut T
@@ -242,7 +245,7 @@ impl<T> Deref for Page<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        unsafe { self.ptr.as_ref() }
+        unsafe { &*self.ptr.as_ptr().byte_add(self.off.into()) }
     }
 }
 impl<T> Drop for Page<T> {
@@ -1447,6 +1450,7 @@ impl<'a> ProcScheme<'a> {
             let target_proc = &mut *target_proc;
 
             let Some(ref sig_pctl) = target_proc.sig_pctl else {
+                log::trace!("No pctl {caller_pid:?}");
                 return SendResult::Invalid;
             };
 
@@ -1534,6 +1538,7 @@ impl<'a> ProcScheme<'a> {
                     KillTarget::Thread(ref thread_rc) => {
                         let thread = thread_rc.borrow();
                         let Some(ref tctl) = thread.sig_ctrl else {
+                            log::trace!("No tctl");
                             return SendResult::Invalid;
                         };
 
@@ -1551,10 +1556,11 @@ impl<'a> ProcScheme<'a> {
                         match mode {
                             KillMode::Queued(arg) => {
                                 if sig_group != 1 || sig_idx < 32 || sig_idx >= 64 {
+                                    log::trace!("Out of range");
                                     return SendResult::Invalid;
                                 }
                                 let rtidx = sig_idx - 32;
-                                //log::info!("QUEUEING {arg:?} RTIDX {rtidx}");
+                                //log::trace!("QUEUEING {arg:?} RTIDX {rtidx}");
                                 if rtidx >= target_proc.rtqs.len() {
                                     target_proc.rtqs.resize_with(rtidx + 1, VecDeque::new);
                                 }
@@ -1581,6 +1587,7 @@ impl<'a> ProcScheme<'a> {
                                 }
 
                                 if sig_group != 0 {
+                                    log::trace!("Invalid sig group");
                                     return SendResult::Invalid;
                                 }
                                 sig_pctl.sender_infos[sig_idx]
@@ -1634,20 +1641,36 @@ impl<'a> ProcScheme<'a> {
 
         Ok(())
     }
+    fn real_tctl_pctl_intra_page_offsets(fd: &FdGuard) -> Result<[u16; 2]> {
+        let mut buf = SetSighandlerData::default();
+        let _ = syscall::read(**fd, &mut buf)?;
+        Ok([
+            (buf.thread_control_addr % PAGE_SIZE) as u16,
+            (buf.proc_control_addr % PAGE_SIZE) as u16,
+        ])
+    }
     pub fn on_sync_sigtctl(thread: &mut Thread) -> Result<()> {
-        let sigcontrol_fd = FdGuard::new(syscall::dup(*thread.fd, b"sigcontrol")?);
-        thread.sig_ctrl.replace(Page::map(&sigcontrol_fd, 0)?);
+        log::trace!("Sync tctl {:?}", thread.pid);
+        let sigcontrol_fd = FdGuard::new(syscall::dup(*thread.fd, b"sighandler")?);
+        let [tctl_off, _] = Self::real_tctl_pctl_intra_page_offsets(&sigcontrol_fd)?;
+        log::trace!("read intra offsets");
+        thread
+            .sig_ctrl
+            .replace(Page::map(&sigcontrol_fd, 0, tctl_off)?);
         Ok(())
     }
     pub fn on_sync_sigpctl(&mut self, pid: ProcessId) -> Result<()> {
+        log::trace!("Sync pctl {pid:?}");
         let mut proc = self
             .processes
             .get(&pid)
             .ok_or(Error::new(ESRCH))?
             .borrow_mut();
         let any_thread = proc.threads.first().ok_or(Error::new(EINVAL))?;
-        let sigcontrol_fd = FdGuard::new(syscall::dup(*any_thread.borrow().fd, b"sigcontrol")?);
-        proc.sig_pctl.replace(Page::map(&sigcontrol_fd, PAGE_SIZE)?);
+        let sigcontrol_fd = FdGuard::new(syscall::dup(*any_thread.borrow().fd, b"sighandler")?);
+        let [_, pctl_off] = Self::real_tctl_pctl_intra_page_offsets(&sigcontrol_fd)?;
+        proc.sig_pctl
+            .replace(Page::map(&sigcontrol_fd, PAGE_SIZE, pctl_off)?);
         Ok(())
     }
 }
