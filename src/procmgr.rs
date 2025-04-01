@@ -31,8 +31,8 @@ use syscall::{
     sig_bit, ContextStatus, ContextVerb, Error, Event, EventFlags, FobtainFdFlags, MapFlags,
     ProcSchemeAttrs, Result, RtSigInfo, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
     EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM,
-    ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN,
-    SIGTTOU,
+    ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE, SIGCHLD, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP,
+    SIGTTIN, SIGTTOU,
 };
 
 pub fn run(write_fd: usize, auth: &FdGuard) {
@@ -849,7 +849,8 @@ impl<'a> ProcScheme<'a> {
 
                         let is_sigchld_to_parent = false;
                         Ready(Response::new(
-                            self.on_kill(fd_pid, target, signal, mode).map(|()| 0),
+                            self.on_kill(fd_pid, target, signal, mode, awoken)
+                                .map(|()| 0),
                             op,
                         ))
                     }
@@ -1359,7 +1360,9 @@ impl<'a> ProcScheme<'a> {
         target: ProcKillTarget,
         signal: u8,
         mode: KillMode,
+        awoken: &mut VecDeque<Id>,
     ) -> Result<()> {
+        log::debug!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
         let mut num_succeeded = 0;
 
         let mut killed_self = false; // TODO
@@ -1374,6 +1377,7 @@ impl<'a> ProcScheme<'a> {
                     &mut killed_self,
                     mode,
                     is_sigchld_to_parent,
+                    awoken,
                 )
             }
             ProcKillTarget::All => None,
@@ -1398,6 +1402,7 @@ impl<'a> ProcScheme<'a> {
                 &mut killed_self,
                 mode,
                 is_sigchld_to_parent,
+                awoken,
             );
             match res {
                 Ok(()) => (),
@@ -1416,6 +1421,7 @@ impl<'a> ProcScheme<'a> {
         killed_self: &mut bool,
         mode: KillMode,
         is_sigchld_to_parent: bool,
+        awoken: &mut VecDeque<Id>,
     ) -> Result<()> {
         let sig = usize::from(signal);
         debug_assert!(sig <= 64);
@@ -1436,7 +1442,7 @@ impl<'a> ProcScheme<'a> {
         enum SendResult {
             Succeeded,
             SucceededSigchld {
-                orig_signal: usize,
+                orig_signal: NonZeroU8,
                 ppid: ProcessId,
                 pgid: ProcessId,
             },
@@ -1455,9 +1461,9 @@ impl<'a> ProcScheme<'a> {
 
             // If sig = 0, test that process exists and can be signalled, but don't send any
             // signal.
-            if sig == 0 {
+            let Some(nz_signal) = NonZeroU8::new(signal) else {
                 return SendResult::Succeeded;
-            }
+            };
             let mut target_proc = target_proc_rc.borrow_mut();
             let target_proc = &mut *target_proc;
 
@@ -1528,7 +1534,7 @@ impl<'a> ProcScheme<'a> {
                     .fetch_and(!sig_bit(SIGCONT), Ordering::Relaxed);
 
                 return SendResult::SucceededSigchld {
-                    orig_signal: sig,
+                    orig_signal: nz_signal,
                     ppid: target_proc.ppid,
                     pgid: target_proc.pgid,
                 };
@@ -1563,7 +1569,6 @@ impl<'a> ProcScheme<'a> {
                             tctl.word[sig_group].fetch_or(sig_bit(sig), Ordering::Release);
                         if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig) != 0
                         {
-                            //context_guard.unblock();
                             *killed_self |= is_self;
                         }
                     }
@@ -1647,10 +1652,64 @@ impl<'a> ProcScheme<'a> {
                 ppid,
                 pgid,
                 orig_signal,
-            } => {}
+            } => {
+                {
+                    let mut parent = self
+                        .processes
+                        .get(&ppid)
+                        .ok_or(Error::new(ESRCH))?
+                        .borrow_mut();
+                    parent.waitpid.insert(
+                        WaitpidKey {
+                            pid: Some(target_pid),
+                            pgid: Some(pgid),
+                        },
+                        (
+                            target_pid,
+                            WaitpidStatus::Stopped {
+                                signal: orig_signal,
+                            },
+                        ),
+                    );
+                    awoken.extend(parent.waitpid_waiting.drain(..));
+                }
+                self.on_send_sig(
+                    // TODO?
+                    ProcessId(1),
+                    KillTarget::Proc(ppid),
+                    SIGCHLD as u8,
+                    killed_self,
+                    KillMode::Idempotent,
+                    true,
+                    awoken,
+                )?;
+            }
             SendResult::SucceededSigcont { ppid, pgid } => {
+                {
+                    let mut parent = self
+                        .processes
+                        .get(&ppid)
+                        .ok_or(Error::new(ESRCH))?
+                        .borrow_mut();
+                    parent.waitpid.insert(
+                        WaitpidKey {
+                            pid: Some(target_pid),
+                            pgid: Some(pgid),
+                        },
+                        (target_pid, WaitpidStatus::Continued),
+                    );
+                    awoken.extend(parent.waitpid_waiting.drain(..));
+                }
                 // POSIX XSI allows but does not require SIGCONT to send signals to the parent.
-                //send_signal(KillTarget::Process(parent), SIGCHLD, true, killed_self)?;
+                self.on_send_sig(
+                    ProcessId(1),
+                    KillTarget::Proc(ppid),
+                    SIGCHLD as u8,
+                    killed_self,
+                    KillMode::Idempotent,
+                    true,
+                    awoken,
+                )?;
             }
         }
 
@@ -1689,11 +1748,12 @@ impl<'a> ProcScheme<'a> {
         Ok(())
     }
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum KillMode {
     Idempotent,
     Queued(RtSigInfo),
 }
+#[derive(Debug)]
 pub enum KillTarget {
     Proc(ProcessId),
     Thread(Rc<RefCell<Thread>>),
