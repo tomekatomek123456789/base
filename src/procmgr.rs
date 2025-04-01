@@ -1362,7 +1362,7 @@ impl<'a> ProcScheme<'a> {
         mode: KillMode,
         awoken: &mut VecDeque<Id>,
     ) -> Result<()> {
-        log::debug!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
+        log::trace!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
         let mut num_succeeded = 0;
 
         let mut killed_self = false; // TODO
@@ -1498,8 +1498,11 @@ impl<'a> ProcScheme<'a> {
                             Ordering::Relaxed,
                         );
                     }
-                    // TODO
-                    //thread.unblock();
+                    let _ = syscall::write(
+                        *thread.status_hndl,
+                        &(ContextVerb::Unstop as usize).to_ne_bytes(),
+                    )
+                    .expect("TODO");
                 }
                 // POSIX XSI allows but does not reqiure SIGCHLD to be sent when SIGCONT occurs.
                 return SendResult::SucceededSigcont {
@@ -1570,6 +1573,11 @@ impl<'a> ProcScheme<'a> {
                         if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig) != 0
                         {
                             *killed_self |= is_self;
+                            let _ = syscall::write(
+                                *thread.status_hndl,
+                                &(ContextVerb::Interrupt as usize).to_ne_bytes(),
+                            )
+                            .expect("TODO");
                         }
                     }
                     KillTarget::Proc(proc) => {
@@ -1625,8 +1633,11 @@ impl<'a> ProcScheme<'a> {
                             if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig)
                                 != 0
                             {
-                                // TODO
-                                //thread.unblock();
+                                let _ = syscall::write(
+                                    *thread.status_hndl,
+                                    &(ContextVerb::Interrupt as usize).to_ne_bytes(),
+                                )
+                                .expect("TODO");
                                 *killed_self |= is_self;
                                 break;
                             }
@@ -1647,7 +1658,10 @@ impl<'a> ProcScheme<'a> {
         match result {
             SendResult::Succeeded => (),
             SendResult::FullQ => return Err(Error::new(EAGAIN)),
-            SendResult::Invalid => return Err(Error::new(EINVAL)),
+            SendResult::Invalid => {
+                log::debug!("Invalid signal configuration");
+                return Err(Error::new(EINVAL));
+            }
             SendResult::SucceededSigchld {
                 ppid,
                 pgid,
@@ -1673,7 +1687,8 @@ impl<'a> ProcScheme<'a> {
                     );
                     awoken.extend(parent.waitpid_waiting.drain(..));
                 }
-                self.on_send_sig(
+                // TODO: Just ignore EINVAL (missing signal config)
+                let _ = self.on_send_sig(
                     // TODO?
                     ProcessId(1),
                     KillTarget::Proc(ppid),
@@ -1682,7 +1697,7 @@ impl<'a> ProcScheme<'a> {
                     KillMode::Idempotent,
                     true,
                     awoken,
-                )?;
+                );
             }
             SendResult::SucceededSigcont { ppid, pgid } => {
                 {
@@ -1701,7 +1716,8 @@ impl<'a> ProcScheme<'a> {
                     awoken.extend(parent.waitpid_waiting.drain(..));
                 }
                 // POSIX XSI allows but does not require SIGCONT to send signals to the parent.
-                self.on_send_sig(
+                // TODO: Just ignore EINVAL (missing signal config)
+                let _ = self.on_send_sig(
                     ProcessId(1),
                     KillTarget::Proc(ppid),
                     SIGCHLD as u8,
@@ -1709,7 +1725,7 @@ impl<'a> ProcScheme<'a> {
                     KillMode::Idempotent,
                     true,
                     awoken,
-                )?;
+                );
             }
         }
 
