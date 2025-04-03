@@ -87,7 +87,8 @@ pub fn main() -> ! {
     spawn("process manager", &auth, &this_thr_fd, |write_fd| {
         crate::procmgr::run(write_fd, &auth)
     });
-    let init_proc_fd = unsafe { redox_rt::proc::make_init() };
+    let [init_proc_fd, init_thr_fd] = unsafe { redox_rt::proc::make_init() };
+    // from this point, this_thr_fd is no longer valid
 
     const CWD: &[u8] = b"/scheme/initfs";
     const DEFAULT_SCHEME: &[u8] = b"initfs";
@@ -97,7 +98,7 @@ pub fn main() -> ! {
         sigprocmask: 0,
         sigignmask: 0,
         umask: redox_rt::sys::get_umask(),
-        thr_fd: **this_thr_fd,
+        thr_fd: **init_thr_fd,
         proc_fd: **init_proc_fd,
     };
 
@@ -116,7 +117,7 @@ pub fn main() -> ! {
 
     fexec_impl(
         image_file,
-        this_thr_fd,
+        init_thr_fd,
         init_proc_fd,
         &memory,
         path.as_bytes(),
