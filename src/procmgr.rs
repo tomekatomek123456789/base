@@ -39,7 +39,7 @@ use syscall::{
 enum VirtualId {
     KernelId(Id),
     // TODO: slab or something for better ID reuse
-    // InternalId(u64),
+    InternalId(u64),
 }
 
 pub fn run(write_fd: usize, auth: &FdGuard) {
@@ -130,7 +130,8 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
                 continue;
             };
             let thread = thread_rc.borrow();
-            let Some(proc_rc) = scheme.processes.get(&thread.pid) else {
+            let pid = thread.pid;
+            let Some(proc_rc) = scheme.processes.get(&pid) else {
                 // TODO?
                 continue;
             };
@@ -153,7 +154,19 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
                 log::trace!("WAKING UP {}", proc.awaiting_threads_term.len(),);
                 awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
             } else {
-                todo!("handle proc termination without explicit exit");
+                let internal_id = scheme.next_internal_id;
+                scheme.next_internal_id += 1;
+                let Entry::Vacant(entry) = states.entry(VirtualId::InternalId(internal_id)) else {
+                    log::error!("internal ID reuse!");
+                    continue;
+                };
+                drop(thread);
+                drop(proc);
+                let Pending =
+                    scheme.on_exit_start(pid, 0 /* TODO */, entry, &mut awoken, None)
+                else {
+                    unreachable!("not possible with tag=None");
+                };
             }
         } else {
             log::warn!("TODO: UNKNOWN EVENT");
@@ -216,10 +229,10 @@ enum PendingState {
         flags: WaitFlags,
         op: OpCall,
     },
-    AwaitingThreadsTermination(ProcessId, Tag),
+    AwaitingThreadsTermination(ProcessId, Option<Tag>),
     Placeholder,
 }
-impl IntoTag for PendingState {
+/*impl IntoTag for PendingState {
     fn into_tag(self) -> Tag {
         match self {
             Self::AwaitingThreadsTermination(_, tag) => tag,
@@ -227,7 +240,7 @@ impl IntoTag for PendingState {
             Self::Placeholder => unreachable!(),
         }
     }
-}
+}*/
 
 #[derive(Debug)]
 pub struct Page<T> {
@@ -385,6 +398,8 @@ struct ProcScheme<'a> {
 
     thread_lookup: HashMap<usize, Weak<RefCell<Thread>>>,
 
+    next_internal_id: u64,
+
     init_claimed: bool,
     next_id: ProcessId,
 
@@ -458,6 +473,7 @@ impl<'a> ProcScheme<'a> {
             handles: Slab::new(),
             init_claimed: false,
             next_id: ProcessId(2),
+            next_internal_id: 1,
             queue,
             auth,
         }
@@ -778,9 +794,13 @@ impl<'a> ProcScheme<'a> {
                         .map(|()| 0),
                         op,
                     )),
-                    ProcCall::Exit => {
-                        self.on_exit_start(fd_pid, metadata[1] as i32, state, awoken, op.into_tag())
-                    }
+                    ProcCall::Exit => self.on_exit_start(
+                        fd_pid,
+                        metadata[1] as i32,
+                        state,
+                        awoken,
+                        Some(op.into_tag()),
+                    ),
                     ProcCall::Waitpid | ProcCall::Waitpgid => {
                         let req_pid = ProcessId(metadata[1] as usize);
                         let target = match (verb, metadata[1] == 0) {
@@ -972,10 +992,14 @@ impl<'a> ProcScheme<'a> {
         status: i32,
         mut state: VacantEntry<VirtualId, PendingState, DefaultHashBuilder>,
         awoken: &mut VecDeque<VirtualId>,
-        tag: Tag,
+        tag: Option<Tag>,
     ) -> Poll<Response> {
         let Some(proc_rc) = self.processes.get(&pid) else {
-            return Response::ready_err(EBADFD, tag);
+            return if let Some(tag) = tag {
+                Response::ready_err(EBADFD, tag)
+            } else {
+                Pending
+            };
         };
         let mut process_guard = proc_rc.borrow_mut();
         let process = &mut *process_guard;
@@ -983,8 +1007,20 @@ impl<'a> ProcScheme<'a> {
         match process.status {
             ProcessStatus::Stopped(_) | ProcessStatus::PossiblyRunnable => (),
             //ProcessStatus::Exiting => return Pending,
-            ProcessStatus::Exiting { .. } => return Response::ready_err(EAGAIN, tag),
-            ProcessStatus::Exited { .. } => return Response::ready_err(ESRCH, tag),
+            ProcessStatus::Exiting { .. } => {
+                return if let Some(tag) = tag {
+                    Response::ready_err(EAGAIN, tag)
+                } else {
+                    Pending
+                }
+            }
+            ProcessStatus::Exited { .. } => {
+                return if let Some(tag) = tag {
+                    Response::ready_err(ESRCH, tag)
+                } else {
+                    Pending
+                }
+            }
         }
         // TODO: status/signal
         process.status = ProcessStatus::Exiting {
@@ -996,8 +1032,11 @@ impl<'a> ProcScheme<'a> {
             // to-be-ignored cancellation request to this scheme).
             for thread in &process.threads {
                 let mut thread = thread.borrow_mut();
+                // TODO: cancel all threads anyway on error?
                 if let Err(err) = syscall::write(*thread.status_hndl, &usize::MAX.to_ne_bytes()) {
-                    return Response::ready_err(err.errno, tag);
+                    if let Some(tag) = tag {
+                        return Response::ready_err(err.errno, tag);
+                    }
                 }
             }
 
@@ -1294,7 +1333,12 @@ impl<'a> ProcScheme<'a> {
             // TODO
             PendingState::AwaitingThreadsTermination(current_pid, tag) => {
                 let Some(proc_rc) = self.processes.get(&current_pid) else {
-                    return Response::ready_err(ESRCH, tag);
+                    return if let Some(tag) = tag {
+                        Response::ready_err(ESRCH, tag)
+                    } else {
+                        state_entry.remove();
+                        Pending
+                    };
                 };
                 let mut proc_guard = proc_rc.borrow_mut();
                 let proc = &mut *proc_guard;
@@ -1303,8 +1347,22 @@ impl<'a> ProcScheme<'a> {
                     log::trace!("WORKING ON AWAIT TERM");
                     let (signal, status) = match proc.status {
                         ProcessStatus::Exiting { signal, status } => (signal, status),
-                        ProcessStatus::Exited { .. } => return Response::ready_ok(0, tag),
-                        _ => return Response::ready_err(ESRCH, tag), // TODO?
+                        ProcessStatus::Exited { .. } => {
+                            return if let Some(tag) = tag {
+                                Response::ready_ok(0, tag)
+                            } else {
+                                state_entry.remove();
+                                Pending
+                            }
+                        }
+                        _ => {
+                            return if let Some(tag) = tag {
+                                Response::ready_err(ESRCH, tag) // TODO?
+                            } else {
+                                state_entry.remove();
+                                Pending
+                            }
+                        }
                     };
                     // TODO: Properly remove state
                     state_entry.remove();
@@ -1325,7 +1383,12 @@ impl<'a> ProcScheme<'a> {
                         // TODO: inefficient
                         awoken.extend(parent.waitpid_waiting.drain(..));
                     }
-                    Ready(Response::new(Ok(0), tag))
+                    if let Some(tag) = tag {
+                        Ready(Response::new(Ok(0), tag))
+                    } else {
+                        // state was removed earlier
+                        Pending
+                    }
                 } else {
                     log::trace!("WAITING AGAIN");
                     proc.awaiting_threads_term.push(req_id);
