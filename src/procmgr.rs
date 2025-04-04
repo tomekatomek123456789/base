@@ -141,8 +141,13 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             }
             scheme.thread_lookup.remove(&event.data);
             proc.threads.retain(|rc| !Rc::ptr_eq(rc, &thread_rc));
-            log::trace!("AWAITING {}", proc.awaiting_threads_term.len(),);
-            awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
+
+            if matches!(proc.status, ProcessStatus::Exiting { .. }) {
+                log::trace!("WAKING UP {}", proc.awaiting_threads_term.len(),);
+                awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
+            } else {
+                todo!("handle proc termination without explicit exit");
+            }
         } else {
             log::warn!("TODO: UNKNOWN EVENT");
         }
