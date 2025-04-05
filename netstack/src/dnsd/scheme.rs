@@ -1,9 +1,9 @@
 use std::borrow::ToOwned;
 use std::collections::btree_map::Entry;
-use std::collections::VecDeque;
 use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{Read, Write};
 use std::mem;
 use std::net::Ipv4Addr;
 use std::os::unix::io::RawFd;
@@ -12,15 +12,15 @@ use std::str;
 use std::str::FromStr;
 
 use libredox::flag;
-use syscall;
+use redox_scheme::scheme::{IntoTag, Op, OpRead, SchemeSync};
+use redox_scheme::{CallerCtx, Id, OpenResult, RequestKind, Response, SignalBehavior};
 use syscall::data::TimeSpec;
-use syscall::{
-    Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket,
-    Result as SyscallResult, SchemeMut,
-};
+use syscall::schemev2::NewFdFlags;
+use syscall::{self, EAGAIN, ECANCELED, ENOSYS, EWOULDBLOCK};
+use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Result as SyscallResult};
 
 use event::EventQueue;
-use redox_netstack::error::{Error, Result};
+use redox_netstack::error::{Error, Result, ResultExt};
 
 use dns_parser::{Builder, Packet as DNSPacket, RRData, ResponseCode};
 use dns_parser::{QueryClass, QueryType};
@@ -304,12 +304,15 @@ impl Domains {
 }
 
 pub struct Dnsd<'q> {
-    dns_file: File,
+    scheme_socket: redox_scheme::Socket,
     time_file: File,
     queue: &'q EventQueue<EventSource>,
     files: BTreeMap<usize, DnsFile>,
     domains: Domains,
-    wait_map: BTreeMap<usize, SyscallPacket>,
+
+    blocked_ids: HashMap<Id, (CallerCtx, OpRead)>,
+    blocked_fds: HashMap<usize, Vec<Id>>,
+
     next_fd: usize,
 }
 
@@ -318,14 +321,19 @@ impl<'q> Dnsd<'q> {
     const REQUEST_TIMEOUT_S: i64 = 30;
     const TIME_EVENT_TIMEOUT_S: i64 = 5;
 
-    pub fn new(dns_file: File, time_file: File, queue: &'q EventQueue<EventSource>) -> Self {
+    pub fn new(
+        scheme_socket: redox_scheme::Socket,
+        time_file: File,
+        queue: &'q EventQueue<EventSource>,
+    ) -> Self {
         Dnsd {
-            dns_file,
+            scheme_socket,
             time_file,
             queue,
             files: BTreeMap::new(),
             domains: Domains::new(),
-            wait_map: BTreeMap::new(),
+            blocked_ids: HashMap::new(),
+            blocked_fds: HashMap::new(),
             next_fd: 1,
         }
     }
@@ -358,30 +366,58 @@ impl<'q> Dnsd<'q> {
 
     pub fn on_dns_file_event(&mut self) -> Result<bool> {
         loop {
-            let mut packet = SyscallPacket::default();
-            match self.dns_file.read(&mut packet) {
-                Ok(0) => {
+            let req = match self.scheme_socket.next_request(SignalBehavior::Restart) {
+                Ok(None) => {
                     //TODO: Cleanup must occur
                     return Ok(false);
                 }
-                Ok(_) => (),
-                Err(err) => {
-                    if err.kind() == ErrorKind::WouldBlock {
-                        return Ok(true);
+                Ok(Some(req)) => req,
+                Err(err) if err.errno == EWOULDBLOCK || err.errno == EAGAIN => {
+                    return Ok(true);
+                }
+                Err(err) => return Err(err).context("scheme read error"),
+            };
+            let req = match req.kind() {
+                RequestKind::Call(call) => call,
+                RequestKind::OnClose { id } => {
+                    self.on_close(id);
+                    continue;
+                }
+                RequestKind::Cancellation(req) => {
+                    if let Some((_, op)) = self.blocked_ids.remove(&req.id) {
+                        if let Some(blocked) = self.blocked_fds.get_mut(&op.fd) {
+                            blocked.retain(|id| *id != req.id);
+                        }
+                        self.scheme_socket
+                            .write_response(Response::err(ECANCELED, op), SignalBehavior::Restart)
+                            .context("scheme write fail")?;
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            let ctx = req.caller();
+
+            let resp = match req.op() {
+                Err(req) => Response::err(ENOSYS, req),
+                Ok(Op::Read(mut op)) => {
+                    let fd = op.fd;
+                    // TODO: nonblock read flag to bypass blocking
+                    let res = self.read(fd, op.buf(), 0, 0, &ctx);
+                    if res == Err(SyscallError::new(EWOULDBLOCK)) {
+                        let id = op.req_id();
+                        self.blocked_ids.insert(id, (ctx, op));
+                        self.blocked_fds.entry(fd).or_default().push(id);
+                        continue;
                     } else {
-                        return Err(Error::from(err));
+                        Response::new(res, op)
                     }
                 }
-            }
-            // TODO: implement cancellation
-            let a = packet.a;
-            self.handle(&mut packet);
-            if packet.a != (-syscall::EWOULDBLOCK) as usize {
-                self.dns_file.write_all(&packet)?;
-            } else {
-                packet.a = a;
-                self.handle_block(packet)?;
-            }
+                Ok(op) => op.handle_sync(ctx, self),
+            };
+            self.scheme_socket
+                .write_response(resp, SignalBehavior::Restart)
+                .context("scheme write fail")?;
         }
     }
 
@@ -418,23 +454,29 @@ impl<'q> Dnsd<'q> {
     }
 
     fn wakeup_fds(&mut self, fds_to_wakeup: &BTreeSet<usize>) {
-        let mut syscall_packets = vec![];
         for fd in fds_to_wakeup {
-            if let Some(packet) = self.wait_map.remove(fd) {
-                syscall_packets.push(packet);
+            let Some(affected) = self.blocked_fds.remove(&fd) else {
+                continue;
+            };
+            for id in affected {
+                let Some((ctx, mut op)) = self.blocked_ids.remove(&id) else {
+                    continue;
+                };
+                //  TODO: deduplicate code
+                let fd = op.fd;
+                // TODO: nonblock read flag to bypass blocking
+                let res = self.read(fd, op.buf(), 0, 0, &ctx);
+                let resp = if res == Err(SyscallError::new(EWOULDBLOCK)) {
+                    self.blocked_ids.insert(id, (ctx, op));
+                    self.blocked_fds.entry(fd).or_default().push(id);
+                    continue;
+                } else {
+                    Response::new(res, op)
+                };
+                self.scheme_socket
+                    .write_response(resp, SignalBehavior::Restart);
             }
         }
-
-        for mut packet in syscall_packets.drain(..) {
-            self.handle(&mut packet);
-            let _ = self.dns_file.write_all(&packet);
-        }
-    }
-
-    fn handle_block(&mut self, packet: SyscallPacket) -> Result<()> {
-        let fd = packet.b;
-        self.wait_map.insert(fd, packet);
-        Ok(())
     }
 
     fn validate_domain(domain: &str) -> bool {
@@ -452,8 +494,23 @@ impl<'q> Dnsd<'q> {
     }
 }
 
-impl SchemeMut for Dnsd<'_> {
-    fn open(&mut self, url: &str, _flags: usize, _uid: u32, _gid: u32) -> SyscallResult<usize> {
+impl Dnsd<'_> {
+    fn on_close(&mut self, fd: usize) {
+        trace!("Close {}", fd);
+        let Some(file) = self.files.get_mut(&fd) else {
+            return;
+        };
+
+        if let DnsFile::Waiting { ref domain } = *file {
+            self.domains.unwait_fd(domain, fd);
+        }
+
+        self.files.remove(&fd);
+    }
+}
+
+impl SchemeSync for Dnsd<'_> {
+    fn open(&mut self, url: &str, _flags: usize, _ctx: &CallerCtx) -> SyscallResult<OpenResult> {
         let domain = url.to_lowercase();
         if domain.is_empty() || !Dnsd::validate_domain(&domain) {
             return Err(SyscallError::new(syscall::EINVAL));
@@ -472,29 +529,31 @@ impl SchemeMut for Dnsd<'_> {
         );
         self.files.insert(fd, dns_file);
         trace!("Open {} {}", &domain, fd);
-        Ok(fd)
+        Ok(OpenResult::ThisScheme {
+            number: fd,
+            flags: NewFdFlags::empty(),
+        })
     }
 
-    fn close(&mut self, fd: usize) -> SyscallResult<usize> {
-        trace!("Close {}", fd);
-        let file = self
-            .files
-            .get_mut(&fd)
-            .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
-
-        if let DnsFile::Waiting { ref domain } = *file {
-            self.domains.unwait_fd(domain, fd);
-        }
-
-        self.files.remove(&fd);
-        Ok(0)
-    }
-
-    fn write(&mut self, _fd: usize, _buf: &[u8]) -> SyscallResult<usize> {
+    fn write(
+        &mut self,
+        _fd: usize,
+        _buf: &[u8],
+        _off: u64,
+        _flags: u32,
+        _ctx: &CallerCtx,
+    ) -> SyscallResult<usize> {
         Err(SyscallError::new(syscall::EINVAL))
     }
 
-    fn read(&mut self, fd: usize, buf: &mut [u8]) -> SyscallResult<usize> {
+    fn read(
+        &mut self,
+        fd: usize,
+        buf: &mut [u8],
+        _off: u64,
+        _flags: u32,
+        _ctx: &CallerCtx,
+    ) -> SyscallResult<usize> {
         trace!("Read {}", fd);
         let file = self
             .files
@@ -538,11 +597,12 @@ impl SchemeMut for Dnsd<'_> {
         &mut self,
         _fd: usize,
         _events: SyscallEventFlags,
+        _ctx: &CallerCtx,
     ) -> SyscallResult<SyscallEventFlags> {
         Ok(SyscallEventFlags::empty())
     }
 
-    fn fsync(&mut self, _fd: usize) -> SyscallResult<usize> {
-        Ok(0)
+    fn fsync(&mut self, _fd: usize, _ctx: &CallerCtx) -> SyscallResult<()> {
+        Ok(())
     }
 }

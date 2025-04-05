@@ -17,6 +17,17 @@ pub struct Error {
     descr: String,
 }
 
+pub trait ResultExt {
+    type T;
+    fn context(self, ctxt: impl Into<String>) -> std::result::Result<Self::T, Error>;
+}
+impl<T> ResultExt for std::result::Result<T, SyscallError> {
+    type T = T;
+    fn context(self, ctxt: impl Into<String>) -> std::result::Result<T, Error> {
+        self.map_err(|err| Error::from_syscall_error(err, ctxt))
+    }
+}
+
 impl Error {
     pub fn from_syscall_error<S: Into<String>>(syscall_error: SyscallError, descr: S) -> Error {
         Error {

@@ -6,6 +6,7 @@ use event::EventQueue;
 use ioslice::IoSlice;
 use libredox::Fd;
 use redox_netstack::logger;
+use redox_scheme::Socket;
 use scheme::Dnsd;
 use std::fs::File;
 use std::os::unix::io::{FromRawFd, RawFd};
@@ -16,8 +17,7 @@ mod scheme;
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     use libredox::flag::*;
 
-    let dns_fd =
-        Fd::open(":dns", O_RDWR | O_CREAT | O_NONBLOCK, 0).context("failed to open :dns")?;
+    let dns_socket = Socket::nonblock("dns").context("failed to open :dns")?;
 
     let time_path = format!("/scheme/time/{}", CLOCK_MONOTONIC);
     let time_fd = Fd::open(&time_path, O_RDWR, 0).context("failed to open time")?;
@@ -33,7 +33,7 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
     event_queue
         .subscribe(
-            dns_fd.raw(),
+            dns_socket.inner().raw(),
             EventSource::DnsScheme,
             event::EventFlags::READ,
         )
@@ -49,14 +49,9 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
         .subscribe(time_fd.raw(), EventSource::Timer, event::EventFlags::READ)
         .context("failed to listen to timer events")?;
 
-    let (dns_file, time_file) = unsafe {
-        (
-            File::from_raw_fd(dns_fd.into_raw() as RawFd),
-            File::from_raw_fd(time_fd.into_raw() as RawFd),
-        )
-    };
+    let time_file = unsafe { File::from_raw_fd(time_fd.into_raw() as RawFd) };
 
-    let mut dnsd = Dnsd::new(dns_file, time_file, &event_queue);
+    let mut dnsd = Dnsd::new(dns_socket, time_file, &event_queue);
 
     let new_ns =
         libredox::call::mkns(&[IoSlice::new(b"dns")]).expect("dnsd: failed to create namespace");
