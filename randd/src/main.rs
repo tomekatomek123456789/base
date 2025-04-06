@@ -17,8 +17,8 @@ use redox_scheme::{RequestKind, SchemeMut, SignalBehavior, Socket, V2};
 use syscall::data::Stat;
 use syscall::flag::EventFlags;
 use syscall::{
-    Error, Result, EBADF, EBADFD, EEXIST, EINVAL, ENOENT, EPERM, MODE_CHR, O_CLOEXEC, O_CREAT,
-    O_EXCL, O_RDONLY, O_RDWR, O_STAT, O_WRONLY,
+    Error, Result, EBADF, EBADFD, EEXIST, ENOENT, EPERM, MODE_CHR, O_CREAT, O_EXCL, O_RDONLY,
+    O_RDWR, O_WRONLY,
 };
 
 // Create an RNG Seed to create initial seed from the rdrand intel instruction
@@ -166,6 +166,8 @@ impl RandScheme {
 
 #[test]
 fn test_scheme_perms() {
+    use syscall::{O_CLOEXEC, O_STAT};
+
     let mut scheme = RandScheme::new(File::open(".").unwrap());
     scheme.prng_stat.st_mode = MODE_CHR | 0o200;
     scheme.prng_stat.st_uid = 1;

@@ -182,7 +182,6 @@ impl SchemeSync for Scheme {
 
                 File {
                     atime: current_time,
-                    crtime: current_time,
                     ctime: current_time,
                     mtime: current_time,
                     gid: ctx.gid,
@@ -203,7 +202,6 @@ impl SchemeSync for Scheme {
 
                 File {
                     atime: current_time,
-                    crtime: current_time,
                     ctime: current_time,
                     mtime: current_time,
                     gid: ctx.gid,

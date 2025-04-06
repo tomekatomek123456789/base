@@ -354,7 +354,7 @@ impl<'q> Dnsd<'q> {
                     *file = DnsFile::Timeout;
                 }
             }
-            self.wakeup_fds(&fds_to_wakeup);
+            self.wakeup_fds(&fds_to_wakeup)?;
         }
 
         time.tv_sec += Dnsd::TIME_EVENT_TIMEOUT_S;
@@ -438,10 +438,10 @@ impl<'q> Dnsd<'q> {
                         *file = DnsFile::Failed;
                     }
                 }
-                self.wakeup_fds(&fds_to_fail);
+                self.wakeup_fds(&fds_to_fail)?;
             }
             Some(DnsParsingResult::WakeUpFiles(fds_to_wakeup)) => {
-                self.wakeup_fds(&fds_to_wakeup);
+                self.wakeup_fds(&fds_to_wakeup)?;
             }
             None => {}
         }
@@ -453,7 +453,7 @@ impl<'q> Dnsd<'q> {
         Ok(())
     }
 
-    fn wakeup_fds(&mut self, fds_to_wakeup: &BTreeSet<usize>) {
+    fn wakeup_fds(&mut self, fds_to_wakeup: &BTreeSet<usize>) -> Result<()> {
         for fd in fds_to_wakeup {
             let Some(affected) = self.blocked_fds.remove(&fd) else {
                 continue;
@@ -474,9 +474,11 @@ impl<'q> Dnsd<'q> {
                     Response::new(res, op)
                 };
                 self.scheme_socket
-                    .write_response(resp, SignalBehavior::Restart);
+                    .write_response(resp, SignalBehavior::Restart)
+                    .context("scheme write fail")?;
             }
         }
+        Ok(())
     }
 
     fn validate_domain(domain: &str) -> bool {

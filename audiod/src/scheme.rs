@@ -17,7 +17,6 @@ enum Handle {
     },
     //TODO: move volume to audiohw:?
     Volume {
-        flags: usize,
         offset: usize,
     }
 }
@@ -75,7 +74,6 @@ impl SchemeBlockMut for AudioScheme {
                 buffer: VecDeque::new()
             },
             "volume" => Handle::Volume {
-                flags,
                 offset: 0,
             },
             _ => return Err(Error::new(ENOENT)),
@@ -95,7 +93,7 @@ impl SchemeBlockMut for AudioScheme {
                 //TODO: audio input?
                 Err(Error::new(EBADF))
             },
-            Handle::Volume { flags: _, ref mut offset } => {
+            Handle::Volume { ref mut offset } => {
                 //TODO: should we allocate every time?
                 let string = format!("{}", self.volume);
                 let bytes = string.as_bytes();
@@ -136,7 +134,7 @@ impl SchemeBlockMut for AudioScheme {
                     Ok(Some(i))
                 }
             },
-            Handle::Volume { flags: _, ref mut offset } => {
+            Handle::Volume { ref mut offset } => {
                 //TODO: support other offsets?
                 if *offset == 0 {
                     let value = str::from_utf8(buf)

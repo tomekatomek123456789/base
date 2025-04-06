@@ -23,7 +23,6 @@ pub struct File {
     pub atime: TimeSpec,
     pub ctime: TimeSpec,
     pub mtime: TimeSpec,
-    pub crtime: TimeSpec,
 
     pub data: FileData,
 }
@@ -65,7 +64,6 @@ impl Filesystem {
         let cur_time = current_time();
         File {
             atime: cur_time,
-            crtime: cur_time,
             ctime: cur_time,
             mtime: cur_time,
 

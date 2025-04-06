@@ -2,12 +2,12 @@ extern crate syscall;
 
 use std::mem::MaybeUninit;
 use std::ptr::addr_of_mut;
-use std::{mem, process, slice, thread};
 use std::sync::{Arc, Mutex};
+use std::{mem, process, slice, thread};
 
 use libredox::flag;
-use libredox::{Fd, error::Result};
-use redox_scheme::{Socket, SignalBehavior};
+use libredox::{error::Result, Fd};
+use redox_scheme::{SignalBehavior, Socket};
 
 use redox_daemon::Daemon;
 
@@ -17,17 +17,14 @@ mod scheme;
 
 extern "C" fn sigusr_handler(_sig: usize) {}
 
-fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, mut hw_file: Fd) -> Result<()> {
+fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, hw_file: Fd) -> Result<()> {
     // Enter null namespace
     libredox::call::setrens(0, 0)?;
 
     loop {
         let buffer = scheme.lock().unwrap().buffer();
         let buffer_u8 = unsafe {
-            slice::from_raw_parts(
-                buffer.as_ptr() as *const u8,
-                mem::size_of_val(&buffer),
-            )
+            slice::from_raw_parts(buffer.as_ptr() as *const u8, mem::size_of_val(&buffer))
         };
 
         // Wake up the scheme thread
@@ -70,19 +67,21 @@ fn daemon(daemon: Daemon) -> Result<()> {
 
     let mut pending = Vec::new();
 
-    loop  {
+    loop {
         match socket.next_request(SignalBehavior::Interrupt) {
-            Ok(Some(request)) => match request.handle_scheme_block_mut(&mut *scheme.lock().unwrap()) {
-                Ok(response) => {
-                    socket.write_responses(&[response], SignalBehavior::Restart)?;
+            Ok(Some(request)) => {
+                match request.handle_scheme_block_mut(&mut *scheme.lock().unwrap()) {
+                    Ok(response) => {
+                        socket.write_responses(&[response], SignalBehavior::Restart)?;
+                    }
+                    Err(request) => pending.push(request),
                 }
-                Err(request) => pending.push(request),
-            },
-            Ok(None) => {},
-            Err(err) => match err.errno {
-                libredox::errno::EINTR => {},
-                _ => return Err(err),
             }
+            Ok(None) => {}
+            Err(err) => match err.errno {
+                libredox::errno::EINTR => {}
+                _ => return Err(err),
+            },
         }
 
         let mut i = 0;
@@ -93,27 +92,23 @@ fn daemon(daemon: Daemon) -> Result<()> {
                     pending.remove(i);
                     socket.write_responses(&[response], SignalBehavior::Restart)?;
                 }
-                Err(_) => {
-                    i += 1
-                }
+                Err(_) => i += 1,
             }
         }
     }
 }
 
 fn main() {
-    if let Err(err) = Daemon::new(|x| {
-        match daemon(x) {
-            Ok(()) => {
-                process::exit(0);
-            },
-            Err(err) => {
-                eprintln!("audiod: {}", err);
-                process::exit(1);
-            }
+    let Err(err) = Daemon::new(|x| match daemon(x) {
+        Ok(()) => {
+            process::exit(0);
         }
-    }) {
-        eprintln!("audiod: {}", err);
-        process::exit(1);
-    }
+        Err(err) => {
+            eprintln!("audiod: {}", err);
+            process::exit(1);
+        }
+    });
+
+    eprintln!("audiod: {}", err);
+    process::exit(1);
 }
