@@ -1,13 +1,15 @@
-extern crate syscall;
-
 use std::mem::MaybeUninit;
 use std::ptr::addr_of_mut;
 use std::sync::{Arc, Mutex};
 use std::{mem, process, slice, thread};
 
+use anyhow::Context;
+use ioslice::IoSlice;
 use libredox::flag;
 use libredox::{error::Result, Fd};
-use redox_scheme::{SignalBehavior, Socket};
+
+use redox_scheme::wrappers::ReadinessBased;
+use redox_scheme::Socket;
 
 use redox_daemon::Daemon;
 
@@ -18,9 +20,6 @@ mod scheme;
 extern "C" fn sigusr_handler(_sig: usize) {}
 
 fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, hw_file: Fd) -> Result<()> {
-    // Enter null namespace
-    libredox::call::setrens(0, 0)?;
-
     loop {
         let buffer = scheme.lock().unwrap().buffer();
         let buffer_u8 = unsafe {
@@ -34,7 +33,7 @@ fn thread(scheme: Arc<Mutex<AudioScheme>>, pid: usize, hw_file: Fd) -> Result<()
     }
 }
 
-fn daemon(daemon: Daemon) -> Result<()> {
+fn daemon(daemon: Daemon) -> anyhow::Result<()> {
     // Handle signals from the hw thread
 
     let new_sigaction = unsafe {
@@ -50,55 +49,45 @@ fn daemon(daemon: Daemon) -> Result<()> {
 
     let hw_file = Fd::open("/scheme/audiohw", flag::O_WRONLY | flag::O_CLOEXEC, 0)?;
 
-    let socket = Socket::create("audio")?;
+    let socket = Socket::create("audio").context("failed to create scheme")?;
 
     let scheme = Arc::new(Mutex::new(AudioScheme::new()));
 
+    // Enter a constrained namespace
+    let ns = libredox::call::mkns(&[
+        //IoSlice::new(b"memory"), TODO: already included, uncommenting gives EEXIST
+        IoSlice::new(b"rand"), // for HashMap
+        IoSlice::new(b"thisproc"), // for thread::spawn
+    ]).context("failed to make namespace")?;
+    libredox::call::setrens(ns, ns).context("failed to set namespace")?;
+
     // Spawn a thread to mix and send audio data
     let scheme_thread = scheme.clone();
-    let _thread = thread::spawn(move || thread(scheme_thread, pid, hw_file));
-
-    // Enter the null namespace - done after thread is created so
-    // memory: can be accessed for stack allocation
-    libredox::call::setrens(0, 0)?;
+    let _thread = thread::spawn(move || {
+        libredox::call::setrens(ns, ns).unwrap();
+        thread(scheme_thread, pid, hw_file)
+    });
 
     // The scheme is now ready to accept requests, notify the original process
     daemon.ready().unwrap();
 
-    let mut pending = Vec::new();
+    let mut readiness = ReadinessBased::new(&socket, 16);
 
     loop {
-        match socket.next_request(SignalBehavior::Interrupt) {
-            Ok(Some(request)) => {
-                match request.handle_scheme_block_mut(&mut *scheme.lock().unwrap()) {
-                    Ok(response) => {
-                        socket.write_responses(&[response], SignalBehavior::Restart)?;
-                    }
-                    Err(request) => pending.push(request),
-                }
-            }
-            Ok(None) => {}
-            Err(err) => match err.errno {
-                libredox::errno::EINTR => {}
-                _ => return Err(err),
-            },
+        if !readiness.read_requests()? {
+            break;
         }
-
-        let mut i = 0;
-        while i < pending.len() {
-            let request = pending[i];
-            match request.handle_scheme_block_mut(&mut *scheme.lock().unwrap()) {
-                Ok(response) => {
-                    pending.remove(i);
-                    socket.write_responses(&[response], SignalBehavior::Restart)?;
-                }
-                Err(_) => i += 1,
-            }
-        }
+        readiness.process_requests(|| scheme.lock().unwrap());
+        readiness.poll_all_requests(|| scheme.lock().unwrap())?;
+        if !readiness.write_responses()? {
+            break;
+        };
     }
+
+    Ok(())
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let Err(err) = Daemon::new(|x| match daemon(x) {
         Ok(()) => {
             process::exit(0);

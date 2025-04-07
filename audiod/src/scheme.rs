@@ -1,9 +1,10 @@
+use redox_scheme::{CallerCtx, OpenResult};
 use std::collections::{BTreeMap, VecDeque};
 use std::str;
-use syscall::error::{EBADF, EINVAL, ENOENT, EWOULDBLOCK, Error, Result};
-use syscall::flag::O_NONBLOCK;
+use syscall::error::{Error, Result, EBADF, EINVAL, ENOENT, EWOULDBLOCK};
 
-use redox_scheme::SchemeBlockMut;
+use redox_scheme::scheme::SchemeSync;
+use syscall::schemev2::NewFdFlags;
 
 // The strict buffer size of the audiohw: driver
 const HW_BUFFER_SIZE: usize = 512;
@@ -11,14 +12,10 @@ const HW_BUFFER_SIZE: usize = 512;
 const HANDLE_BUFFER_SIZE: usize = 4096;
 
 enum Handle {
-    Audio {
-        flags: usize,
-        buffer: VecDeque<(i16, i16)>,
-    },
-    //TODO: move volume to audiohw:?
-    Volume {
-        offset: usize,
-    }
+    Audio { buffer: VecDeque<(i16, i16)> },
+    // TODO: move volume to audiohw:?
+    // TODO: Use SYS_CALL to handle this better?
+    Volume,
 }
 
 pub struct AudioScheme {
@@ -44,7 +41,7 @@ impl AudioScheme {
         let volume_factor = ((self.volume as f32) / 100.0).powi(3);
         for (_id, handle) in self.handles.iter_mut() {
             match handle {
-                Handle::Audio { flags: _, ref mut buffer } => {
+                Handle::Audio { ref mut buffer } => {
                     let mut i = 0;
                     while i < mix_buffer.len() {
                         if let Some(sample) = buffer.pop_front() {
@@ -57,7 +54,7 @@ impl AudioScheme {
                         }
                         i += 1;
                     }
-                },
+                }
                 _ => (),
             }
         }
@@ -66,16 +63,16 @@ impl AudioScheme {
     }
 }
 
-impl SchemeBlockMut for AudioScheme {
-    fn open(&mut self, path: &str, flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
-        let handle = match path.trim_matches('/') {
-            "" => Handle::Audio {
-                flags,
-                buffer: VecDeque::new()
-            },
-            "volume" => Handle::Volume {
-                offset: 0,
-            },
+impl SchemeSync for AudioScheme {
+    fn open(&mut self, path: &str, _flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+        let (handle, flags) = match path.trim_matches('/') {
+            "" => (
+                Handle::Audio {
+                    buffer: VecDeque::new(),
+                },
+                NewFdFlags::empty(),
+            ),
+            "volume" => (Handle::Volume, NewFdFlags::POSITIONED),
             _ => return Err(Error::new(ENOENT)),
         };
 
@@ -83,60 +80,68 @@ impl SchemeBlockMut for AudioScheme {
         self.next_id += 1;
         self.handles.insert(id, handle);
 
-        Ok(Some(id))
+        Ok(OpenResult::ThisScheme { number: id, flags })
     }
 
-    fn read(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn read(
+        &mut self,
+        id: usize,
+        buf: &mut [u8],
+        off: u64,
+        _flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         //TODO: check flags for readable
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
-            Handle::Audio { flags: _, buffer: _ } => {
+            Handle::Audio { buffer: _ } => {
                 //TODO: audio input?
                 Err(Error::new(EBADF))
-            },
-            Handle::Volume { ref mut offset } => {
+            }
+            Handle::Volume => {
+                let Ok(off) = usize::try_from(off) else {
+                    return Ok(0);
+                };
                 //TODO: should we allocate every time?
-                let string = format!("{}", self.volume);
-                let bytes = string.as_bytes();
+                let bytes = format!("{}", self.volume).into_bytes();
+                let src = bytes.get(off..).unwrap_or(&[]);
+                let len = src.len().min(buf.len());
+                buf[..len].copy_from_slice(&src[..len]);
 
-                let mut i = 0;
-                while i < buf.len() && *offset + i < bytes.len() {
-                    buf[i] = bytes[*offset + i];
-                    i += 1;
-                }
-
-                *offset += i;
-                Ok(Some(i))
+                Ok(len)
             }
         }
     }
 
-    fn write(&mut self, id: usize, buf: &[u8]) -> Result<Option<usize>> {
+    fn write(
+        &mut self,
+        id: usize,
+        buf: &[u8],
+        offset: u64,
+        _flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         //TODO: check flags for writable
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
-            Handle::Audio { ref flags, ref mut buffer } => {
+            Handle::Audio { ref mut buffer } => {
                 if buffer.len() >= HANDLE_BUFFER_SIZE {
-                    if flags & O_NONBLOCK > 0 {
-                        Err(Error::new(EWOULDBLOCK))
-                    } else {
-                        Ok(None)
-                    }
+                    Err(Error::new(EWOULDBLOCK))
                 } else {
                     let mut i = 0;
                     while i + 4 <= buf.len() {
                         buffer.push_back((
                             (buf[i] as i16) | ((buf[i + 1] as i16) << 8),
-                            (buf[i + 2] as i16) | ((buf[i + 3] as i16) << 8)
+                            (buf[i + 2] as i16) | ((buf[i + 3] as i16) << 8),
                         ));
 
                         i += 4;
                     }
 
-                    Ok(Some(i))
+                    Ok(i)
                 }
-            },
-            Handle::Volume { ref mut offset } => {
+            }
+            Handle::Volume => {
                 //TODO: support other offsets?
-                if *offset == 0 {
+                if offset == 0 {
                     let value = str::from_utf8(buf)
                         .map_err(|_| Error::new(EINVAL))?
                         .trim()
@@ -144,14 +149,13 @@ impl SchemeBlockMut for AudioScheme {
                         .map_err(|_| Error::new(EINVAL))?;
                     if value >= 0 && value <= 100 {
                         self.volume = value;
-                        *offset += buf.len();
-                        Ok(Some(buf.len()))
+                        Ok(buf.len())
                     } else {
                         Err(Error::new(EINVAL))
                     }
                 } else {
                     // EOF
-                    Ok(Some(0))
+                    Ok(0)
                 }
             }
         }

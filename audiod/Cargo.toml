@@ -2,11 +2,13 @@
 name = "audiod"
 version = "0.1.0"
 authors = ["Jeremy Soller <jackpot51@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 redox-daemon = "0.1.2"
-redox_syscall = "0.4.1"
+redox_syscall = { version = "0.5", features = ["std"] }
 libc = "0.2"
-libredox = "0.0.3"
-redox-scheme = "0.1.0"
+libredox = { version = "0.1", features = ["mkns"] }
+redox-scheme = { git = "https://gitlab.redox-os.org/redox-os/redox-scheme.git" }
+anyhow = "1.0.97"
+ioslice = "0.6.0"
