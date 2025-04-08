@@ -1,4 +1,4 @@
-use std::{env, process};
+use std::{collections::VecDeque, env, process};
 
 mod filesystem;
 mod scheme;
@@ -32,9 +32,12 @@ fn main() {
             match request.kind() {
                 RequestKind::Call(call) => {
                     let response = call.handle_sync(&mut scheme);
+                    
+                    let mut res = VecDeque::new();
+                    res.push_back(response);
 
                     socket
-                        .write_responses(&[response], SignalBehavior::Restart)
+                        .write_responses(&mut res, SignalBehavior::Restart)
                         .expect("ramfs: failed to write next scheme response");
                 }
                 RequestKind::OnClose { id } => {

@@ -145,17 +145,49 @@ impl Scheme {
 
         Ok(Inode(inode))
     }
-}
 
-impl SchemeSync for Scheme {
-    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
-        let exists = self.filesystem.resolve(path, 0, 0).is_ok();
+    #[inline(always)]
+    fn open_internal(
+        &mut self,
+        base_inode: Option<usize>,
+        path: &str,
+        flags: usize,
+        fcntl_flags: Option<u32>,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        let resolved_path = if let Some(base_inode) = base_inode {
+            if path.starts_with('/') {
+                path.to_string()
+            } else {
+                let base_file = self
+                    .filesystem
+                    .files
+                    .get(&base_inode)
+                    .ok_or(Error::new(EBADFD))?;
+
+                if base_file.mode & MODE_TYPE != MODE_DIR {
+                    return Err(Error::new(ENOTDIR));
+                }
+
+                let mut buffer = Vec::new();
+                self.fpath(base_inode, buffer.as_mut_slice(), ctx)?;
+
+                let mut full_path = String::from_utf8_lossy(&buffer).into_owned();
+                full_path.push('/');
+                full_path.push_str(path);
+                full_path
+            }
+        } else {
+            path.to_string()
+        };
+
+        let exists = self.filesystem.resolve(&resolved_path, 0, 0).is_ok();
         if flags & O_CREAT != 0 && flags & O_EXCL != 0 && exists {
             return Err(Error::new(EEXIST));
         }
 
         let inode = if flags & O_CREAT != 0 && exists {
-            self.open_existing(path, flags, ctx.uid, ctx.gid)?.0
+            self.open_existing(&resolved_path, flags, ctx.uid, ctx.gid)?.0
         } else if flags & O_CREAT != 0 {
             if flags & O_STAT != 0 {
                 return Err(Error::new(EINVAL));
@@ -163,7 +195,7 @@ impl SchemeSync for Scheme {
 
             let (parent_dir_inode, new_name) = self
                 .filesystem
-                .resolve_except_last(path, ctx.uid, ctx.gid)?;
+                .resolve_except_last(&resolved_path, ctx.uid, ctx.gid)?;
             let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
 
             let current_time = filesystem::current_time();
@@ -232,12 +264,28 @@ impl SchemeSync for Scheme {
 
             new_inode_number
         } else {
-            self.open_existing(path, flags, ctx.uid, ctx.gid)?.0
+            self.open_existing(&resolved_path, flags, ctx.uid, ctx.gid)?.0
         };
         Ok(OpenResult::ThisScheme {
             number: inode,
             flags: NewFdFlags::POSITIONED,
         })
+    }
+}
+
+impl SchemeSync for Scheme {
+    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+        self.open_internal(None, path, flags, None, ctx)
+    }
+    fn openat(
+        &mut self,
+        fd: usize,
+        path: &str,
+        flags: usize,
+        fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        self.open_internal(Some(fd), path, flags, Some(fcntl_flags), ctx)
     }
     fn rmdir(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
         self.remove_dentry(path, ctx.uid, ctx.gid, true)
