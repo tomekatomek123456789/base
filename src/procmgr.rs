@@ -141,12 +141,13 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             let _ = syscall::read(*thread.status_hndl, &mut buf).unwrap();
             let status = usize::from_ne_bytes(buf);
 
-            log::trace!("STATUS {status}");
+            log::trace!("--STATUS {status}");
 
             if status != ContextStatus::Dead as usize {
                 // spurious event
                 continue;
             }
+            log::trace!("--THREAD DIED {}, {}", event.data, thread.pid.0);
 
             if let Err(err) = scheme.queue.unsubscribe(event.data, event.data) {
                 log::error!("failed to unsubscribe from fd {}", event.data);
@@ -157,7 +158,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             if matches!(proc.status, ProcessStatus::Exiting { .. }) {
                 log::trace!("WAKING UP {}", proc.awaiting_threads_term.len(),);
                 awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
-            } else {
+            } else if proc.threads.is_empty() {
                 let internal_id = scheme.next_internal_id;
                 scheme.next_internal_id += 1;
                 let Entry::Vacant(entry) = states.entry(VirtualId::InternalId(internal_id)) else {
@@ -1085,10 +1086,12 @@ impl<'a> ProcScheme<'a> {
         }
 
         let proc_rc = self.processes.get(&this_pid).ok_or(Error::new(ESRCH))?;
+
+        log::trace!("WAITPID {target:?}");
+        log::trace!("PROCS {:#?}", self.processes);
+
         let mut proc_guard = proc_rc.borrow_mut();
         let proc = &mut *proc_guard;
-
-        log::trace!("WAITPID");
 
         let recv_nonblock = |waitpid: &mut BTreeMap<WaitpidKey, (ProcessId, WaitpidStatus)>,
                              key: &WaitpidKey|
@@ -1394,7 +1397,7 @@ impl<'a> ProcScheme<'a> {
                             },
                             (current_pid, WaitpidStatus::Terminated { signal, status }),
                         );
-                        //log::trace!("AWAKING WAITPID {:?}", parent.waitpid_waiting);
+                        log::trace!("AWAKING WAITPID {:?}", parent.waitpid_waiting);
                         // TODO: inefficient
                         awoken.extend(parent.waitpid_waiting.drain(..));
                     }
@@ -1471,7 +1474,7 @@ impl<'a> ProcScheme<'a> {
         mode: KillMode,
         awoken: &mut VecDeque<VirtualId>,
     ) -> Result<()> {
-        log::debug!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
+        log::trace!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
         let mut num_succeeded = 0;
 
         let mut killed_self = false; // TODO
@@ -1499,7 +1502,7 @@ impl<'a> ProcScheme<'a> {
                     .pgid,
             ),
         };
-        log::debug!("match group {match_grp:?}");
+        log::trace!("match group {match_grp:?}");
 
         for (pid, proc_rc) in self.processes.iter() {
             if match_grp.map_or(false, |g| proc_rc.borrow().pgid != g) {
