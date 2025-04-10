@@ -1536,7 +1536,7 @@ impl<'a> ProcScheme<'a> {
         is_sigchld_to_parent: bool,
         awoken: &mut VecDeque<VirtualId>,
     ) -> Result<()> {
-        log::debug!("SEND_SIG(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
+        log::trace!("SEND_SIG(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
         let sig = usize::from(signal);
         debug_assert!(sig <= 64);
         let sig_group = (sig - 1) / 32;
@@ -1582,7 +1582,7 @@ impl<'a> ProcScheme<'a> {
             let target_proc = &mut *target_proc;
 
             let Some(ref sig_pctl) = target_proc.sig_pctl else {
-                log::debug!("No pctl {caller_pid:?} => {target_pid:?}");
+                log::trace!("No pctl {caller_pid:?} => {target_pid:?}");
                 return SendResult::Invalid;
             };
 
@@ -1676,7 +1676,7 @@ impl<'a> ProcScheme<'a> {
                     KillTarget::Thread(ref thread_rc) => {
                         let thread = thread_rc.borrow();
                         let Some(ref tctl) = thread.sig_ctrl else {
-                            log::debug!("No tctl");
+                            log::trace!("No tctl");
                             return SendResult::Invalid;
                         };
 
@@ -1698,7 +1698,7 @@ impl<'a> ProcScheme<'a> {
                         match mode {
                             KillMode::Queued(arg) => {
                                 if sig_group != 1 || sig_idx < 32 || sig_idx >= 64 {
-                                    log::debug!("Out of range");
+                                    log::trace!("Out of range");
                                     return SendResult::Invalid;
                                 }
                                 let rtidx = sig_idx - 32;
@@ -1729,7 +1729,7 @@ impl<'a> ProcScheme<'a> {
                                 }
 
                                 if sig_group != 0 {
-                                    log::debug!("Invalid sig group");
+                                    log::trace!("Invalid sig group");
                                     return SendResult::Invalid;
                                 }
                                 sig_pctl.sender_infos[sig_idx]
@@ -1773,7 +1773,7 @@ impl<'a> ProcScheme<'a> {
             SendResult::Succeeded => (),
             SendResult::FullQ => return Err(Error::new(EAGAIN)),
             SendResult::Invalid => {
-                log::debug!("Invalid signal configuration for {target_pid:?}");
+                log::trace!("Invalid signal configuration for {target_pid:?}");
                 return Err(Error::new(EINVAL));
             }
             SendResult::SucceededSigchld {
