@@ -1555,7 +1555,11 @@ impl<'a> ProcScheme<'a> {
     ) -> Result<()> {
         log::trace!("SEND_SIG(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
         let sig = usize::from(signal);
-        debug_assert!(sig <= 64);
+
+        if sig > 64 {
+            return Err(Error::new(EINVAL));
+        }
+
         let sig_group = (sig - 1) / 32;
         let sig_idx = sig - 1;
 
