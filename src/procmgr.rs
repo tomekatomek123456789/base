@@ -398,6 +398,7 @@ const INIT_PID: ProcessId = ProcessId(1);
 
 struct ProcScheme<'a> {
     processes: HashMap<ProcessId, Rc<RefCell<Process>>, DefaultHashBuilder>,
+    groups: HashMap<ProcessId, Rc<RefCell<Pgrp>>>,
     sessions: HashSet<ProcessId, DefaultHashBuilder>,
     handles: Slab<Handle>,
 
@@ -410,6 +411,10 @@ struct ProcScheme<'a> {
 
     queue: &'a RawEventQueue,
     auth: &'a FdGuard,
+}
+#[derive(Debug, Default)]
+struct Pgrp {
+    processes: Vec<Weak<RefCell<Process>>>,
 }
 #[derive(Clone, Copy, Debug)]
 enum WaitpidStatus {
@@ -476,6 +481,7 @@ impl<'a> ProcScheme<'a> {
     pub fn new(auth: &'a FdGuard, queue: &'a RawEventQueue) -> ProcScheme<'a> {
         ProcScheme {
             processes: HashMap::new(),
+            groups: HashMap::new(),
             sessions: HashSet::new(),
             thread_lookup: HashMap::new(),
             handles: Slab::new(),
@@ -519,31 +525,35 @@ impl<'a> ProcScheme<'a> {
                     sig_ctrl: None,
                 }));
                 let thread_weak = Rc::downgrade(&thread);
-                self.processes.insert(
+                let process = Rc::new(RefCell::new(Process {
+                    threads: vec![thread],
+                    ppid: INIT_PID,
+                    sid: INIT_PID,
+                    pgid: INIT_PID,
+                    ruid: 0,
+                    euid: 0,
+                    suid: 0,
+                    rgid: 0,
+                    egid: 0,
+                    sgid: 0,
+                    rns: 1,
+                    ens: 1,
+
+                    status: ProcessStatus::PossiblyRunnable,
+                    awaiting_threads_term: Vec::new(),
+                    waitpid: BTreeMap::new(),
+                    waitpid_waiting: VecDeque::new(),
+
+                    sig_pctl: None,
+                    rtqs: Vec::new(),
+                }));
+                self.groups.insert(
                     INIT_PID,
-                    Rc::new(RefCell::new(Process {
-                        threads: vec![thread],
-                        ppid: INIT_PID,
-                        sid: INIT_PID,
-                        pgid: INIT_PID,
-                        ruid: 0,
-                        euid: 0,
-                        suid: 0,
-                        rgid: 0,
-                        egid: 0,
-                        sgid: 0,
-                        rns: 1,
-                        ens: 1,
-
-                        status: ProcessStatus::PossiblyRunnable,
-                        awaiting_threads_term: Vec::new(),
-                        waitpid: BTreeMap::new(),
-                        waitpid_waiting: VecDeque::new(),
-
-                        sig_pctl: None,
-                        rtqs: Vec::new(),
+                    Rc::new(RefCell::new(Pgrp {
+                        processes: vec![Rc::downgrade(&process)],
                     })),
                 );
+                self.processes.insert(INIT_PID, process);
                 self.sessions.insert(INIT_PID);
 
                 self.thread_lookup.insert(fd_out, thread_weak);
@@ -604,33 +614,38 @@ impl<'a> ProcScheme<'a> {
             sig_ctrl: None, // TODO
         }));
         let thread_weak = Rc::downgrade(&thread);
+        let new_process = Rc::new(RefCell::new(Process {
+            threads: vec![thread],
+            ppid: parent_pid,
+            pgid,
+            sid,
+            ruid,
+            euid,
+            suid,
+            rgid,
+            egid,
+            sgid,
+            rns,
+            ens,
 
-        self.processes.insert(
-            child_pid,
-            Rc::new(RefCell::new(Process {
-                threads: vec![thread],
-                ppid: parent_pid,
-                pgid,
-                sid,
-                ruid,
-                euid,
-                suid,
-                rgid,
-                egid,
-                sgid,
-                rns,
-                ens,
+            status: ProcessStatus::PossiblyRunnable,
+            awaiting_threads_term: Vec::new(),
 
-                status: ProcessStatus::PossiblyRunnable,
-                awaiting_threads_term: Vec::new(),
+            waitpid: BTreeMap::new(),
+            waitpid_waiting: VecDeque::new(),
 
-                waitpid: BTreeMap::new(),
-                waitpid_waiting: VecDeque::new(),
+            sig_pctl: None, // TODO
+            rtqs: Vec::new(),
+        }));
 
-                sig_pctl: None, // TODO
-                rtqs: Vec::new(),
-            })),
-        );
+        if let Some(group) = self.groups.get(&pgid) {
+            group
+                .borrow_mut()
+                .processes
+                .push(Rc::downgrade(&new_process));
+        }
+
+        self.processes.insert(child_pid, new_process);
         self.thread_lookup.insert(thread_ident, thread_weak);
         Ok(child_pid)
     }
@@ -760,7 +775,7 @@ impl<'a> ProcScheme<'a> {
             Handle::Init => Err(Error::new(EBADF)),
         }
     }
-    pub fn on_call(
+    fn on_call(
         &mut self,
         state: VacantEntry<VirtualId, PendingState, DefaultHashBuilder>,
         mut op: OpCall,
@@ -910,11 +925,7 @@ impl<'a> ProcScheme<'a> {
             }
         }
     }
-    pub fn on_getpgid(
-        &mut self,
-        caller_pid: ProcessId,
-        target_pid: ProcessId,
-    ) -> Result<ProcessId> {
+    fn on_getpgid(&mut self, caller_pid: ProcessId, target_pid: ProcessId) -> Result<ProcessId> {
         let caller_proc = self
             .processes
             .get(&caller_pid)
@@ -934,7 +945,7 @@ impl<'a> ProcScheme<'a> {
 
         Ok(target_proc.pgid)
     }
-    pub fn on_setsid(&mut self, caller_pid: ProcessId) -> Result<()> {
+    fn on_setsid(&mut self, caller_pid: ProcessId) -> Result<()> {
         // TODO: more efficient?
         // POSIX: any other process's pgid matches the caller pid
         if self
@@ -945,24 +956,26 @@ impl<'a> ProcScheme<'a> {
             return Err(Error::new(EPERM));
         }
 
-        let mut caller_proc = self
-            .processes
-            .get(&caller_pid)
-            .ok_or(Error::new(ESRCH))?
-            .borrow_mut();
+        let caller_proc_rc = self.processes.get(&caller_pid).ok_or(Error::new(ESRCH))?;
+        let mut caller_proc = caller_proc_rc.borrow_mut();
 
         // POSIX: already a process group leader
         if caller_proc.pgid == caller_pid {
             return Err(Error::new(EPERM));
         }
 
-        caller_proc.pgid = caller_pid;
         caller_proc.sid = caller_pid;
+        Self::set_pgid(
+            caller_proc_rc,
+            &mut *caller_proc,
+            &mut self.groups,
+            caller_pid,
+        )?;
 
         // TODO: Remove controlling terminal
         Ok(())
     }
-    pub fn on_getsid(&mut self, caller_pid: ProcessId, req_pid: ProcessId) -> Result<ProcessId> {
+    fn on_getsid(&mut self, caller_pid: ProcessId, req_pid: ProcessId) -> Result<ProcessId> {
         let caller_proc = self
             .processes
             .get(&caller_pid)
@@ -982,7 +995,7 @@ impl<'a> ProcScheme<'a> {
 
         Ok(requested_proc.sid)
     }
-    pub fn on_setpgid(
+    fn on_setpgid(
         &mut self,
         caller_pid: ProcessId,
         target_pid: ProcessId,
@@ -993,17 +1006,48 @@ impl<'a> ProcScheme<'a> {
         let proc_rc = self.processes.get(&target_pid).ok_or(Error::new(ESRCH))?;
         let mut proc = proc_rc.borrow_mut();
 
+        if proc.pgid == new_pgid {
+            return Ok(());
+        }
+
         // Session leaders cannot have their pgid changed.
         if proc.sid == target_pid {
             return Err(Error::new(EPERM));
         }
 
         // TODO: other security checks
+        Self::set_pgid(proc_rc, &mut *proc, &mut self.groups, new_pgid)?;
 
+        Ok(())
+    }
+    fn set_pgid(
+        proc_rc: &Rc<RefCell<Process>>,
+        proc: &mut Process,
+        groups: &mut HashMap<ProcessId, Rc<RefCell<Pgrp>>>,
+        new_pgid: ProcessId,
+    ) -> Result<()> {
+        let old_pgid = proc.pgid;
+        assert_ne!(old_pgid, new_pgid);
+
+        let proc_weak = Rc::downgrade(&proc_rc);
+        let shall_remove = {
+            let mut old_group = groups.get(&old_pgid).ok_or(Error::new(ESRCH))?.borrow_mut();
+            old_group.processes.retain(|w| !Weak::ptr_eq(w, &proc_weak));
+            old_group.processes.is_empty()
+        };
+        if shall_remove {
+            groups.remove(&old_pgid);
+        }
+        groups
+            .entry(new_pgid)
+            .or_default()
+            .borrow_mut()
+            .processes
+            .push(proc_weak);
         proc.pgid = new_pgid;
         Ok(())
     }
-    pub fn on_exit_start(
+    fn on_exit_start(
         &mut self,
         pid: ProcessId,
         status: i32,
@@ -1068,7 +1112,7 @@ impl<'a> ProcScheme<'a> {
             awoken,
         )
     }
-    pub fn on_waitpid(
+    fn on_waitpid(
         &mut self,
         this_pid: ProcessId,
         target: WaitpidTarget,
@@ -1196,7 +1240,7 @@ impl<'a> ProcScheme<'a> {
             }
         }
     }
-    pub fn on_setresugid(&mut self, pid: ProcessId, raw_buf: &[u8]) -> Result<()> {
+    fn on_setresugid(&mut self, pid: ProcessId, raw_buf: &[u8]) -> Result<()> {
         let [new_ruid, new_euid, new_suid, new_rgid, new_egid, new_sgid] = {
             let raw_ids: [u32; 6] = plain::slice_from_bytes::<u32>(raw_buf)
                 .unwrap()
@@ -1278,7 +1322,7 @@ impl<'a> ProcScheme<'a> {
         }*/
         todo!()
     }
-    pub fn on_setrens(&mut self, pid: ProcessId, rns: Option<u32>, ens: Option<u32>) -> Result<()> {
+    fn on_setrens(&mut self, pid: ProcessId, rns: Option<u32>, ens: Option<u32>) -> Result<()> {
         let proc_rc = self.processes.get(&pid).ok_or(Error::new(EBADFD))?;
         let mut process = proc_rc.borrow_mut();
 
@@ -1337,7 +1381,7 @@ impl<'a> ProcScheme<'a> {
         }
         Ok(())
     }
-    pub fn work_on(
+    fn work_on(
         &mut self,
         mut state_entry: OccupiedEntry<VirtualId, PendingState, DefaultHashBuilder>,
         awoken: &mut VecDeque<VirtualId>,
@@ -1446,7 +1490,7 @@ impl<'a> ProcScheme<'a> {
         log::trace!("PROCESSES\n{:#?}", self.processes,);
         log::trace!("HANDLES\n{:#?}", self.handles,);
     }
-    pub fn on_kill_thread(
+    fn on_kill_thread(
         &mut self,
         thread: &Rc<RefCell<Thread>>,
         signal: u8,
@@ -1475,7 +1519,7 @@ impl<'a> ProcScheme<'a> {
             Ok(())
         }
     }
-    pub fn on_kill(
+    fn on_kill(
         &mut self,
         caller_pid: ProcessId,
         target: ProcKillTarget,
@@ -1543,7 +1587,7 @@ impl<'a> ProcScheme<'a> {
             Ok(())
         }
     }
-    pub fn on_send_sig(
+    fn on_send_sig(
         &self,
         caller_pid: ProcessId,
         target: KillTarget,
@@ -1601,10 +1645,10 @@ impl<'a> ProcScheme<'a> {
             let Some(nz_signal) = NonZeroU8::new(signal) else {
                 return SendResult::Succeeded;
             };
-            let mut target_proc = target_proc_rc.borrow_mut();
-            let target_proc = &mut *target_proc;
+            let mut target_proc_guard = target_proc_rc.borrow_mut();
+            let mut target_proc = &mut *target_proc_guard;
 
-            let Some(ref sig_pctl) = target_proc.sig_pctl else {
+            let Some(mut sig_pctl) = target_proc.sig_pctl.as_ref() else {
                 log::trace!("No pctl {caller_pid:?} => {target_pid:?}");
                 return SendResult::Invalid;
             };
@@ -1647,13 +1691,29 @@ impl<'a> ProcScheme<'a> {
                     pgid: target_proc.pgid,
                 };
             }
+            let is_conditional_stop = matches!(sig, SIGTTIN | SIGTTOU | SIGTSTP);
             if sig == SIGSTOP
-                || (matches!(sig, SIGTTIN | SIGTTOU | SIGTSTP)
+                || (is_conditional_stop
                     && target_proc
                         .sig_pctl
                         .as_ref()
                         .map_or(false, |proc| proc.signal_will_stop(sig)))
             {
+                if is_conditional_stop {
+                    let pgid = target_proc.pgid;
+                    drop(target_proc_guard);
+
+                    if self.pgrp_is_orphaned(pgid).unwrap_or(true) {
+                        // POSIX requires that processes in orphaned process groups never be stopped in
+                        // due to SIGTTIN/SIGTTOU/SIGTSTP.
+                        return SendResult::Succeeded;
+                    }
+
+                    target_proc_guard = target_proc_rc.borrow_mut();
+                    target_proc = &mut *target_proc_guard;
+                    sig_pctl = target_proc.sig_pctl.as_mut().expect("already checked");
+                }
+
                 target_proc.status = ProcessStatus::Stopped(sig);
 
                 for thread in &target_proc.threads {
@@ -1879,7 +1939,7 @@ impl<'a> ProcScheme<'a> {
             (buf.proc_control_addr % PAGE_SIZE) as u16,
         ])
     }
-    pub fn on_sync_sigtctl(thread: &mut Thread) -> Result<()> {
+    fn on_sync_sigtctl(thread: &mut Thread) -> Result<()> {
         log::trace!("Sync tctl {:?}", thread.pid);
         let sigcontrol_fd = FdGuard::new(syscall::dup(*thread.fd, b"sighandler")?);
         let [tctl_off, _] = Self::real_tctl_pctl_intra_page_offsets(&sigcontrol_fd)?;
@@ -1889,7 +1949,7 @@ impl<'a> ProcScheme<'a> {
             .replace(Page::map(&sigcontrol_fd, 0, tctl_off)?);
         Ok(())
     }
-    pub fn on_sync_sigpctl(&mut self, pid: ProcessId) -> Result<()> {
+    fn on_sync_sigpctl(&mut self, pid: ProcessId) -> Result<()> {
         log::trace!("Sync pctl {pid:?}");
         let mut proc = self
             .processes
@@ -1938,6 +1998,29 @@ impl<'a> ProcScheme<'a> {
         }
         dst.copy_from_slice(unsafe { plain::as_bytes(&front) });
         Ok(())
+    }
+    fn pgrp_is_orphaned(&self, grp: ProcessId) -> Option<bool> {
+        let group = self.groups.get(&grp)?.borrow();
+
+        let mut still_true = true;
+
+        for process_rc in group.processes.iter().filter_map(Weak::upgrade) {
+            let process = process_rc.borrow();
+            let Some(parent_rc) = self.processes.get(&process_rc.borrow().ppid) else {
+                // TODO: what to do here?
+                continue;
+            };
+            let parent = parent_rc.borrow();
+
+            // POSIX defines orphaned process groups as those where
+            //
+            // forall process in group,
+            //  process's parent pgid == process's pgid
+            //  OR
+            //  process's session id != process's session id
+            still_true &= parent.pgid == process.pgid || parent.sid != process.sid;
+        }
+        Some(still_true)
     }
 }
 #[derive(Clone, Copy, Debug)]
