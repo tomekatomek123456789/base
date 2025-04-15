@@ -6,8 +6,8 @@ use core::num::{NonZeroU8, NonZeroUsize};
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::sync::atomic::Ordering;
-use core::task::Poll;
 use core::task::Poll::*;
+use core::task::{Context, Poll};
 
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::VecDeque;
@@ -28,11 +28,11 @@ use redox_scheme::{
 use slab::Slab;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    sig_bit, ContextStatus, ContextVerb, Error, Event, EventFlags, FobtainFdFlags, MapFlags,
-    ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol, EAGAIN,
-    EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM, ERESTART,
-    ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE, SIGCHLD, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP,
-    SIGTTIN, SIGTTOU,
+    sig_bit, ContextStatus, ContextVerb, CtxtStsBuf, Error, Event, EventFlags, FobtainFdFlags,
+    MapFlags, ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
+    EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM,
+    ERESTART, ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE, SIGCHLD, SIGCONT, SIGKILL,
+    SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -137,16 +137,24 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             };
             let mut proc = proc_rc.borrow_mut();
             log::trace!("THREAD EVENT FROM {}, {}", event.data, thread.pid.0);
-            let mut buf = 0_usize.to_ne_bytes();
-            let _ = syscall::read(*thread.status_hndl, &mut buf).unwrap();
-            let status = usize::from_ne_bytes(buf);
+            let mut sts_buf = CtxtStsBuf::default();
+            let _ = syscall::read(*thread.status_hndl, &mut sts_buf).unwrap();
 
-            log::trace!("--STATUS {status}");
-
-            if status != ContextStatus::Dead as usize {
+            let status = if sts_buf.status == ContextStatus::Dead as usize {
+                // dont-care, already called explicit exit()
+                0
+            } else if sts_buf.status == ContextStatus::ForceKilled as usize {
+                // TODO: "killed by SIGKILL"
+                1
+            } else if sts_buf.status == ContextStatus::UnhandledExcp as usize {
+                // TODO: translate arch-specific exception kind
+                // into signal (SIGSEGV, SIGBUS, SIGILL, SIGFPE)
+                1
+            } else {
                 // spurious event
                 continue;
-            }
+            };
+
             log::trace!("--THREAD DIED {}, {}", event.data, thread.pid.0);
 
             if let Err(err) = scheme.queue.unsubscribe(event.data, event.data) {
@@ -167,9 +175,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
                 };
                 drop(thread);
                 drop(proc);
-                let Pending =
-                    scheme.on_exit_start(pid, 0 /* TODO */, entry, &mut awoken, None)
-                else {
+                let Pending = scheme.on_exit_start(pid, status, entry, &mut awoken, None) else {
                     unreachable!("not possible with tag=None");
                 };
             }
