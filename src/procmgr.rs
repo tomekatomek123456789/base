@@ -134,7 +134,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
             let thread = thread_rc.borrow();
             let pid = thread.pid;
             let Some(proc_rc) = scheme.processes.get(&pid) else {
-                // TODO?
+                // TODO(err)?
                 continue;
             };
             let mut proc = proc_rc.borrow_mut();
@@ -167,7 +167,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
 
             if matches!(proc.status, ProcessStatus::Exiting { .. }) {
                 log::trace!("WAKING UP {}", proc.awaiting_threads_term.len(),);
-                awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO: inefficient
+                awoken.extend(proc.awaiting_threads_term.drain(..)); // TODO(opt)
             } else if proc.threads.is_empty() {
                 let internal_id = scheme.next_internal_id;
                 scheme.next_internal_id += 1;
@@ -450,7 +450,7 @@ enum WaitpidTarget {
     AnyChild,
     AnyGroupMember,
 }
-// TODO: Add 'syscall' backend for redox-event so it can act both as library-ABI frontend and
+// TODO(feat): Add 'syscall' backend for redox-event so it can act both as library-ABI frontend and
 // backend
 struct RawEventQueue(FdGuard);
 impl RawEventQueue {
@@ -1132,7 +1132,7 @@ impl<'a> ProcScheme<'a> {
             WaitpidTarget::AnyChild | WaitpidTarget::AnyGroupMember
         ) {
             // Check for existence of child.
-            // TODO: inefficient, keep refcount?
+            // TODO(opt): inefficient, keep refcount?
             if !self.processes.values().any(|p| p.borrow().ppid == this_pid) {
                 return Ready(Err(Error::new(ECHILD)));
             }
@@ -1445,7 +1445,7 @@ impl<'a> ProcScheme<'a> {
                     let (ppid, pgid) = (proc.ppid, proc.pgid);
                     if let Some(parent_rc) = self.processes.get(&ppid) {
                         let mut parent = parent_rc.borrow_mut();
-                        // TODO: transfer children to parent, and all of self.waitpid
+                        // TODO(posix): transfer children to parent, and all of self.waitpid
                         parent.waitpid.insert(
                             WaitpidKey {
                                 pid: Some(current_pid),
@@ -1454,7 +1454,7 @@ impl<'a> ProcScheme<'a> {
                             (current_pid, WaitpidStatus::Terminated { signal, status }),
                         );
                         log::trace!("AWAKING WAITPID {:?}", parent.waitpid_waiting);
-                        // TODO: inefficient
+                        // TODO(opt): inefficient
                         awoken.extend(parent.waitpid_waiting.drain(..));
                     }
                     if let Some(tag) = tag {
@@ -1513,7 +1513,7 @@ impl<'a> ProcScheme<'a> {
 
         let is_sigchld_to_parent = false;
 
-        let caller_pid = thread.borrow().pid; // TODO: allow this to be specified?
+        let caller_pid = thread.borrow().pid; // TODO(feat): allow this to be specified?
 
         self.on_send_sig(
             caller_pid,
@@ -1628,7 +1628,12 @@ impl<'a> ProcScheme<'a> {
 
         let sender = SenderInfo {
             pid: caller_pid.0 as u32,
-            ruid: 0, // TODO
+            ruid: self
+                .processes
+                .get(&caller_pid)
+                .ok_or(Error::new(ESRCH))?
+                .borrow()
+                .ruid,
         };
 
         enum SendResult {
@@ -1650,7 +1655,7 @@ impl<'a> ProcScheme<'a> {
             // XXX: It's not currently possible for procmgr to know what thread called, so the
             // EINTR will be coarser. That shouldn't affect program logic though, since the
             // trampoline always checks the masks anyway.
-            // TODO: allow regular kill (alongside thread-kill) to operate on *thread fds*?
+            // TODO(feat): allow regular kill (alongside thread-kill) to operate on *thread fds*?
             let is_self = target_pid == caller_pid;
 
             // If sig = 0, test that process exists and can be signalled, but don't send any
@@ -1804,7 +1809,7 @@ impl<'a> ProcScheme<'a> {
                                 }
                                 let rtq = target_proc.rtqs.get_mut(rtidx).unwrap();
 
-                                // TODO: configurable limit?
+                                // TODO(feat): configurable limit?
                                 if rtq.len() > 32 {
                                     return SendResult::FullQ;
                                 }
@@ -1897,7 +1902,7 @@ impl<'a> ProcScheme<'a> {
                     );
                     awoken.extend(parent.waitpid_waiting.drain(..));
                 }
-                // TODO: Just ignore EINVAL (missing signal config), otherwise handle error?
+                // TODO(err): Just ignore EINVAL (missing signal config), otherwise handle error?
                 if ppid != INIT_PID {
                     let _ = self.on_send_sig(
                         INIT_PID, // caller, TODO?
@@ -1927,7 +1932,7 @@ impl<'a> ProcScheme<'a> {
                     awoken.extend(parent.waitpid_waiting.drain(..));
                 }
                 // POSIX XSI allows but does not require SIGCONT to send signals to the parent.
-                // TODO: Just ignore EINVAL (missing signal config), otherwise handle error?
+                // TODO(err): Just ignore EINVAL (missing signal config), otherwise handle error?
                 if ppid != INIT_PID {
                     let _ = self.on_send_sig(
                         INIT_PID, // caller, TODO?
@@ -2020,7 +2025,7 @@ impl<'a> ProcScheme<'a> {
         for process_rc in group.processes.iter().filter_map(Weak::upgrade) {
             let process = process_rc.borrow();
             let Some(parent_rc) = self.processes.get(&process_rc.borrow().ppid) else {
-                // TODO: what to do here?
+                // TODO(err): what to do here?
                 continue;
             };
             let parent = parent_rc.borrow();
