@@ -1660,6 +1660,7 @@ impl<'a> ProcScheme<'a> {
         };
 
         enum SendResult {
+            LacksPermission,
             Succeeded,
             SucceededSigchld {
                 orig_signal: NonZeroU8,
@@ -1673,6 +1674,14 @@ impl<'a> ProcScheme<'a> {
             FullQ,
             Invalid,
         }
+        let (caller_euid, caller_ruid) = {
+            let caller = self
+                .processes
+                .get(&caller_pid)
+                .ok_or(Error::new(ESRCH))?
+                .borrow();
+            (caller.euid, caller.ruid)
+        };
 
         let result = (|| {
             // XXX: It's not currently possible for procmgr to know what thread called, so the
@@ -1681,13 +1690,21 @@ impl<'a> ProcScheme<'a> {
             // TODO(feat): allow regular kill (alongside thread-kill) to operate on *thread fds*?
             let is_self = target_pid == caller_pid;
 
+            let mut target_proc_guard = target_proc_rc.borrow_mut();
+            let mut target_proc = &mut *target_proc_guard;
+
+            if caller_euid != 0
+                && caller_euid != target_proc.ruid
+                && caller_ruid != target_proc.ruid
+            {
+                return SendResult::LacksPermission;
+            }
+
             // If sig = 0, test that process exists and can be signalled, but don't send any
             // signal.
             let Some(nz_signal) = NonZeroU8::new(signal) else {
                 return SendResult::Succeeded;
             };
-            let mut target_proc_guard = target_proc_rc.borrow_mut();
-            let mut target_proc = &mut *target_proc_guard;
 
             let Some(mut sig_pctl) = target_proc.sig_pctl.as_ref() else {
                 log::trace!("No pctl {caller_pid:?} => {target_pid:?}");
@@ -1894,6 +1911,9 @@ impl<'a> ProcScheme<'a> {
         })();
 
         match result {
+            // TODO: succeed even if *some* (when group/all procs is specified) fail?
+            SendResult::LacksPermission => return Err(Error::new(EPERM)),
+
             SendResult::Succeeded => (),
             SendResult::FullQ => return Err(Error::new(EAGAIN)),
             SendResult::Invalid => {
