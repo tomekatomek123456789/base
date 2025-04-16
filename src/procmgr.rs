@@ -1095,7 +1095,7 @@ impl<'a> ProcScheme<'a> {
         // Forbid the caller from giving statuses corresponding to e.g. WIFCONTINUED which exit()
         // obviously can never be.
 
-        log::debug!("Killed with raw status {status:?}");
+        log::trace!("Killed with raw status {status:?}");
 
         // TODO: Are WIFEXITED and WIFSIGNALED mutually exclusive?
         let (status, signal) = if status & 0xff == status {
@@ -1570,7 +1570,7 @@ impl<'a> ProcScheme<'a> {
 
         let match_grp = match target {
             ProcKillTarget::SingleProc(pid) => {
-                return self.on_send_sig(
+                self.on_send_sig(
                     caller_pid,
                     KillTarget::Proc(ProcessId(pid)),
                     signal,
@@ -1578,7 +1578,12 @@ impl<'a> ProcScheme<'a> {
                     mode,
                     is_sigchld_to_parent,
                     awoken,
-                )
+                )?;
+                return if killed_self {
+                    Err(Error::new(ERESTART))
+                } else {
+                    Ok(())
+                };
             }
             ProcKillTarget::All => None,
             ProcKillTarget::ProcGroup(grp) => Some(ProcessId(grp)),
