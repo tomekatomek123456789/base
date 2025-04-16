@@ -19,7 +19,10 @@ use hashbrown::hash_map::{Entry, OccupiedEntry, VacantEntry};
 use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 
 use redox_rt::proc::FdGuard;
-use redox_rt::protocol::{ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, ThreadCall, WaitFlags};
+use redox_rt::protocol::{
+    ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, ThreadCall, WaitFlags, SIGCHLD, SIGCONT,
+    SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
+};
 use redox_scheme::scheme::{IntoTag, Op, OpCall};
 use redox_scheme::{
     CallerCtx, Id, OpenResult, Request, RequestKind, Response, SendFdRequest, SignalBehavior,
@@ -31,8 +34,7 @@ use syscall::{
     sig_bit, ContextStatus, ContextVerb, CtxtStsBuf, Error, Event, EventFlags, FobtainFdFlags,
     MapFlags, ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
     EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP, EPERM,
-    ERESTART, ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE, SIGCHLD, SIGCONT, SIGKILL,
-    SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
+    ERESTART, ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
