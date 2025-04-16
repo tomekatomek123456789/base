@@ -1178,11 +1178,17 @@ impl<'a> ProcScheme<'a> {
         };
 
         match target {
-            // TODO: not the same
             WaitpidTarget::AnyChild | WaitpidTarget::AnyGroupMember => {
-                if let Some((wid, (w_pid, status))) =
-                    proc.waitpid.first_key_value().map(|(k, v)| (*k, *v))
-                {
+                let kv = (if matches!(target, WaitpidTarget::AnyChild) {
+                    proc.waitpid.first_key_value()
+                } else {
+                    proc.waitpid.get_key_value(&WaitpidKey {
+                        pid: None,
+                        pgid: Some(proc.pgid),
+                    })
+                })
+                .map(|(k, v)| (*k, *v));
+                if let Some((wid, (w_pid, status))) = kv {
                     let _ = proc.waitpid.remove(&wid);
                     grim_reaper(w_pid, status).map(Ok)
                 } else if flags.contains(WaitFlags::WNOHANG) {
@@ -1399,7 +1405,6 @@ impl<'a> ProcScheme<'a> {
         let this_state = core::mem::replace(state, PendingState::Placeholder);
         match this_state {
             PendingState::Placeholder => return Pending, // unreachable!(),
-            // TODO
             PendingState::AwaitingThreadsTermination(current_pid, tag) => {
                 let Some(proc_rc) = self.processes.get(&current_pid) else {
                     return if let Some(tag) = tag {
@@ -1892,7 +1897,7 @@ impl<'a> ProcScheme<'a> {
                     );
                     awoken.extend(parent.waitpid_waiting.drain(..));
                 }
-                // TODO: Just ignore EINVAL (missing signal config)
+                // TODO: Just ignore EINVAL (missing signal config), otherwise handle error?
                 if ppid != INIT_PID {
                     let _ = self.on_send_sig(
                         INIT_PID, // caller, TODO?
@@ -1922,7 +1927,7 @@ impl<'a> ProcScheme<'a> {
                     awoken.extend(parent.waitpid_waiting.drain(..));
                 }
                 // POSIX XSI allows but does not require SIGCONT to send signals to the parent.
-                // TODO: Just ignore EINVAL (missing signal config)
+                // TODO: Just ignore EINVAL (missing signal config), otherwise handle error?
                 if ppid != INIT_PID {
                     let _ = self.on_send_sig(
                         INIT_PID, // caller, TODO?
