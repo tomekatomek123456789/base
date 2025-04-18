@@ -321,9 +321,9 @@ struct Process {
     rtqs: Vec<VecDeque<RtSigInfo>>,
 }
 #[derive(Copy, Clone, Debug)]
-pub struct WaitpidKey {
-    pub pid: Option<ProcessId>,
-    pub pgid: Option<ProcessId>,
+struct WaitpidKey {
+    pid: Option<ProcessId>,
+    pgid: Option<ProcessId>,
 }
 
 // TODO: Is this valid? (transitive?)
@@ -890,6 +890,10 @@ impl<'a> ProcScheme<'a> {
                             op,
                         ))
                     }
+                    ProcCall::Getppid => Ready(Response::new(
+                        self.on_getppid(fd_pid).map(|ProcessId(p)| p),
+                        op,
+                    )),
                     ProcCall::Setsid => Ready(Response::new(
                         self.on_setsid(fd_pid, awoken).map(|()| 0),
                         op,
@@ -994,6 +998,17 @@ impl<'a> ProcScheme<'a> {
 
         // TODO: Remove controlling terminal
         Ok(())
+    }
+    fn on_getppid(&mut self, caller_pid: ProcessId) -> Result<ProcessId> {
+        log::trace!("GETPPID {caller_pid:?}");
+        let ppid = self
+            .processes
+            .get(&caller_pid)
+            .ok_or(Error::new(ESRCH))?
+            .borrow()
+            .ppid;
+        log::trace!("GETPPID {caller_pid:?} -> {ppid:?}");
+        Ok(ppid)
     }
     fn on_getsid(&mut self, caller_pid: ProcessId, req_pid: ProcessId) -> Result<ProcessId> {
         let caller_proc = self
@@ -1528,10 +1543,25 @@ impl<'a> ProcScheme<'a> {
                     state_entry.remove();
 
                     proc.status = ProcessStatus::Exited { signal, status };
+
                     let (ppid, pgid) = (proc.ppid, proc.pgid);
+                    drop(proc_guard);
+
                     if let Some(parent_rc) = self.processes.get(&ppid) {
                         let mut parent = parent_rc.borrow_mut();
-                        // TODO(posix): transfer children to parent, and all of self.waitpid
+
+                        // Transfer children to parent (TODO: to init)
+                        for child_rc in self
+                            .processes
+                            .values()
+                            .filter(|p| !Rc::ptr_eq(p, parent_rc))
+                            .filter(|p| p.borrow().ppid == current_pid)
+                        {
+                            let mut child = child_rc.borrow_mut();
+                            child.ppid = ppid;
+                            parent.waitpid.append(&mut child.waitpid);
+                        }
+
                         parent.waitpid.insert(
                             WaitpidKey {
                                 pid: Some(current_pid),
@@ -2165,12 +2195,12 @@ impl<'a> ProcScheme<'a> {
     }
 }
 #[derive(Clone, Copy, Debug)]
-pub enum KillMode {
+enum KillMode {
     Idempotent,
     Queued(RtSigInfo),
 }
 #[derive(Debug)]
-pub enum KillTarget {
+enum KillTarget {
     Proc(ProcessId),
     Thread(Rc<RefCell<Thread>>),
 }
