@@ -156,6 +156,7 @@ where
 #[derive(Default, Clone)]
 struct WaitHandle {
     until: Option<TimeSpec>,
+    cancelling: bool,
     packet: SyscallPacket,
 }
 
@@ -288,7 +289,13 @@ where
                 }
             }
             if packet.a == KSMSG_CANCEL {
-                println!("smolnetd: todo: handle cancellation");
+                if let Some(idx) = self
+                    .wait_queue
+                    .iter()
+                    .position(|q| q.packet.id == packet.b as u64)
+                {
+                    self.wait_queue[idx].cancelling = true;
+                }
                 continue;
             }
             if let Some(a) = self.handle(&mut packet) {
@@ -299,6 +306,7 @@ where
                     Ok(timeout) => {
                         self.wait_queue.push(WaitHandle {
                             until: timeout,
+                            cancelling: false,
                             packet,
                         });
                     }
@@ -340,6 +348,12 @@ where
                 packet.a = a;
                 self.scheme_file.write_all(&packet)?;
             } else {
+                if self.wait_queue[i].cancelling {
+                    self.wait_queue.remove(i);
+                    packet.a = (-syscall::ECANCELED) as usize;
+                    self.scheme_file.write_all(&packet)?;
+                    continue;
+                }
                 match self.wait_queue[i].until {
                     Some(until)
                         if (until.tv_sec < cur_time.tv_sec
@@ -573,12 +587,13 @@ where
             socket.close_file(&scheme_file, &mut self.scheme_data)?;
         }
 
-        self.wait_queue.retain(
+        // incorrect, and kernel can't send close until all references are gone
+        /*self.wait_queue.retain(
             |&WaitHandle {
                  packet: SyscallPacket { a, .. },
                  ..
              }| a != fd,
-        );
+        );*/
 
         let remove = match self.ref_counts.entry(socket_handle) {
             Entry::Vacant(_) => {

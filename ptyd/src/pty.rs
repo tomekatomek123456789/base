@@ -155,7 +155,7 @@ impl Pty {
             if isig {
                 if is_cc(b, VINTR) {
                     if self.pgrp != 0 {
-                        let _ = syscall::kill(-(self.pgrp as isize) as usize, syscall::SIGINT);
+                        let _ = libredox::call::kill(-(self.pgrp as isize) as usize, libredox::flag::SIGINT as _);
                     }
 
                     b = 0;
@@ -163,7 +163,7 @@ impl Pty {
 
                 if is_cc(b, VQUIT) {
                     if self.pgrp != 0 {
-                        let _ = syscall::kill(-(self.pgrp as isize) as usize, syscall::SIGQUIT);
+                        let _ = libredox::call::kill(-(self.pgrp as isize) as usize, libredox::flag::SIGQUIT as _);
                     }
 
                     b = 0;
@@ -171,7 +171,7 @@ impl Pty {
 
                 if is_cc(b, VSUSP) {
                     if self.pgrp != 0 {
-                        let _ = syscall::kill(-(self.pgrp as isize) as usize, syscall::SIGTSTP);
+                        let _ = libredox::call::kill(-(self.pgrp as isize) as usize, libredox::flag::SIGTSTP as _);
                     }
 
                     b = 0;

@@ -43,19 +43,12 @@ impl Resource for PtyPgrp {
     fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let pty = pty_lock.borrow();
-            let pgrp: &[u8] = unsafe {
-                slice::from_raw_parts(
-                    &pty.pgrp as *const usize as *const u8,
-                    mem::size_of::<usize>(),
-                )
-            };
 
-            let mut i = 0;
-            while i < buf.len() && i < pgrp.len() {
-                buf[i] = pgrp[i];
-                i += 1;
-            }
-            Ok(Some(i))
+            //println!("READ PGRP {}: {}", pty.id, pty.pgrp);
+            let dst_buf = buf.get_mut(..4).and_then(|b| <&mut [u8; 4]>::try_from(b).ok()).ok_or(Error::new(EBADF))?;
+            *dst_buf = (pty.pgrp as u32).to_ne_bytes();
+
+            Ok(Some(4))
         } else {
             Ok(Some(0))
         }
@@ -64,19 +57,12 @@ impl Resource for PtyPgrp {
     fn write(&mut self, buf: &[u8]) -> Result<Option<usize>> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
-            let pgrp: &mut [u8] = unsafe {
-                slice::from_raw_parts_mut(
-                    &mut pty.pgrp as *mut usize as *mut u8,
-                    mem::size_of::<usize>(),
-                )
-            };
 
-            let mut i = 0;
-            while i < buf.len() && i < pgrp.len() {
-                pgrp[i] = buf[i];
-                i += 1;
-            }
-            Ok(Some(i))
+            let new_pgrp = u32::from_ne_bytes(buf.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).ok_or(Error::new(EBADF))?);
+            pty.pgrp = new_pgrp as usize;
+            //println!("WRITE PGRP {}: {} => {}", pty.id, pty.pgrp, new_pgrp);
+
+            Ok(Some(4))
         } else {
             Err(Error::new(EPIPE))
         }
