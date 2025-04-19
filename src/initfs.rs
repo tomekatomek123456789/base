@@ -9,14 +9,9 @@ use hashbrown::HashMap;
 use redox_initfs::{types::Timespec, InitFs, Inode, InodeDir, InodeKind, InodeStruct};
 
 use redox_path::canonicalize_to_standard;
-use redox_scheme::CallerCtx;
-use redox_scheme::OpenResult;
-use redox_scheme::RequestKind;
-use redox_scheme::SchemeMut;
+use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, RequestKind};
 
-use redox_scheme::SignalBehavior;
-use redox_scheme::Socket;
-use redox_scheme::V2;
+use redox_scheme::{SignalBehavior, Socket};
 use syscall::data::Stat;
 use syscall::dirent::DirEntry;
 use syscall::dirent::DirentBuf;
@@ -93,8 +88,8 @@ fn inode_len(inode: InodeStruct<'static>) -> Result<usize> {
     })
 }
 
-impl SchemeMut for InitFsScheme {
-    fn xopen(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+impl SchemeSync for InitFsScheme {
+    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
         let mut components = path
             // trim leading and trailing slash
             .trim_matches('/')
@@ -180,6 +175,7 @@ impl SchemeMut for InitFsScheme {
         buffer: &mut [u8],
         offset: u64,
         _fcntl_flags: u32,
+        _ctx: &CallerCtx,
     ) -> Result<usize> {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
@@ -248,19 +244,19 @@ impl SchemeMut for InitFsScheme {
         Ok(buf)
     }
 
-    fn fsize(&mut self, id: usize) -> Result<u64> {
+    fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
 
         Ok(inode_len(Self::get_inode(&self.fs, handle.inode)?)? as u64)
     }
 
-    fn fcntl(&mut self, id: usize, _cmd: usize, _arg: usize) -> Result<usize> {
+    fn fcntl(&mut self, id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
         let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 
         Ok(0)
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> Result<usize> {
+    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
         let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 
         // TODO: Copy scheme part in kernel
@@ -275,7 +271,7 @@ impl SchemeMut for InitFsScheme {
         Ok(scheme_bytes + path_bytes)
     }
 
-    fn fstat(&mut self, id: usize, stat: &mut Stat) -> Result<usize> {
+    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 
         let Timespec { sec, nsec } = self.fs.image_creation_time();
@@ -297,52 +293,51 @@ impl SchemeMut for InitFsScheme {
         stat.st_mtime = sec.get();
         stat.st_mtime_nsec = nsec.get();
 
-        Ok(0)
+        Ok(())
     }
 
-    fn fsync(&mut self, id: usize) -> Result<usize> {
+    fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
         if !self.handles.contains_key(&id) {
             return Err(Error::new(EBADF));
         }
 
-        Ok(0)
-    }
-
-    fn close(&mut self, id: usize) -> Result<usize> {
-        let _ = self.handles.remove(&id).ok_or(Error::new(EBADF))?;
-        Ok(0)
+        Ok(())
     }
 }
 
 pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
     let mut scheme = InitFsScheme::new(bytes);
 
-    let socket = Socket::<V2>::create("initfs").expect("failed to open initfs scheme socket");
+    let socket = Socket::create("initfs").expect("failed to open initfs scheme socket");
 
     let _ = syscall::write(sync_pipe, &[0]);
     let _ = syscall::close(sync_pipe);
 
     loop {
-        let RequestKind::Call(req) = (match socket
+        let Some(req) = socket
             .next_request(SignalBehavior::Restart)
             .expect("bootstrap: failed to read scheme request from kernel")
-        {
-            Some(req) => req.kind(),
-            None => break,
-        }) else {
-            continue;
-        };
-        let resp = req.handle_scheme_mut(&mut scheme);
-
-        if !socket
-            .write_response(resp, SignalBehavior::Restart)
-            .expect("bootstrap: failed to write scheme response to kernel")
-        {
+        else {
             break;
+        };
+        match req.kind() {
+            RequestKind::Call(req) => {
+                let resp = req.handle_sync(&mut scheme);
+
+                if !socket
+                    .write_response(resp, SignalBehavior::Restart)
+                    .expect("bootstrap: failed to write scheme response to kernel")
+                {
+                    break;
+                }
+            }
+            RequestKind::OnClose { id } => {
+                scheme.handles.remove(&id);
+            }
+            _ => (),
         }
     }
 
-    syscall::exit(0).expect("initfs: failed to exit");
     unreachable!()
 }
 

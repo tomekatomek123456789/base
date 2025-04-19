@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "arrayvec"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+
+[[package]]
 name = "autocfg"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -18,19 +24,29 @@ checksum = "5c8214115b7bf84099f1309324e63141d4c5d7cc26862f97a0a857dbefe165bd"
 name = "bootstrap"
 version = "0.0.0"
 dependencies = [
+ "arrayvec",
  "hashbrown",
  "linked_list_allocator",
+ "log",
+ "plain",
  "redox-initfs",
  "redox-path",
  "redox-rt",
  "redox-scheme",
  "redox_syscall",
+ "slab",
 ]
+
+[[package]]
+name = "foldhash"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc#5ea71a02c7f9e436ed0dcf53bc7a5bdb311279cf"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#040009ab3d384e75d62b7e7dd3176d910203501a"
 
 [[package]]
 name = "goblin"
@@ -45,15 +61,18 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.14.5"
+version = "0.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
+checksum = "bf151400ff0baff5465007dd2f3e717f3fe502074ca563069ce3a6629d07b289"
+dependencies = [
+ "foldhash",
+]
 
 [[package]]
 name = "libc"
-version = "0.2.171"
+version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6"
+checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "libredox"
@@ -99,9 +118,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.94"
+version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31971752e70b8b2686d7e46ec17fb38dad4051d94024c88df49b667caea9c84"
+checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
 dependencies = [
  "unicode-ident",
 ]
@@ -132,7 +151,7 @@ checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc#5ea71a02c7f9e436ed0dcf53bc7a5bdb311279cf"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#040009ab3d384e75d62b7e7dd3176d910203501a"
 dependencies = [
  "bitflags",
  "generic-rt",
@@ -143,8 +162,9 @@ dependencies = [
 
 [[package]]
 name = "redox-scheme"
-version = "0.2.3"
-source = "git+https://gitlab.redox-os.org/redox-os/redox-scheme.git?tag=v0.2.3#dc6a047842353ed49c1788396d9135de2c3d7382"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6469e083bf650071e9a80003c53171dfccc5ef17ae1d24972396c3c792e7c709"
 dependencies = [
  "libredox",
  "redox_syscall",
@@ -152,9 +172,8 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b8c0c260b63a8219631167be35e6a988e9554dbd323f8bd08439c8ed1302bd1"
+version = "0.5.11"
+source = "git+https://gitlab.redox-os.org/redox-os/syscall.git?branch=master#8f646a63ac9c3aa532a37ddfdc136ec19878f0d6"
 dependencies = [
  "bitflags",
 ]
@@ -183,6 +202,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "slab"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f92a496fb766b417c996b9c5e57daf2f7ad3b0bebe1ccfca4856390e3d3bb67"
+dependencies = [
+ "autocfg",
 ]
 
 [[package]]

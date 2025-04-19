@@ -1,9 +1,5 @@
 use core::mem;
-use syscall::{
-    data::Map,
-    flag::MapFlags,
-    number::SYS_FMAP,
-};
+use syscall::{data::Map, flag::MapFlags, number::SYS_FMAP};
 
 pub const USERMODE_END: usize = 0x0000_8000_0000_0000;
 pub const STACK_START: usize = USERMODE_END - STACK_SIZE;
@@ -13,9 +9,9 @@ static MAP: Map = Map {
     offset: 0,
     size: STACK_SIZE,
     flags: MapFlags::PROT_READ
-            .union(MapFlags::PROT_WRITE)
-            .union(MapFlags::MAP_PRIVATE)
-            .union(MapFlags::MAP_FIXED_NOREPLACE),
+        .union(MapFlags::PROT_WRITE)
+        .union(MapFlags::MAP_PRIVATE)
+        .union(MapFlags::MAP_FIXED_NOREPLACE),
     address: STACK_START, // highest possible user address
 };
 

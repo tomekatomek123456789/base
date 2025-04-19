@@ -1,6 +1,6 @@
 #![no_std]
 #![allow(internal_features)]
-#![feature(asm_const, core_intrinsics, str_from_raw_parts, iter_intersperse)]
+#![feature(core_intrinsics, let_chains, iter_intersperse, str_from_raw_parts)]
 
 #[cfg(target_arch = "aarch64")]
 #[path = "aarch64.rs"]
@@ -20,9 +20,12 @@ pub mod arch;
 
 pub mod exec;
 pub mod initfs;
+pub mod procmgr;
 pub mod start;
 
 extern crate alloc;
+
+use core::cell::UnsafeCell;
 
 use syscall::data::Map;
 use syscall::flag::MapFlags;
@@ -51,15 +54,26 @@ struct Allocator;
 #[global_allocator]
 static ALLOCATOR: Allocator = Allocator;
 
-static mut HEAP: Option<linked_list_allocator::Heap> = None;
-static mut HEAP_TOP: usize = HEAP_OFF + SIZE;
+struct AllocStateInner {
+    heap: Option<linked_list_allocator::Heap>,
+    heap_top: usize,
+}
+struct AllocState(UnsafeCell<AllocStateInner>);
+unsafe impl Send for AllocState {}
+unsafe impl Sync for AllocState {}
+static ALLOC_STATE: AllocState = AllocState(UnsafeCell::new(AllocStateInner {
+    heap: None,
+    heap_top: HEAP_OFF + SIZE,
+}));
+
 const SIZE: usize = 1024 * 1024;
 const HEAP_INCREASE_BY: usize = SIZE;
 
 unsafe impl alloc::alloc::GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        let heap = HEAP.get_or_insert_with(|| {
-            HEAP_TOP = HEAP_OFF + SIZE;
+        let state = &mut (*ALLOC_STATE.0.get());
+        let heap = state.heap.get_or_insert_with(|| {
+            state.heap_top = HEAP_OFF + SIZE;
             let _ = syscall::fmap(
                 !0,
                 &Map {
@@ -88,7 +102,7 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
                     &Map {
                         offset: 0,
                         size: HEAP_INCREASE_BY,
-                        address: HEAP_TOP,
+                        address: state.heap_top,
                         flags: MapFlags::PROT_WRITE
                             | MapFlags::PROT_READ
                             | MapFlags::MAP_PRIVATE
@@ -97,14 +111,16 @@ unsafe impl alloc::alloc::GlobalAlloc for Allocator {
                 )
                 .expect("failed to extend heap");
                 heap.extend(HEAP_INCREASE_BY);
-                HEAP_TOP += HEAP_INCREASE_BY;
+                state.heap_top += HEAP_INCREASE_BY;
 
                 return self.alloc(layout);
             }
         }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
-        HEAP.as_mut()
+        (&mut *ALLOC_STATE.0.get())
+            .heap
+            .as_mut()
             .unwrap()
             .deallocate(core::ptr::NonNull::new(ptr).unwrap(), layout)
     }

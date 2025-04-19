@@ -78,8 +78,6 @@ pub unsafe extern "C" fn start() -> ! {
     )
     .expect("mprotect failed for rest of memory");
 
-    redox_rt::initialize_freestanding();
-
     // FIXME make the initfs read-only
 
     crate::exec::main();
