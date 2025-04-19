@@ -626,20 +626,6 @@ impl<'a> ProcScheme<'a> {
         } = *proc_guard.borrow();
 
         let new_ctxt_fd = FdGuard::new(syscall::dup(**self.auth, b"new-context")?);
-        let attr_fd = FdGuard::new(syscall::dup(
-            *new_ctxt_fd,
-            alloc::format!("auth-{}-attrs", **self.auth).as_bytes(),
-        )?);
-        let _ = syscall::write(
-            *attr_fd,
-            &ProcSchemeAttrs {
-                pid: child_pid.0 as u32,
-                euid,
-                egid,
-                ens,
-                debug_name: arraystring_to_bytes(name),
-            },
-        )?;
         let status_fd = FdGuard::new(syscall::dup(
             *new_ctxt_fd,
             alloc::format!("auth-{}-status", **self.auth).as_bytes(),
@@ -681,6 +667,12 @@ impl<'a> ProcScheme<'a> {
             sig_pctl: None, // TODO
             rtqs: Vec::new(),
         }));
+        if let Err(err) = new_process
+            .borrow_mut()
+            .sync_kernel_attrs(child_pid, self.auth)
+        {
+            log::warn!("Failed to set kernel attrs when forking: {err}");
+        }
 
         if let Some(group) = self.groups.get(&pgid) {
             group
@@ -700,6 +692,7 @@ impl<'a> ProcScheme<'a> {
 
         let ctxt_fd = FdGuard::new(syscall::dup(**self.auth, b"new-context")?);
 
+        // TODO: sync_kernel_attrs?
         let attr_fd = FdGuard::new(syscall::dup(
             *ctxt_fd,
             alloc::format!("auth-{}-attrs", **self.auth).as_bytes(),
@@ -1478,6 +1471,9 @@ impl<'a> ProcScheme<'a> {
         if let Some(new_sgid) = new_sgid {
             proc.sgid = new_sgid;
         }
+        if let Err(err) = proc.sync_kernel_attrs(pid, self.auth) {
+            log::warn!("Failed to sync proc attrs in setresugid: {err}");
+        }
         Ok(())
     }
     fn ancestors(&self, pid: ProcessId) -> impl Iterator<Item = ProcessId> + '_ {
@@ -1553,9 +1549,13 @@ impl<'a> ProcScheme<'a> {
         if setrns {
             process.rns = rns.unwrap();
         }
-
         if setens {
             process.ens = ens.unwrap();
+        }
+        if setrns || setens {
+            if let Err(err) = process.sync_kernel_attrs(pid, self.auth) {
+                log::warn!("Failed to sync kernel attrs in setrens: {err}");
+            }
         }
         Ok(())
     }
@@ -2185,6 +2185,9 @@ impl<'a> ProcScheme<'a> {
             .ok_or(Error::new(ESRCH))?
             .borrow_mut();
         proc.name = ArrayString::from_str(&new_name[..new_name.len().min(NAME_CAPAC)]).unwrap();
+        if let Err(err) = proc.sync_kernel_attrs(pid, self.auth) {
+            log::warn!("Failed to set kernel attrs when renaming proc: {err}");
+        }
         Ok(())
     }
     fn on_sync_sigtctl(thread: &mut Thread) -> Result<()> {
@@ -2343,4 +2346,27 @@ fn arraystring_to_bytes<const C: usize>(s: ArrayString<C>) -> [u8; C] {
     let min = buf.len().min(s.len());
     buf[..min].copy_from_slice(&s.as_bytes()[..min]);
     buf
+}
+impl Process {
+    fn sync_kernel_attrs(&mut self, my_pid: ProcessId, auth: &FdGuard) -> Result<()> {
+        // TODO: continue with other threads if one fails?
+        for thread_rc in &self.threads {
+            let thread = thread_rc.borrow();
+            let attr_fd = FdGuard::new(syscall::dup(
+                *thread.fd,
+                alloc::format!("auth-{}-attrs", **auth).as_bytes(),
+            )?);
+            let _ = syscall::write(
+                *attr_fd,
+                &ProcSchemeAttrs {
+                    pid: my_pid.0 as u32,
+                    euid: self.euid,
+                    egid: self.egid,
+                    ens: self.ens,
+                    debug_name: arraystring_to_bytes(self.name),
+                },
+            )?;
+        }
+        Ok(())
+    }
 }
