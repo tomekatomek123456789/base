@@ -46,7 +46,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#040009ab3d384e75d62b7e7dd3176d910203501a"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#696ae4eca1df5e3b76a57f62903ee1a94b9c6aa6"
 
 [[package]]
 name = "goblin"
@@ -151,7 +151,7 @@ checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#040009ab3d384e75d62b7e7dd3176d910203501a"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#696ae4eca1df5e3b76a57f62903ee1a94b9c6aa6"
 dependencies = [
  "bitflags",
  "generic-rt",
@@ -162,9 +162,9 @@ dependencies = [
 
 [[package]]
 name = "redox-scheme"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6469e083bf650071e9a80003c53171dfccc5ef17ae1d24972396c3c792e7c709"
+checksum = "a14f94bc95b388d8f40a61f25577863f1cf151aaf600a5b7778d1a2018ff7742"
 dependencies = [
  "libredox",
  "redox_syscall",

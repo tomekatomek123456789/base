@@ -35,7 +35,7 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{
     sig_bit, ContextStatus, ContextVerb, CtxtStsBuf, Error, Event, EventFlags, FobtainFdFlags,
     MapFlags, ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
-    EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP,
+    EACCES, EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP,
     EOWNERDEAD, EPERM, ERESTART, ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE,
 };
 
@@ -336,6 +336,7 @@ struct Process {
     ens: u32,
 
     status: ProcessStatus,
+    disabled_setpgid: bool,
 
     awaiting_threads_term: Vec<VirtualId>,
 
@@ -581,6 +582,7 @@ impl<'a> ProcScheme<'a> {
                     name: ArrayString::<32>::from_str("[init]").unwrap(),
 
                     status: ProcessStatus::PossiblyRunnable,
+                    disabled_setpgid: false,
                     awaiting_threads_term: Vec::new(),
                     waitpid: BTreeMap::new(),
                     waitpid_waiting: VecDeque::new(),
@@ -659,6 +661,7 @@ impl<'a> ProcScheme<'a> {
             name,
 
             status: ProcessStatus::PossiblyRunnable,
+            disabled_setpgid: false,
             awaiting_threads_term: Vec::new(),
 
             waitpid: BTreeMap::new(),
@@ -990,6 +993,14 @@ impl<'a> ProcScheme<'a> {
                         self.on_proc_rename(fd_pid, payload).map(|()| 0),
                         op,
                     )),
+                    ProcCall::DisableSetpgid => {
+                        if let Some(proc) = self.processes.get(&fd_pid) {
+                            proc.borrow_mut().disabled_setpgid = true;
+                            Response::ready_ok(0, op)
+                        } else {
+                            Response::ready_err(ESRCH, op)
+                        }
+                    }
                 }
             }
             Handle::Ps(_) => Response::ready_err(EOPNOTSUPP, op),
@@ -1114,22 +1125,28 @@ impl<'a> ProcScheme<'a> {
             )
         };
 
-        // Cannot change the pgid of a process in a different session.
-        if caller_sid != proc.sid {
-            return Err(Error::new(EPERM));
-        }
-
         // Session leaders cannot have their pgid changed.
         if proc.sid == target_pid {
             return Err(Error::new(EPERM));
         }
 
-        if proc.pgid == new_pgid {
-            return Ok(());
+        // Cannot change the pgid of a process in a different session.
+        if caller_sid != proc.sid {
+            return Err(Error::new(EPERM));
         }
 
+        // New pgid must either already exit, or be the same as the target pid.
         if new_pgid != target_pid && !self.groups.contains_key(&new_pgid) {
             return Err(Error::new(EPERM));
+        }
+
+        // After execv(), i.e. ProcCall::DisableSetpgid, setpgid shall return EACCESS
+        if proc.disabled_setpgid {
+            return Err(Error::new(EACCES));
+        }
+
+        if proc.pgid == new_pgid {
+            return Ok(());
         }
 
         Self::set_pgid(
