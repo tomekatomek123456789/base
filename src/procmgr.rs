@@ -22,7 +22,7 @@ use hashbrown::{DefaultHashBuilder, HashMap, HashSet};
 
 use redox_rt::proc::FdGuard;
 use redox_rt::protocol::{
-    ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, ThreadCall, WaitFlags, SIGCHLD, SIGCONT,
+    ProcCall, ProcKillTarget, ProcMeta, RtSigInfo, ThreadCall, WaitFlags, SIGCHLD, SIGCONT, SIGHUP,
     SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU,
 };
 use redox_scheme::scheme::{IntoTag, Op, OpCall};
@@ -321,6 +321,7 @@ const NAME_CAPAC: usize = 32;
 #[derive(Debug)]
 struct Process {
     threads: Vec<Rc<RefCell<Thread>>>,
+    pid: ProcessId,
     ppid: ProcessId,
     pgid: ProcessId,
     sid: ProcessId,
@@ -568,6 +569,7 @@ impl<'a> ProcScheme<'a> {
                 let thread_weak = Rc::downgrade(&thread);
                 let process = Rc::new(RefCell::new(Process {
                     threads: vec![thread],
+                    pid: INIT_PID,
                     ppid: INIT_PID,
                     sid: INIT_PID,
                     pgid: INIT_PID,
@@ -648,6 +650,7 @@ impl<'a> ProcScheme<'a> {
         let new_process = Rc::new(RefCell::new(Process {
             threads: vec![thread],
             ppid: parent_pid,
+            pid: child_pid,
             pgid,
             sid,
             ruid,
@@ -1032,8 +1035,8 @@ impl<'a> ProcScheme<'a> {
         // POSIX: any other process's pgid matches the caller pid
         if self
             .processes
-            .values()
-            .any(|p| p.borrow().pgid == caller_pid)
+            .iter()
+            .any(|(pid, rc)| *pid != caller_pid && rc.borrow().pgid == caller_pid)
         {
             return Err(Error::new(EPERM));
         }
@@ -1653,19 +1656,85 @@ impl<'a> ProcScheme<'a> {
 
                     if let Some(parent_rc) = self.processes.get(&ppid) {
                         if let Some(init_rc) = self.processes.get(&INIT_PID) {
-                            let mut init = init_rc.borrow_mut();
+                            awoken.extend(init_rc.borrow_mut().waitpid_waiting.drain(..));
+
+                            // TODO(opt): Store list of children in each process?
+                            let children_iter = || {
+                                self.processes
+                                    .values()
+                                    .filter(|p| !Rc::ptr_eq(p, init_rc))
+                                    .filter(|p| p.borrow().ppid == current_pid)
+                            };
+
+                            // TODO(opt): Avoid allocation?
+                            let affected_pgids = children_iter()
+                                .map(|child_rc| {
+                                    let child_pgid = child_rc.borrow().pgid;
+                                    (child_pgid, self.pgrp_is_orphaned(child_pgid))
+                                })
+                                .chain(Some((pgid, self.pgrp_is_orphaned(pgid))))
+                                .collect::<HashMap<ProcessId, Option<bool>>>();
+
                             // Transfer children to init
-                            for child_rc in self
-                                .processes
-                                .values()
-                                .filter(|p| !Rc::ptr_eq(p, init_rc))
-                                .filter(|p| p.borrow().ppid == current_pid)
-                            {
+                            for child_rc in children_iter() {
                                 let mut child = child_rc.borrow_mut();
+                                log::trace!(
+                                    "Reparenting {:?} (ppid {:?}) => {:?}",
+                                    child.pid,
+                                    child.ppid,
+                                    INIT_PID
+                                );
                                 child.ppid = INIT_PID;
-                                init.waitpid.append(&mut child.waitpid);
+                                init_rc.borrow_mut().waitpid.append(&mut child.waitpid);
+                                drop(child);
                             }
-                            awoken.extend(init.waitpid_waiting.drain(..));
+                            // Check if any process group ID would become orphaned as a result of
+                            // this exit.
+                            for (affected_pgid, was_orphaned) in affected_pgids {
+                                let is_orphaned = self.pgrp_is_orphaned(affected_pgid);
+
+                                if !was_orphaned.unwrap_or(false)
+                                    && is_orphaned.unwrap_or(false)
+                                    && let Some(group) =
+                                        self.groups.get(&affected_pgid).map(|r| r.borrow())
+                                {
+                                    for process_rc in
+                                        group.processes.iter().filter_map(|w| Weak::upgrade(&w))
+                                    {
+                                        if !matches!(
+                                            process_rc.borrow().status,
+                                            ProcessStatus::Stopped(_)
+                                        ) {
+                                            continue;
+                                        }
+                                        let sighup_pid = process_rc.borrow().pid;
+                                        log::trace!("SENDING SIGCONT TO {sighup_pid:?}");
+                                        if let Err(err) = self.on_send_sig(
+                                            INIT_PID,
+                                            KillTarget::Proc(sighup_pid),
+                                            SIGCONT as u8,
+                                            &mut false,
+                                            KillMode::Idempotent,
+                                            false,
+                                            awoken,
+                                        ) {
+                                            log::warn!("Failed to send newly-orphaned-pgid SIGHUP to PID {sighup_pid:?}: {err}");
+                                        }
+                                        log::trace!("SENDING SIGHUP TO {sighup_pid:?}");
+                                        if let Err(err) = self.on_send_sig(
+                                            INIT_PID,
+                                            KillTarget::Proc(sighup_pid),
+                                            SIGHUP as u8,
+                                            &mut false,
+                                            KillMode::Idempotent,
+                                            false,
+                                            awoken,
+                                        ) {
+                                            log::warn!("Failed to send newly-orphaned-pgid SIGHUP to PID {sighup_pid:?}: {err}");
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         let mut parent = parent_rc.borrow_mut();
@@ -2306,11 +2375,19 @@ impl<'a> ProcScheme<'a> {
 
             // POSIX defines orphaned process groups as those where
             //
-            // forall process in group,
-            //  process's parent pgid == process's pgid
-            //  OR
-            //  process's session id != process's session id
-            still_true &= parent.pgid == process.pgid || parent.sid != process.sid;
+            // forall process in group, parent = process.parent,
+            //   parent's pgid == process's pgid
+            //   OR
+            //   parent's session id != process's session id
+            let cond = parent.pgid == process.pgid || parent.sid != process.sid;
+            if !cond {
+                log::trace!(
+                    "COUNTEREXAMPLE: process {:#?} parent {:#?}",
+                    process,
+                    parent
+                );
+            }
+            still_true &= cond;
         }
         Some(still_true)
     }
