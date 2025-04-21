@@ -1,0 +1,36 @@
+[package]
+name = "bootstrap"
+version = "0.0.0"
+authors = ["4lDO2 <4lDO2@protonmail.com>"]
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "bootstrap"
+crate-type = ["staticlib"]
+
+[dependencies]
+hashbrown = { version = "0.15", default-features = false, features = [
+    "inline-more",
+    "default-hasher",
+] }
+linked_list_allocator = "0.10"
+log = { version = "0.4", default-features = false }
+plain = "0.2"
+redox-initfs = { git = "https://gitlab.redox-os.org/redox-os/redox-initfs.git", default-features = false }
+redox_syscall = { version = "0.5.4", default-features = false }
+redox-scheme = { version = "0.6", default-features = false }
+redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", default-features = false }
+redox-path = "0.3.1"
+slab = { version = "0.4.9", default-features = false }
+arrayvec = { version = "0.7.6", default-features = false }
+
+[profile.release]
+panic = "abort"
+lto = "fat"
+
+[profile.dev]
+panic = "abort"
+
+[patch.crates-io]
+redox_syscall = { git = "https://gitlab.redox-os.org/redox-os/syscall.git", branch = "master" }
