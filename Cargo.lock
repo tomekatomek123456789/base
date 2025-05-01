@@ -657,7 +657,7 @@ dependencies = [
  "indexmap",
  "libredox",
  "redox-daemon",
- "redox-scheme 0.5.0 (git+https://gitlab.redox-os.org/redox-os/redox-scheme.git?branch=master)",
+ "redox-scheme 0.6.1",
  "redox_syscall",
  "slab",
 ]
@@ -756,7 +756,7 @@ dependencies = [
 [[package]]
 name = "redox-scheme"
 version = "0.5.0"
-source = "git+https://gitlab.redox-os.org/redox-os/redox-scheme.git?branch=master#c4dc04a1a2015e9befa04ef6cab3fc702db07013"
+source = "git+https://gitlab.redox-os.org/redox-os/redox-scheme.git#ef9f1512f54758be20960717dfad193d6cd70dc7"
 dependencies = [
  "libredox",
  "redox_syscall",
@@ -764,8 +764,9 @@ dependencies = [
 
 [[package]]
 name = "redox-scheme"
-version = "0.5.0"
-source = "git+https://gitlab.redox-os.org/redox-os/redox-scheme.git#ef9f1512f54758be20960717dfad193d6cd70dc7"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a14f94bc95b388d8f40a61f25577863f1cf151aaf600a5b7778d1a2018ff7742"
 dependencies = [
  "libredox",
  "redox_syscall",
