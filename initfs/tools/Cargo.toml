@@ -1,0 +1,28 @@
+[package]
+name = "redox-initfs-tools"
+version = "0.2.0"
+authors = ["4lDO2 <4lDO2@protonmail.com>", "Kamil Koczurek <koczurekk@gmail.com>"]
+edition = "2021"
+description = "Archive a directory into a Redox initfs image"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "redox-initfs-ar"
+path = "src/bin/archive.rs"
+
+[[bin]]
+name = "redox-initfs-dump"
+path = "src/bin/dump.rs"
+
+[dependencies]
+anyhow = "1"
+clap = {version = "4", features = ["cargo"]}
+env_logger = "0.8"
+log = "0.4"
+plain = "0.2"
+twox-hash = "1.6"
+
+archive-common = {path = "../archive-common"}
+redox-initfs = {path = ".."}

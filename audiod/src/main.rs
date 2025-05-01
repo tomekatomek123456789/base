@@ -57,7 +57,6 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
     let ns = libredox::call::mkns(&[
         //IoSlice::new(b"memory"), TODO: already included, uncommenting gives EEXIST
         IoSlice::new(b"rand"), // for HashMap
-        IoSlice::new(b"thisproc"), // for thread::spawn
     ]).context("failed to make namespace")?;
     libredox::call::setrens(ns, ns).context("failed to set namespace")?;
 
