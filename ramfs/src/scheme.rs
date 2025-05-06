@@ -176,7 +176,7 @@ impl Scheme {
                 return Err(Error::new(ENOTDIR));
             }
 
-            if let Ok((parent_dir_inode, new_name)) =
+            if let Ok((_, new_name)) =
                 self.filesystem
                     .resolve_except_last(Inode(inode), path, ctx.uid, ctx.gid)
             {
