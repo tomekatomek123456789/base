@@ -32,7 +32,7 @@ fn main() {
             match request.kind() {
                 RequestKind::Call(call) => {
                     let response = call.handle_sync(&mut scheme);
-                    
+
                     let mut res = VecDeque::new();
                     res.push_back(response);
 

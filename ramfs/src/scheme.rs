@@ -36,10 +36,17 @@ impl Scheme {
     }
     /// Remove a directory entry, where the entry can be both a file or a directory. Used by both
     /// `unlink` and `rmdir`.
-    pub fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
+    pub fn remove_dentry(
+        &mut self,
+        root: Inode,
+        path: &str,
+        uid: u32,
+        gid: u32,
+        directory: bool,
+    ) -> Result<()> {
         let removed_inode = {
             let (parent_dir_inode, name_to_delete) =
-                self.filesystem.resolve_except_last(path, uid, gid)?;
+                self.filesystem.resolve_except_last(root, path, uid, gid)?;
             let name_to_delete = name_to_delete.ok_or(Error::new(EINVAL))?; // can't remove root
             let parent = self
                 .filesystem
@@ -107,7 +114,10 @@ impl Scheme {
     }
 
     fn open_existing(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> Result<Inode> {
-        let inode = self.filesystem.resolve(path, uid, gid)?;
+        let inode = self
+            .filesystem
+            .resolve(Inode(Filesystem::ROOT_INODE), path, uid, gid)?;
+
         let file = self
             .filesystem
             .files
@@ -155,47 +165,53 @@ impl Scheme {
         fcntl_flags: Option<u32>,
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
-        let resolved_path = if let Some(base_inode) = base_inode {
-            if path.starts_with('/') {
-                path.to_string()
+        let (resolved_path, exists) = if let Some(inode) = base_inode {
+            let base_dir = self
+                .filesystem
+                .files
+                .get_mut(&inode)
+                .ok_or(Error::new(EBADF))?;
+
+            if base_dir.mode & MODE_TYPE != MODE_DIR {
+                return Err(Error::new(ENOTDIR));
+            }
+
+            if let Ok((parent_dir_inode, new_name)) =
+                self.filesystem
+                    .resolve_except_last(Inode(inode), path, ctx.uid, ctx.gid)
+            {
+                (new_name.ok_or(Error::new(EINVAL))?, true)
             } else {
-                let base_file = self
-                    .filesystem
-                    .files
-                    .get(&base_inode)
-                    .ok_or(Error::new(EBADFD))?;
-
-                if base_file.mode & MODE_TYPE != MODE_DIR {
-                    return Err(Error::new(ENOTDIR));
-                }
-
-                let mut buffer = Vec::new();
-                self.fpath(base_inode, buffer.as_mut_slice(), ctx)?;
-
-                let mut full_path = String::from_utf8_lossy(&buffer).into_owned();
-                full_path.push('/');
-                full_path.push_str(path);
-                full_path
+                (path, false)
             }
         } else {
-            path.to_string()
+            (
+                path,
+                self.filesystem
+                    .resolve(Inode(Filesystem::ROOT_INODE), &path, 0, 0)
+                    .is_ok(),
+            )
         };
 
-        let exists = self.filesystem.resolve(&resolved_path, 0, 0).is_ok();
         if flags & O_CREAT != 0 && flags & O_EXCL != 0 && exists {
             return Err(Error::new(EEXIST));
         }
 
         let inode = if flags & O_CREAT != 0 && exists {
-            self.open_existing(&resolved_path, flags, ctx.uid, ctx.gid)?.0
+            self.open_existing(resolved_path, flags, ctx.uid, ctx.gid)?
+                .0
         } else if flags & O_CREAT != 0 {
             if flags & O_STAT != 0 {
                 return Err(Error::new(EINVAL));
             }
 
-            let (parent_dir_inode, new_name) = self
-                .filesystem
-                .resolve_except_last(&resolved_path, ctx.uid, ctx.gid)?;
+            let (parent_dir_inode, new_name) = self.filesystem.resolve_except_last(
+                Inode(Filesystem::ROOT_INODE),
+                path,
+                ctx.uid,
+                ctx.gid,
+            )?;
+
             let new_name = new_name.ok_or(Error::new(EINVAL))?; // cannot mkdir /
 
             let current_time = filesystem::current_time();
@@ -264,7 +280,8 @@ impl Scheme {
 
             new_inode_number
         } else {
-            self.open_existing(&resolved_path, flags, ctx.uid, ctx.gid)?.0
+            self.open_existing(&resolved_path, flags, ctx.uid, ctx.gid)?
+                .0
         };
         Ok(OpenResult::ThisScheme {
             number: inode,
@@ -286,12 +303,6 @@ impl SchemeSync for Scheme {
         ctx: &CallerCtx,
     ) -> Result<OpenResult> {
         self.open_internal(Some(fd), path, flags, Some(fcntl_flags), ctx)
-    }
-    fn rmdir(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
-        self.remove_dentry(path, ctx.uid, ctx.gid, true)
-    }
-    fn unlink(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
-        self.remove_dentry(path, ctx.uid, ctx.gid, false)
     }
     fn read(
         &mut self,
