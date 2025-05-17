@@ -7,7 +7,7 @@ You can see what each component does in the following list:
 - audiod - Daemon used to process the sound drivers audio
 - bootstrap - First code that the kernel executes, responsible for spawning the init daemon
 - init - Daemon used to start most system components and programs
-- initfs - TODO
+- initfs - Filesystem with the necessary system components to run RedoxFS
 - ipcd - Daemon used for inter-process communication
 - logd - Daemon used to log system components and daemons
 - netstack - Daemon used for networking
