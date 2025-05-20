@@ -17,7 +17,7 @@ hashbrown = { version = "0.15", default-features = false, features = [
 linked_list_allocator = "0.10"
 log = { version = "0.4", default-features = false }
 plain = "0.2"
-redox-initfs = { git = "https://gitlab.redox-os.org/redox-os/redox-initfs.git", default-features = false }
+redox-initfs = { path = "../initfs", default-features = false }
 redox_syscall = { version = "0.5.4", default-features = false }
 redox-scheme = { version = "0.6", default-features = false }
 redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", default-features = false }
