@@ -1,14 +1,12 @@
 use core::cell::RefCell;
 use core::cmp;
-use core::hash::BuildHasherDefault;
 use core::mem::size_of;
 use core::num::{NonZeroU8, NonZeroUsize};
 use core::ops::Deref;
 use core::ptr::NonNull;
 use core::str::FromStr;
 use core::sync::atomic::Ordering;
-use core::task::Poll::*;
-use core::task::{Context, Poll};
+use core::task::Poll::{self, *};
 
 use alloc::collections::btree_map::BTreeMap;
 use alloc::collections::VecDeque;
@@ -35,8 +33,8 @@ use syscall::schemev2::NewFdFlags;
 use syscall::{
     sig_bit, ContextStatus, ContextVerb, CtxtStsBuf, Error, Event, EventFlags, FobtainFdFlags,
     MapFlags, ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
-    EACCES, EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, EIO, ENOENT, ENOSYS, EOPNOTSUPP,
-    EOWNERDEAD, EPERM, ERESTART, ESRCH, EWOULDBLOCK, O_CLOEXEC, O_CREAT, PAGE_SIZE,
+    EACCES, EAGAIN, EBADF, EBADFD, ECHILD, EEXIST, EINTR, EINVAL, ENOENT, ENOSYS, EOPNOTSUPP,
+    EOWNERDEAD, EPERM, ERESTART, ESRCH, EWOULDBLOCK, O_CREAT, PAGE_SIZE,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1204,7 +1202,7 @@ impl<'a> ProcScheme<'a> {
         &mut self,
         pid: ProcessId,
         status: u16,
-        mut state: VacantEntry<VirtualId, PendingState, DefaultHashBuilder>,
+        state: VacantEntry<VirtualId, PendingState, DefaultHashBuilder>,
         awoken: &mut VecDeque<VirtualId>,
         tag: Option<Tag>,
     ) -> Poll<Response> {
@@ -1263,7 +1261,7 @@ impl<'a> ProcScheme<'a> {
             // terminate all threads (possibly including the caller, resulting in EINTR and a
             // to-be-ignored cancellation request to this scheme).
             for thread in &process.threads {
-                let mut thread = thread.borrow_mut();
+                let thread = thread.borrow_mut();
                 // TODO: cancel all threads anyway on error?
                 if let Err(err) = syscall::write(*thread.status_hndl, &usize::MAX.to_ne_bytes()) {
                     if let Some(tag) = tag {
@@ -1321,7 +1319,7 @@ impl<'a> ProcScheme<'a> {
                 None
             }
         };
-        let mut grim_reaper =
+        let grim_reaper =
             |w_pid: ProcessId, status: WaitpidStatus, scheme: &mut ProcScheme| match status {
                 WaitpidStatus::Continued => {
                     if flags.contains(WaitFlags::WCONTINUED) {
@@ -1373,7 +1371,7 @@ impl<'a> ProcScheme<'a> {
                     return Ready(Err(Error::new(EINVAL)));
                 }
                 let target_proc_rc = self.processes.get(&pid).ok_or(Error::new(ECHILD))?;
-                let mut target_proc = target_proc_rc.borrow_mut();
+                let target_proc = target_proc_rc.borrow_mut();
 
                 if target_proc.ppid != this_pid {
                     return Ready(Err(Error::new(ECHILD)));
@@ -1838,7 +1836,7 @@ impl<'a> ProcScheme<'a> {
         awoken: &mut VecDeque<VirtualId>,
     ) -> Result<()> {
         log::trace!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
-        let mut num_succeeded = 0;
+        let num_succeeded = 0;
 
         // if this is set and we would otherwise have succeeded, return EINTR so it can check its
         // own mask
@@ -2011,7 +2009,7 @@ impl<'a> ProcScheme<'a> {
 
                 // TODO: which threads should become Runnable?
                 for thread_rc in target_proc.threads.iter() {
-                    let mut thread = thread_rc.borrow_mut();
+                    let thread = thread_rc.borrow_mut();
                     if let Some(ref tctl) = thread.sig_ctrl {
                         tctl.word[0].fetch_and(
                             !(sig_bit(SIGSTOP)
@@ -2337,7 +2335,7 @@ impl<'a> ProcScheme<'a> {
             u32::from_ne_bytes(bytes)
         };
         log::trace!("SIGDEQ {pid:?} idx {sig_idx}");
-        let mut dst = payload
+        let dst = payload
             .get_mut(..size_of::<RtSigInfo>())
             .ok_or(Error::new(EINVAL))?;
         if sig_idx >= 32 {
