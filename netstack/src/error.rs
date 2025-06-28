@@ -8,24 +8,12 @@ use syscall::error::Error as SyscallError;
 enum ErrorType {
     Syscall(SyscallError),
     IOError(IOError),
-    Other,
 }
 
 #[derive(Debug)]
 pub struct Error {
     error_type: ErrorType,
     descr: String,
-}
-
-pub trait ResultExt {
-    type T;
-    fn context(self, ctxt: impl Into<String>) -> std::result::Result<Self::T, Error>;
-}
-impl<T> ResultExt for std::result::Result<T, SyscallError> {
-    type T = T;
-    fn context(self, ctxt: impl Into<String>) -> std::result::Result<T, Error> {
-        self.map_err(|err| Error::from_syscall_error(err, ctxt))
-    }
 }
 
 impl Error {
@@ -42,13 +30,6 @@ impl Error {
             descr: descr.into(),
         }
     }
-
-    pub fn other_error<S: Into<String>>(descr: S) -> Error {
-        Error {
-            error_type: ErrorType::Other,
-            descr: descr.into(),
-        }
-    }
 }
 
 impl fmt::Display for Error {
@@ -59,9 +40,6 @@ impl fmt::Display for Error {
             }
             ErrorType::IOError(ref io_error) => {
                 write!(f, "{} : io error : {}", self.descr, io_error)
-            }
-            ErrorType::Other => {
-                write!(f, "{}", self.descr)
             }
         }
     }
