@@ -100,7 +100,6 @@ impl OpenFileInfo {
 
 /// Struct to represent the rand scheme.
 struct RandScheme {
-    socket: Socket,
     prng: ChaCha20Rng,
     // ChaCha20 is a Cryptographically Secure PRNG
     // https://docs.rs/rand/0.5.0/rand/prng/chacha/struct.ChaChaRng.html
@@ -115,9 +114,8 @@ struct RandScheme {
 
 impl RandScheme {
     /// Create new rand scheme from a message socket
-    fn new(socket: Socket) -> RandScheme {
+    fn new() -> RandScheme {
         RandScheme {
-            socket,
             prng: ChaCha20Rng::from_seed(create_rdrand_seed()),
             prng_stat: Stat {
                 st_mode: MODE_CHR | DEFAULT_PRNG_MODE,
@@ -168,7 +166,7 @@ impl RandScheme {
 fn test_scheme_perms() {
     use syscall::{O_CLOEXEC, O_STAT};
 
-    let mut scheme = RandScheme::new(File::open(".").unwrap());
+    let mut scheme = RandScheme::new();
     scheme.prng_stat.st_mode = MODE_CHR | 0o200;
     scheme.prng_stat.st_uid = 1;
     scheme.prng_stat.st_gid = 1;
@@ -365,7 +363,7 @@ impl SchemeMut for RandScheme {
 fn daemon(daemon: redox_daemon::Daemon) -> ! {
     let socket = Socket::<V2>::create("rand").expect("randd: failed to create rand scheme");
 
-    let mut scheme = RandScheme::new(socket);
+    let mut scheme = RandScheme::new();
 
     daemon
         .ready()
@@ -373,8 +371,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 
     libredox::call::setrens(0, 0).expect("randd: failed to enter null namespace");
 
-    while let Some(request) = scheme
-        .socket
+    while let Some(request) = socket
         .next_request(SignalBehavior::Restart)
         .expect("error reading packet")
     {
@@ -382,8 +379,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
             continue;
         };
         let response = call.handle_scheme_mut(&mut scheme);
-        scheme
-            .socket
+        socket
             .write_responses(&[response], SignalBehavior::Restart)
             .expect("error writing packet");
     }
