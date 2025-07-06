@@ -80,7 +80,7 @@ impl<DataT> SocketFile<DataT> {
 
 #[derive(Copy, Clone)]
 enum Setting<SettingT: Copy> {
-    Ttl,
+    HopLimit,
     ReadTimeout,
     WriteTimeout,
     #[allow(dead_code)]
@@ -428,7 +428,7 @@ where
 
         match setting {
             Setting::Other(setting) => SocketT::get_setting(file, setting, buf),
-            Setting::Ttl => {
+            Setting::HopLimit => {
                 if let Some(hop_limit) = buf.get_mut(0) {
                     let socket_set = self.socket_set.borrow();
                     let socket = socket_set.get::<SocketT>(file.socket_handle);
@@ -499,7 +499,7 @@ where
                 };
                 Ok(count)
             }
-            Setting::Ttl => {
+            Setting::HopLimit => {
                 if let Some(hop_limit) = buf.get(0) {
                     let mut socket_set = self.socket_set.borrow_mut();
                     let socket = socket_set.get_mut::<SocketT>(file.socket_handle);
@@ -700,7 +700,7 @@ where
                     SchemeFile::Setting(SettingFile {
                         socket_handle,
                         fd,
-                        setting: Setting::Ttl,
+                        setting: Setting::HopLimit,
                     }),
                     None,
                 ),
