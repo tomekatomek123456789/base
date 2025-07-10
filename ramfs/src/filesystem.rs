@@ -92,12 +92,15 @@ impl Filesystem {
         self.last_inode_number = next;
         Ok(next)
     }
-    fn resolve_generic(&self, mut parts: Vec<&str>, uid: u32, gid: u32) -> Result<usize> {
-        let mut current_file = self
-            .files
-            .get(&Self::ROOT_INODE)
-            .ok_or(Error::new(ENOENT))?;
-        let mut current_inode = Self::ROOT_INODE;
+    fn resolve_generic(
+        &self,
+        Inode(root): Inode,
+        mut parts: Vec<&str>,
+        uid: u32,
+        gid: u32,
+    ) -> Result<usize> {
+        let mut current_inode = root;
+        let mut current_file = self.files.get(&current_inode).ok_or(Error::new(ENOENT))?;
 
         let mut i = 0;
 
@@ -134,6 +137,7 @@ impl Filesystem {
     }
     pub fn resolve_except_last<'a>(
         &self,
+        root: Inode,
         path_bytes: &'a str,
         uid: u32,
         gid: u32,
@@ -147,12 +151,12 @@ impl Filesystem {
             None
         };
 
-        Ok((self.resolve_generic(parts, uid, gid)?, last))
+        Ok((self.resolve_generic(root, parts, uid, gid)?, last))
     }
-    pub fn resolve(&self, path: &str, uid: u32, gid: u32) -> Result<usize> {
+    pub fn resolve(&self, root: Inode, path: &str, uid: u32, gid: u32) -> Result<usize> {
         let parts = path_components_iter(path.trim_start_matches('/')).collect::<Vec<_>>();
 
-        self.resolve_generic(parts, uid, gid)
+        self.resolve_generic(root, parts, uid, gid)
     }
 }
 pub fn path_components_iter(bytes: &str) -> impl Iterator<Item = &str> + '_ {
