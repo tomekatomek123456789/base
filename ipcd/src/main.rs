@@ -1,9 +1,8 @@
 #![feature(int_roundings, let_chains)]
 
-use std::collections::VecDeque;
-use event::{EventQueue, EventFlags};
-use redox_scheme::{CallRequest, RequestKind, Response, SignalBehavior};
-use syscall::{Error, Result, EAGAIN, EWOULDBLOCK, ENODEV, EINTR};
+use event::{EventFlags, EventQueue};
+use redox_scheme::{wrappers::ReadinessBased, Socket};
+use std::sync::Mutex;
 
 mod chan;
 mod shm;
@@ -21,138 +20,126 @@ fn main() {
                 std::process::exit(1);
             }
         }
-    }).expect("ipcd: failed to daemonize");
+    })
+    .expect("ipcd: failed to daemonize");
 }
 
-fn inner(daemon: redox_daemon::Daemon) -> Result<()> {
+fn inner(daemon: redox_daemon::Daemon) -> anyhow::Result<()> {
     event::user_data! {
         enum EventSource {
             ChanSocket,
             ShmSocket,
         }
     }
-    let chan = ChanScheme::new()?;
-    let shm = ShmScheme::new()?;
+
+    // Prepare chan scheme
+    let chan_socket = Socket::nonblock("chan")
+        .map_err(|e| anyhow::anyhow!("failed to create chan scheme: {e}"))?;
+    let chan = Mutex::new(ChanScheme::new(&chan_socket));
+    let mut chan_handler = ReadinessBased::new(&chan_socket, 16);
+
+    // Prepare shm scheme
+    let shm_socket =
+        Socket::nonblock("shm").map_err(|e| anyhow::anyhow!("failed to create shm socket: {e}"))?;
+    let shm = Mutex::new(ShmScheme::new());
+    let mut shm_handler = ReadinessBased::new(&shm_socket, 16);
+
     daemon.ready().unwrap();
 
     // Create event listener for both files
-    let mut event_queue = EventQueue::<EventSource>::new()?;
-
-    event_queue.subscribe(chan.socket.inner().raw(), EventSource::ChanSocket, EventFlags::READ)?;
-    event_queue.subscribe(shm.socket.inner().raw(), EventSource::ShmSocket, EventFlags::READ)?;
-
-    struct Todo {
-        req: Option<CallRequest>,
-        canceling: bool,
-    }
-    let mut todo = VecDeque::<Todo>::with_capacity(16);
+    let mut event_queue = EventQueue::<EventSource>::new()
+        .map_err(|e| anyhow::anyhow!("failed to create event queue: {e}"))?;
+    event_queue
+        .subscribe(
+            chan_socket.inner().raw(),
+            EventSource::ChanSocket,
+            EventFlags::READ,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to subscribe chan socket: {e}"))?;
+    event_queue
+        .subscribe(
+            shm_socket.inner().raw(),
+            EventSource::ShmSocket,
+            EventFlags::READ,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to subscribe shm socket: {e}"))?;
 
     libredox::call::setrens(0, 0)?;
 
-    let mut chan_opt = Some(chan);
-    let mut shm_opt = Some(shm);
-    while chan_opt.is_some() || shm_opt.is_some() {
+    // EOF flags
+    let mut chan_eof = false;
+    let mut shm_eof = false;
+    while !(chan_eof && shm_eof) {
         let Some(event_res) = event_queue.next() else {
             break;
         };
-        let event = event_res?;
+        let event = event_res.map_err(|e| anyhow::anyhow!("error occured in event queue: {e}"))?;
 
         match event.user_data {
             EventSource::ChanSocket => {
-                let mut error: Option<Error> = None;
-
-                let unmount = if let Some(ref mut chan) = chan_opt {
-                    let eof = loop {
-                        match chan.socket.next_request(SignalBehavior::Restart) {
-                            Ok(None) => break true,
-                            Ok(Some(request)) => match request.kind() {
-                                RequestKind::Call(request) => todo.push_front(Todo { req: Some(request), canceling: false }),
-                                RequestKind::Cancellation(request) => {
-                                    if let Some(affected_packet) = todo.iter_mut().find(|t| t.req.as_ref().map_or(false, |r| r.request().request_id() == request.id)) {
-                                        affected_packet.canceling = true;
-                                    }
-                                }
-                                _ => (),
-                            }
-                            Err(Error { errno: EAGAIN | EWOULDBLOCK }) => break false,
-                            Err(error) => return Err(error),
+                // Channel scheme
+                if !chan_eof {
+                    // 1. Read requests
+                    match chan_handler.read_requests() {
+                        Ok(true) => {} // Read requests success
+                        Ok(false) => {
+                            // EOF
+                            chan_eof = true;
                         }
-                    };
-
-                    // Process queue, delete finished items
-                    todo.retain_mut(|slot| {
-                        let req = slot.req.take().unwrap();
-
-                        match req.handle_scheme_block_mut(chan) {
-                            Some(res) => {
-                                if let Err(err) = chan.socket.write_response(res, SignalBehavior::Restart) {
-                                    error = Some(err);
-                                }
-                                false
-                            }
-                            None if slot.canceling => {
-                                if let Err(err) = chan.socket.write_response(Response::new(&req, Err(Error::new(EINTR))), SignalBehavior::Restart) {
-                                    error = Some(err);
-                                }
-                                false
-                            }
-                            None => {
-                                slot.req = Some(req);
-                                true
-                            }
-                        }
-                    });
-
-                    eof
-                } else {
-                    false
-                };
-
-                if unmount && let Some(chan) = chan_opt.take() {
-                    for slot in todo.drain(..) {
-                        let res = if slot.canceling {
-                            Err(Error::new(EINTR))
-                        } else {
-                            Err(Error::new(ENODEV))
-                        };
-                        if let Err(err) = chan.socket.write_response(Response::new(&slot.req.unwrap(), res), SignalBehavior::Restart) {
-                            error = Some(err);
-                        }
+                        Err(err) => return Err(anyhow::anyhow!("{err}")),
                     }
                 }
 
-                if let Some(err) = error {
-                    return Err(err);
+                // 2. Process requests
+                chan_handler.process_requests(|| chan.lock().unwrap());
+
+                // 3.Poll all blocking requests
+                chan_handler
+                    .poll_all_requests(|| chan.lock().unwrap())
+                    .map_err(|e| anyhow::anyhow!("error occured in poll_all_requests: {e}"))?;
+
+                // 3. Write responses
+                // write_responses returns a Result<bool>, but currently only returns true.
+                match chan_handler.write_responses() {
+                    Ok(true) => {} // Read requests success
+                    Ok(false) => {
+                        // EOF
+                        chan_eof = true;
+                    }
+                    Err(err) => return Err(anyhow::anyhow!("{err}")),
                 }
-            },
+            }
             EventSource::ShmSocket => {
-                let unmount = if let Some(ref mut shm) = shm_opt {
-                    let eof = loop {
-                        match shm.socket.next_request(SignalBehavior::Restart) {
-                            Ok(None) => break true,
-                            Ok(Some(request)) => match request.kind() {
-                                RequestKind::Call(request) => {
-                                    let response = request.handle_scheme_mut(shm);
-                                    shm.socket.write_response(response, SignalBehavior::Restart)?;
-                                }
-                                _ => (),
-                            },
-                            Err(Error { errno: EAGAIN | EWOULDBLOCK }) => break false,
-                            Err(err) => return Err(err),
-                        };
-                    };
+                // Shared memory scheme
+                if !shm_eof {
+                    // 1. Read requests
+                    match shm_handler.read_requests() {
+                        Ok(true) => {} // Read requests success
+                        Ok(false) => {
+                            // EOF
+                            shm_eof = true;
+                        }
+                        Err(err) => return Err(anyhow::anyhow!("{err}")),
+                    }
+                }
 
-                    eof
-                } else {
-                    false
-                };
+                // 2. Process requests
+                shm_handler.process_requests(|| shm.lock().unwrap());
 
-                if unmount {
-                    shm_opt.take();
+                // shm is not a blocking scheme
+
+                // 3. Write responses
+                // write_responses returns a Result<bool>, but currently only returns true.
+                match shm_handler.write_responses() {
+                    Ok(true) => {} // Read requests success
+                    Ok(false) => {
+                        // EOF
+                        shm_eof = true;
+                    }
+                    Err(err) => return Err(anyhow::anyhow!("{err}")),
                 }
             }
         }
     }
-
     Ok(())
 }
