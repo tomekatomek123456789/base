@@ -30,13 +30,21 @@ enum OutputCmd {
 }
 
 impl LogScheme {
-    pub fn new(mut files: Vec<File>) -> Self {
+    pub fn new() -> Self {
+        let mut kernel_debug = OpenOptions::new()
+            .write(true)
+            .open("/scheme/debug")
+            .unwrap();
+
         let (output_tx, output_rx) = mpsc::channel::<OutputCmd>();
 
         std::thread::spawn(move || {
+            let mut files: Vec<File> = vec![];
             for cmd in output_rx {
                 match cmd {
                     OutputCmd::Log(line) => {
+                        let _ = kernel_debug.write(&line);
+                        let _ = kernel_debug.flush();
                         for file in &mut files {
                             let _ = file.write(&line);
                             let _ = file.flush();

@@ -1,6 +1,4 @@
 use redox_scheme::{RequestKind, SignalBehavior, Socket};
-use std::env;
-use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::process;
 
@@ -9,15 +7,6 @@ use crate::scheme::LogScheme;
 mod scheme;
 
 fn daemon(daemon: redox_daemon::Daemon) -> ! {
-    let mut files = Vec::new();
-    for arg in env::args().skip(1) {
-        eprintln!("logd: opening {:?}", arg);
-        match OpenOptions::new().write(true).open(&arg) {
-            Ok(file) => files.push(file),
-            Err(err) => eprintln!("logd: failed to open {:?}: {:?}", arg, err),
-        }
-    }
-
     let socket = Socket::create("log").expect("logd: failed to create log scheme");
 
     std::process::Command::new(std::env::current_exe().unwrap())
@@ -29,7 +18,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 
     daemon.ready().expect("logd: failed to notify parent");
 
-    let mut scheme = LogScheme::new(files);
+    let mut scheme = LogScheme::new();
 
     while let Some(request) = socket
         .next_request(SignalBehavior::Restart)
