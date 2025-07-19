@@ -794,29 +794,30 @@ impl<'a> ProcScheme<'a> {
             _ => return Err(Error::new(ENOENT)),
         })
     }
+    fn read_process_metadata(&self, pid: ProcessId, buf: &mut [u8]) -> Result<usize> {
+        let proc_rc = self.processes.get(&pid).ok_or(Error::new(ESRCH))?;
+        let process = proc_rc.borrow();
+        let metadata = ProcMeta {
+            pid: pid.0 as u32,
+            pgid: process.pgid.0 as u32,
+            ppid: process.ppid.0 as u32,
+            ruid: process.ruid,
+            euid: process.euid,
+            suid: process.suid,
+            rgid: process.rgid,
+            egid: process.egid,
+            sgid: process.sgid,
+            ens: process.ens,
+            rns: process.rns,
+        };
+        *buf.get_mut(..size_of::<ProcMeta>())
+            .and_then(|b| plain::from_mut_bytes(b).ok())
+            .ok_or(Error::new(EBADF))? = metadata;
+        Ok(size_of::<ProcMeta>())
+    }
     fn on_read(&mut self, id: usize, offset: u64, buf: &mut [u8]) -> Result<usize> {
         match self.handles[id] {
-            Handle::Proc(pid) => {
-                let proc_rc = self.processes.get(&pid).ok_or(Error::new(EBADFD))?;
-                let process = proc_rc.borrow();
-                let metadata = ProcMeta {
-                    pid: pid.0 as u32,
-                    pgid: process.pgid.0 as u32,
-                    ppid: process.ppid.0 as u32,
-                    ruid: process.ruid,
-                    euid: process.euid,
-                    suid: process.suid,
-                    rgid: process.rgid,
-                    egid: process.egid,
-                    sgid: process.sgid,
-                    ens: process.ens,
-                    rns: process.rns,
-                };
-                *buf.get_mut(..size_of::<ProcMeta>())
-                    .and_then(|b| plain::from_mut_bytes(b).ok())
-                    .ok_or(Error::new(EINVAL))? = metadata;
-                Ok(size_of::<ProcMeta>())
-            }
+            Handle::Proc(pid) => self.read_process_metadata(pid, buf),
             Handle::Ps(ref src_buf) => {
                 let src_buf = usize::try_from(offset)
                     .ok()
@@ -907,6 +908,7 @@ impl<'a> ProcScheme<'a> {
             }
             Handle::Proc(fd_pid) => {
                 let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
+                    log::info!("Invalid proc call: {metadata:?}");
                     return Response::ready_err(EINVAL, op);
                 };
                 fn cvt_u32(u: u32) -> Option<u32> {
@@ -1039,6 +1041,24 @@ impl<'a> ProcScheme<'a> {
                         } else {
                             Response::ready_err(ESRCH, op)
                         }
+                    }
+                    ProcCall::GetProcCredentials => {
+                        match self.processes.get(&fd_pid) {
+                            None => {
+                                log::warn!("GetProcCredentials: process {fd_pid:?} does not exist");
+                                return Response::ready_err(ESRCH, op);
+                            }
+                            Some(proc) if proc.borrow().euid != 0 => {
+                                log::warn!("GetProcCredentials: non-root process {fd_pid:?} tried to get credentials");
+                                return Response::ready_err(EPERM, op);
+                            }
+                            _ => {}
+                        }
+                        let target_pid = metadata[1] as usize;
+                        Ready(Response::new(
+                            self.read_process_metadata(ProcessId(target_pid), payload),
+                            op,
+                        ))
                     }
                 }
             }

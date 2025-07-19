@@ -46,7 +46,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#696ae4eca1df5e3b76a57f62903ee1a94b9c6aa6"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#518798f64e313a2d9067a52b6a3d5970c8208ae5"
 
 [[package]]
 name = "goblin"
@@ -150,7 +150,7 @@ checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#696ae4eca1df5e3b76a57f62903ee1a94b9c6aa6"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#518798f64e313a2d9067a52b6a3d5970c8208ae5"
 dependencies = [
  "bitflags",
  "generic-rt",
