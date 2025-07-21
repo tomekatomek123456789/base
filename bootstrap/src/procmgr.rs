@@ -34,7 +34,8 @@ use syscall::{
     sig_bit, ContextStatus, ContextVerb, CtxtStsBuf, Error, Event, EventFlags, FobtainFdFlags,
     MapFlags, ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
     EACCES, EAGAIN, EBADF, EBADFD, ECANCELED, ECHILD, EEXIST, EINTR, EINVAL, ENOENT, ENOSYS,
-    EOPNOTSUPP, EOWNERDEAD, EPERM, ERESTART, ESRCH, EWOULDBLOCK, O_CREAT, PAGE_SIZE,
+    EOPNOTSUPP, EOWNERDEAD, EPERM, ERESTART, ESRCH, EWOULDBLOCK, O_ACCMODE, O_CREAT, O_RDONLY,
+    PAGE_SIZE,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -511,6 +512,9 @@ enum Handle {
 
     // TODO: stateless API, perhaps using intermediate daemon for providing a file-like API
     Ps(Vec<u8>),
+
+    // A handle that grants the holder the capability to obtain process credentials.
+    ProcCredsCapability,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -790,6 +794,18 @@ impl<'a> ProcScheme<'a> {
                     flags: NewFdFlags::POSITIONED,
                 }
             }
+            "proc-creds-capability" => {
+                if ctx.uid != 0 {
+                    return Err(Error::new(EACCES));
+                }
+                if flags & O_ACCMODE != O_RDONLY {
+                    return Err(Error::new(EINVAL));
+                }
+                OpenResult::ThisScheme {
+                    number: self.handles.insert(Handle::ProcCredsCapability),
+                    flags: NewFdFlags::empty(),
+                }
+            }
 
             _ => return Err(Error::new(ENOENT)),
         })
@@ -827,7 +843,9 @@ impl<'a> ProcScheme<'a> {
                 buf[..len].copy_from_slice(&src_buf[..len]);
                 Ok(len)
             }
-            Handle::Init | Handle::Thread(_) => return Err(Error::new(EBADF)),
+            Handle::Init | Handle::Thread(_) | Handle::ProcCredsCapability => {
+                return Err(Error::new(EBADF))
+            }
         }
     }
     fn on_dup(&mut self, old_id: usize, buf: &[u8]) -> Result<OpenResult> {
@@ -874,7 +892,7 @@ impl<'a> ProcScheme<'a> {
                     fd: syscall::dup(*thread.fd, buf)?,
                 })
             }
-            Handle::Init | Handle::Ps(_) => Err(Error::new(EBADF)),
+            Handle::Init | Handle::Ps(_) | Handle::ProcCredsCapability => Err(Error::new(EBADF)),
         }
     }
     fn on_call(
@@ -1042,27 +1060,23 @@ impl<'a> ProcScheme<'a> {
                             Response::ready_err(ESRCH, op)
                         }
                     }
-                    ProcCall::GetProcCredentials => {
-                        match self.processes.get(&fd_pid) {
-                            None => {
-                                log::warn!("GetProcCredentials: process {fd_pid:?} does not exist");
-                                return Response::ready_err(ESRCH, op);
-                            }
-                            Some(proc) if proc.borrow().euid != 0 => {
-                                log::warn!("GetProcCredentials: non-root process {fd_pid:?} tried to get credentials");
-                                return Response::ready_err(EPERM, op);
-                            }
-                            _ => {}
-                        }
-                        let target_pid = metadata[1] as usize;
-                        Ready(Response::new(
-                            self.read_process_metadata(ProcessId(target_pid), payload),
-                            op,
-                        ))
-                    }
+                    ProcCall::GetProcCredentials => Response::ready_err(EACCES, op),
                 }
             }
             Handle::Ps(_) => Response::ready_err(EOPNOTSUPP, op),
+            Handle::ProcCredsCapability => {
+                let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
+                    log::info!("Invalid proc call: {metadata:?}");
+                    return Response::ready_err(EINVAL, op);
+                };
+                match verb {
+                    ProcCall::GetProcCredentials => Ready(Response::new(
+                        self.read_process_metadata(ProcessId(metadata[1] as usize), payload),
+                        op,
+                    )),
+                    _ => Response::ready_err(EINVAL, op),
+                }
+            }
         }
     }
     fn on_getpgid(&mut self, caller_pid: ProcessId, target_pid: ProcessId) -> Result<ProcessId> {
@@ -2519,7 +2533,6 @@ impl<'a> ProcScheme<'a> {
         log::trace!("{} handles", self.handles.len());
         log::trace!("{} thread_lookup", self.thread_lookup.len());
         log::trace!("{} next_id", self.next_internal_id);
-
 
         Ok(string.into_bytes())
     }

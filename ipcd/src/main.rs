@@ -52,16 +52,20 @@ fn inner(daemon: redox_daemon::Daemon) -> anyhow::Result<()> {
     // Prepare uds stream scheme
     let uds_stream_socket = Socket::nonblock("uds_stream")
         .map_err(|e| anyhow::anyhow!("failed to create uds stream scheme: {e}"))?;
-    let uds_stream = UdsStreamScheme::new(&uds_stream_socket);
+    let uds_stream = Mutex::new(
+        UdsStreamScheme::new(&uds_stream_socket)
+            .map_err(|e| anyhow::anyhow!("failed to create uds stream scheme: {e}"))?,
+    );
     let mut uds_stream_handler = ReadinessBased::new(&uds_stream_socket, 16);
-    let uds_stream_mutex = Mutex::new(uds_stream);
 
     // Prepare uds dgram scheme
     let uds_dgram_socket = Socket::nonblock("uds_dgram")
         .map_err(|e| anyhow::anyhow!("failed to create uds dgram scheme: {e}"))?;
-    let uds_dgram = UdsDgramScheme::new(&uds_dgram_socket);
+    let uds_dgram = Mutex::new(
+        UdsDgramScheme::new(&uds_dgram_socket)
+            .map_err(|e| anyhow::anyhow!("failed to create uds dgram scheme: {e}"))?,
+    );
     let mut uds_dgram_handler = ReadinessBased::new(&uds_dgram_socket, 16);
-    let uds_dgram_mutex = Mutex::new(uds_dgram);
 
     daemon.ready().unwrap();
 
@@ -189,11 +193,11 @@ fn inner(daemon: redox_daemon::Daemon) -> anyhow::Result<()> {
                 }
 
                 // 2. Process requests
-                uds_stream_handler.process_requests(|| uds_stream_mutex.lock().unwrap());
+                uds_stream_handler.process_requests(|| uds_stream.lock().unwrap());
 
                 // 3.Poll all blocking requests
                 uds_stream_handler
-                    .poll_all_requests(|| uds_stream_mutex.lock().unwrap())
+                    .poll_all_requests(|| uds_stream.lock().unwrap())
                     .map_err(|e| anyhow::anyhow!("error occured in poll_all_requests: {e}"))?;
 
                 // 3. Write responses
@@ -222,11 +226,11 @@ fn inner(daemon: redox_daemon::Daemon) -> anyhow::Result<()> {
                 }
 
                 // 2. Process requests
-                uds_dgram_handler.process_requests(|| uds_dgram_mutex.lock().unwrap());
+                uds_dgram_handler.process_requests(|| uds_dgram.lock().unwrap());
 
                 // 3.Poll all blocking requests
                 uds_dgram_handler
-                    .poll_all_requests(|| uds_dgram_mutex.lock().unwrap())
+                    .poll_all_requests(|| uds_dgram.lock().unwrap())
                     .map_err(|e| anyhow::anyhow!("error occured in poll_all_requests: {e}"))?;
 
                 // 3. Write responses
