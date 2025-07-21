@@ -1,5 +1,4 @@
 use redox_rt::protocol::ProcMeta;
-use redox_scheme::CallerCtx;
 use std::{cmp, convert::TryInto, mem};
 use syscall::{error::*, Error};
 
@@ -99,32 +98,27 @@ impl DataPacket {
         self.payload.len()
     }
 
-    fn from_stream(stream: &[u8], name: Option<String>, ctx: &CallerCtx) -> Result<Self> {
+    fn from_stream(stream: &[u8], name: Option<String>, cred: Credential) -> Result<Self> {
         let mut cursor: usize = 0;
         let payload_len = read_num::<usize>(&stream[cursor..])?;
         cursor += mem::size_of::<usize>();
         let payload = stream
             .get(cursor..cursor + payload_len)
             .ok_or_else(|| {
-                log::error!("Message::from_stream: Stream too short for payload. Expected len {}, actual remaining len {}", payload_len, stream.len() - cursor);
+                eprintln!("Message::from_stream: Stream too short for payload. Expected len {}, actual remaining len {}", payload_len, stream.len() - cursor);
                 Error::new(EINVAL)
             })?;
         cursor += payload_len;
 
-        let (pid, uid, gid) = get_uid_gid_from_pid(ctx.pid)?;
-
         // Create a new message with the payload and credentials
-        let mut message = Self::new(
-            payload.to_vec(),
-            AncillaryData::new(Credential::new(pid as i32, uid as i32, gid as i32), name),
-        );
+        let mut message = Self::new(payload.to_vec(), AncillaryData::new(cred, name));
 
         while let Some(cmsg_header) = AncillaryDataHeader::from_stream(&stream[cursor..])? {
             cursor += CMSG_HEADER_LEN_IN_STREAM;
             let data_stream = stream
                 .get(cursor..cursor + cmsg_header.data_len)
                 .ok_or_else(|| {
-                    log::error!("Message::from_stream: Stream too short for ancillary data. Expected len {}, actual remaining len {}", cmsg_header.data_len, stream.len() - cursor);
+                    eprintln!("Message::from_stream: Stream too short for ancillary data. Expected len {}, actual remaining len {}", cmsg_header.data_len, stream.len() - cursor);
                     Error::new(EINVAL)
                 })?;
 
@@ -135,10 +129,9 @@ impl DataPacket {
                     message.ancillary_data.num_fds += num_fds;
                 }
                 _ => {
-                    log::warn!(
+                    eprintln!(
                         "Message::from_stream: Unsupported cmsg type received. level: {}, type: {}",
-                        cmsg_header.level,
-                        cmsg_header.c_type
+                        cmsg_header.level, cmsg_header.c_type
                     );
                     return Err(Error::new(EOPNOTSUPP));
                 }
@@ -165,7 +158,7 @@ impl NumFromBytes for i32 {
                 .get(..mem::size_of::<i32>())
                 .and_then(|slice| slice.try_into().ok())
                 .ok_or_else(|| {
-                    log::error!(
+                    eprintln!(
                         "read_num: buffer is too short to read num len: {}",
                         buffer.len()
                     );
@@ -181,7 +174,23 @@ impl NumFromBytes for u32 {
                 .get(..mem::size_of::<u32>())
                 .and_then(|slice| slice.try_into().ok())
                 .ok_or_else(|| {
-                    log::error!(
+                    eprintln!(
+                        "read_num: buffer is too short to read num len: {}",
+                        buffer.len()
+                    );
+                    Error::new(EINVAL)
+                })?,
+        ))
+    }
+}
+impl NumFromBytes for u64 {
+    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self> {
+        Ok(u64::from_le_bytes(
+            buffer
+                .get(..mem::size_of::<u64>())
+                .and_then(|slice| slice.try_into().ok())
+                .ok_or_else(|| {
+                    eprintln!(
                         "read_num: buffer is too short to read num len: {}",
                         buffer.len()
                     );
@@ -197,7 +206,7 @@ impl NumFromBytes for usize {
                 .get(..mem::size_of::<usize>())
                 .and_then(|slice| slice.try_into().ok())
                 .ok_or_else(|| {
-                    log::error!(
+                    eprintln!(
                         "read_num: buffer is too short to read num len: {}",
                         buffer.len()
                     );
@@ -207,16 +216,12 @@ impl NumFromBytes for usize {
     }
 }
 
-fn get_uid_gid_from_pid(target_pid: usize) -> Result<(u32, u32, u32)> {
-    // broken anyways
-    return Err(Error::new(EINVAL));
-    /*
+fn get_uid_gid_from_pid(cap_fd: usize, target_pid: usize) -> Result<(u32, u32, u32)> {
     let mut buffer = [0u8; mem::size_of::<ProcMeta>()];
-    let _ = libredox::call::get_proc_credentials(target_pid, &mut buffer).map_err(|e| {
-        log::error!(
+    let _ = libredox::call::get_proc_credentials(cap_fd, target_pid, &mut buffer).map_err(|e| {
+        eprintln!(
             "Failed to get process credentials for pid {}: {:?}",
-            target_pid,
-            e
+            target_pid, e
         );
         Error::new(EINVAL)
     })?;
@@ -227,12 +232,11 @@ fn get_uid_gid_from_pid(target_pid: usize) -> Result<(u32, u32, u32)> {
     cursor += mem::size_of::<u32>() * 3;
     let gid = read_num::<u32>(&buffer[cursor..])?;
     Ok((pid, uid, gid))
-    */
 }
 
 fn read_msghdr_info(stream: &mut [u8]) -> Result<(usize, usize, usize)> {
     if stream.len() < mem::size_of::<usize>() * 3 {
-        log::error!(
+        eprintln!(
             "get_msghdr_info: stream buffer is too small to read headers. len: {}",
             stream.len()
         );
@@ -277,7 +281,7 @@ impl<'a> MsgWriter<'a> {
         name_write_fn: fn(&String, &mut [u8]) -> Result<usize>,
     ) -> Result<()> {
         if self.buffer.len() < self.written_len + mem::size_of::<usize>() {
-            log::warn!("MsgWriter::write_name: Buffer too small to write name length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
+            eprintln!("MsgWriter::write_name: Buffer too small to write name length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
             self.written_len = self.buffer.len();
             return Ok(());
         }
@@ -287,7 +291,7 @@ impl<'a> MsgWriter<'a> {
                 self.buffer.len() - self.written_len - mem::size_of::<usize>(),
             );
             if copy_len < name.len() {
-                log::warn!("MsgWriter::write_name: Name will be truncated. Full length: {}, buffer available: {}", name.len(), copy_len);
+                eprintln!("MsgWriter::write_name: Name will be truncated. Full length: {}, buffer available: {}", name.len(), copy_len);
             }
             let name_len = name_write_fn(
                 &name,
@@ -309,7 +313,7 @@ impl<'a> MsgWriter<'a> {
             .buffer
             .get_mut(self.written_len..self.written_len + mem::size_of::<usize>())
         else {
-            log::warn!("MsgWriter::write_payload: Buffer too small to write payload length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
+            eprintln!("MsgWriter::write_payload: Buffer too small to write payload length. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
             self.written_len = self.buffer.len();
             return Ok(0);
         };
@@ -318,13 +322,13 @@ impl<'a> MsgWriter<'a> {
 
         let copy_len = cmp::min(iov_size, full_len);
         if copy_len < full_len {
-            log::warn!("MsgWriter::write_payload: Payload will be truncated. Full length: {}, buffer available: {}", full_len, copy_len);
+            eprintln!("MsgWriter::write_payload: Payload will be truncated. Full length: {}, buffer available: {}", full_len, copy_len);
         }
         let Some(payload_buffer) = self
             .buffer
             .get_mut(self.written_len..self.written_len + copy_len)
         else {
-            log::warn!("MsgWriter::write_payload: Buffer too small to write payload data. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
+            eprintln!("MsgWriter::write_payload: Buffer too small to write payload data. written_len: {}, buffer_len: {}", self.written_len, self.buffer.len());
             self.written_len = self.buffer.len();
             return Ok(0);
         };
@@ -337,11 +341,11 @@ impl<'a> MsgWriter<'a> {
         let data_len = data.len();
 
         let Some(remaining_buf) = self.buffer.get_mut(self.written_len..) else {
-            log::warn!("CmsgWriter::write_cmsg: No remaining buffer space at all.");
+            eprintln!("CmsgWriter::write_cmsg: No remaining buffer space at all.");
             return false;
         };
         if remaining_buf.len() < CMSG_HEADER_LEN_IN_STREAM {
-            log::warn!("CmsgWriter::write_cmsg: Not enough space for cmsg header. remaining: {}, needed: {}", remaining_buf.len(), CMSG_HEADER_LEN_IN_STREAM);
+            eprintln!("CmsgWriter::write_cmsg: Not enough space for cmsg header. remaining: {}, needed: {}", remaining_buf.len(), CMSG_HEADER_LEN_IN_STREAM);
             // Fill the remaining buffer with 1s to indicate Imcomplete CMSG header
             remaining_buf.fill(1);
             self.written_len += remaining_buf.len();
@@ -356,7 +360,7 @@ impl<'a> MsgWriter<'a> {
         cursor += CMSG_DATA_LEN_SIZE;
 
         if remaining_buf.len() < cursor + data_len {
-            log::warn!(
+            eprintln!(
                 "CmsgWriter::write_cmsg: Not enough space for cmsg data. remaining: {}, needed: {}",
                 remaining_buf.len(),
                 cursor + data_len
@@ -390,10 +394,10 @@ impl<'a> MsgWriter<'a> {
     }
 }
 
-fn path_buf_to_string(path_buf: &[u8]) -> Result<String> {
+fn path_buf_to_str(path_buf: &[u8]) -> Result<&str> {
     match std::str::from_utf8(path_buf) {
         Ok("") => Err(Error::new(EINVAL)),
-        Ok(s) => Ok(s.to_string()),
+        Ok(s) => Ok(s),
         Err(_) => Err(Error::new(EINVAL)),
     }
 }
