@@ -12,6 +12,11 @@ use redox_initfs::types as initfs;
 
 pub const KIBIBYTE: u64 = 1024;
 pub const MEBIBYTE: u64 = KIBIBYTE * 1024;
+
+#[cfg(debug_assertions)]
+pub const DEFAULT_MAX_SIZE: u64 = 128 * MEBIBYTE;
+
+#[cfg(not(debug_assertions))]
 pub const DEFAULT_MAX_SIZE: u64 = 64 * MEBIBYTE;
 
 enum EntryKind {
