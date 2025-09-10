@@ -926,7 +926,7 @@ impl<'a> ProcScheme<'a> {
             }
             Handle::Proc(fd_pid) => {
                 let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
-                    log::info!("Invalid proc call: {metadata:?}");
+                    log::trace!("Invalid proc call: {metadata:?}");
                     return Response::ready_err(EINVAL, op);
                 };
                 fn cvt_u32(u: u32) -> Option<u32> {
@@ -1066,7 +1066,7 @@ impl<'a> ProcScheme<'a> {
             Handle::Ps(_) => Response::ready_err(EOPNOTSUPP, op),
             Handle::ProcCredsCapability => {
                 let Some(verb) = ProcCall::try_from_raw(metadata[0] as usize) else {
-                    log::info!("Invalid proc call: {metadata:?}");
+                    log::trace!("Invalid proc call: {metadata:?}");
                     return Response::ready_err(EINVAL, op);
                 };
                 match verb {
@@ -1278,6 +1278,7 @@ impl<'a> ProcScheme<'a> {
         awoken: &mut VecDeque<VirtualId>,
         tag: Option<Tag>,
     ) -> Poll<Response> {
+        log::trace!("ON_EXIT_START {pid:?} status {status:#x}");
         let Some(proc_rc) = self.processes.get(&pid) else {
             return if let Some(tag) = tag {
                 Response::ready_err(EBADFD, tag)
@@ -2060,10 +2061,25 @@ impl<'a> ProcScheme<'a> {
                 return SendResult::Succeeded;
             };
 
+            // Similarly, don't send anything for already exiting or exited processes. It would be
+            // bad if e.g. SIGCONT could cause these to become PossiblyRunnable again.
+            if matches!(
+                target_proc.status,
+                ProcessStatus::Exited { .. } | ProcessStatus::Exiting { .. }
+            ) {
+                return SendResult::Succeeded;
+            }
+
             let Some(mut sig_pctl) = target_proc.sig_pctl.as_ref() else {
                 log::trace!("No pctl {caller_pid:?} => {target_pid:?}");
                 return SendResult::Invalid;
             };
+            log::trace!("PCTL {:#x?}", &**sig_pctl);
+            log::trace!(
+                "STS {:?} NTHRD {}",
+                target_proc.status,
+                target_proc.threads.len()
+            );
 
             if sig == SIGCONT
                 && let ProcessStatus::Stopped(_sig) = target_proc.status
@@ -2130,11 +2146,23 @@ impl<'a> ProcScheme<'a> {
 
                 for thread in &target_proc.threads {
                     let thread = thread.borrow();
-                    let _ = syscall::write(
+                    match syscall::write(
                         *thread.status_hndl,
                         &(ContextVerb::Stop as usize).to_ne_bytes(),
-                    )
-                    .expect("TODO");
+                    ) {
+                        Ok(_) => (),
+                        // TODO: Write a test that this actually results in the thread eventually
+                        // being removed from `threads`. A "dead thread" event should already have
+                        // been triggered, but it is possible that happens during this code, or
+                        // just before that event.
+                        //
+                        // Thread has state Dead, so ignore.
+                        Err(Error { errno: EOWNERDEAD }) => continue,
+                        Err(other) => {
+                            log::error!("Unexpected error when stopping context: {other}, pid {target_pid:?} thread fd {}", *thread.status_hndl);
+                            continue;
+                        }
+                    }
                     if let Some(ref tctl) = thread.sig_ctrl {
                         tctl.word[0].fetch_and(!sig_bit(SIGCONT), Ordering::Relaxed);
                     }
@@ -2145,6 +2173,7 @@ impl<'a> ProcScheme<'a> {
                     .pending
                     .fetch_and(!sig_bit(SIGCONT), Ordering::Relaxed);
 
+                log::trace!("SUCCEEDED SIGCHILD MY_PID {target_pid:?}");
                 return SendResult::SucceededSigchld {
                     orig_signal: nz_signal,
                     ppid: target_proc.ppid,
@@ -2238,6 +2267,7 @@ impl<'a> ProcScheme<'a> {
                             let Some(ref tctl) = thread.sig_ctrl else {
                                 continue;
                             };
+                            log::trace!("TCTL {:#x?}", &**tctl);
                             if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig)
                                 != 0
                             {
@@ -2300,6 +2330,7 @@ impl<'a> ProcScheme<'a> {
                 }
                 // TODO(err): Just ignore EINVAL (missing signal config), otherwise handle error?
                 if ppid != INIT_PID {
+                    log::trace!("SIGCHLDing {ppid:?}");
                     if let Err(err) = self.on_send_sig(
                         INIT_PID, // caller, TODO?
                         KillTarget::Proc(ppid),
