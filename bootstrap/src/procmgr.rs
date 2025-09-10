@@ -147,10 +147,10 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
                 // dont-care, already called explicit exit()
                 0
             } else if sts_buf.status == ContextStatus::ForceKilled as usize {
-                // TODO: "killed by SIGKILL"
-                1
+                (SIGKILL << 8) as u16
             } else if sts_buf.status == ContextStatus::UnhandledExcp as usize {
                 // TODO: translate arch-specific exception kind
+                // TODO: generate coredump (or let some other process do that)
                 // into signal (SIGSEGV, SIGBUS, SIGILL, SIGFPE)
                 1
             } else {
