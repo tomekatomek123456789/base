@@ -664,10 +664,8 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
         let socket_rc = self.get_socket(id)?;
         let socket = socket_rc.borrow();
 
-        let path = socket.path.as_ref().ok_or_else(|| {
-            eprintln!("fpath(id: {}): Socket is unnamed, has no path.", id);
-            Error::new(ENOENT)
-        })?;
+        let empty = String::new();
+        let path = socket.path.as_ref().unwrap_or(&empty);
         Ok(Self::fpath_inner(path, buf)?)
     }
 
@@ -727,6 +725,21 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
                 Err(Error::new(EINVAL))
             }
         }
+    }
+
+    fn fevent(&mut self, id: usize, flags: EventFlags, ctx: &CallerCtx) -> Result<EventFlags> {
+        let socket_rc = self.get_socket(id)?;
+        let mut socket = socket_rc.borrow_mut();
+
+        let mut ready = EventFlags::empty();
+        if flags.contains(EVENT_READ) && !socket.messages.is_empty() {
+            ready |= EVENT_READ;
+        }
+        if flags.contains(EVENT_WRITE) && socket.peer.is_some() {
+            ready |= EVENT_WRITE;
+        }
+
+        Ok(ready)
     }
 
     fn fstat(&mut self, id: usize, stat: &mut Stat, ctx: &CallerCtx) -> Result<()> {

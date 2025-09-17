@@ -374,15 +374,15 @@ impl<'sock> UdsStreamScheme<'sock> {
         metadata: &[u64],
         ctx: &CallerCtx,
     ) -> Result<usize> {
-        let Some(verb) = SocketCall::try_from_raw(metadata[0] as usize) else {
+        let Some(verb) = SocketCall::try_from_raw(*metadata.get(0).ok_or(Error::new(EINVAL))? as usize) else {
             eprintln!("call_inner: Invalid verb in metadata: {:?}", metadata);
             return Err(Error::new(EINVAL));
         };
         match verb {
             SocketCall::Bind => self.handle_bind(id, &payload),
             SocketCall::Connect => self.handle_connect(id, &payload),
-            SocketCall::SetSockOpt => self.handle_setsockopt(id, metadata[1] as i32, &payload),
-            SocketCall::GetSockOpt => self.handle_getsockopt(id, metadata[1] as i32, payload),
+            SocketCall::SetSockOpt => self.handle_setsockopt(id, *metadata.get(1).ok_or(Error::new(EINVAL))? as i32, &payload),
+            SocketCall::GetSockOpt => self.handle_getsockopt(id, *metadata.get(1).ok_or(Error::new(EINVAL))? as i32, payload),
             SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
             SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
             SocketCall::Unbind => self.handle_unbind(id),
@@ -418,6 +418,9 @@ impl<'sock> UdsStreamScheme<'sock> {
             socket.state = State::Bound;
             token = self.rng.next_u64();
             socket.issued_token = Some(token);
+            
+            //TODO: Hack since relibc does not listen()
+            socket.start_listening()?;
         }
 
         self.socket_paths.insert(path_owned, socket_rc.clone());
@@ -1076,8 +1079,8 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
         let socket_rc = self.get_socket(id)?;
         let socket = socket_rc.borrow();
-
-        let path = socket.path.as_ref().ok_or(Error::new(EBADF))?;
+        let empty = String::new();
+        let path = socket.path.as_ref().unwrap_or(&empty);
         Ok(Self::fpath_inner(path, buf)?)
     }
 
@@ -1145,6 +1148,23 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
             }
             _ => Err(Error::new(EINVAL)),
         }
+    }
+
+    fn fevent(&mut self, id: usize, flags: EventFlags, ctx: &CallerCtx) -> Result<EventFlags> {
+        let socket_rc = self.get_socket(id)?;
+        let mut socket = socket_rc.borrow_mut();
+
+        let mut ready = EventFlags::empty();
+        if let Some(connection) = &socket.connection {
+            if flags.contains(EVENT_READ) && !connection.packets.is_empty() {
+                ready |= EVENT_READ;
+            }
+            if flags.contains(EVENT_WRITE) {
+                ready |= EVENT_WRITE;
+            }
+        }
+
+        Ok(ready)
     }
 
     fn fstat(&mut self, id: usize, stat: &mut Stat, ctx: &CallerCtx) -> Result<()> {
