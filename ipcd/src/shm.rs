@@ -35,7 +35,7 @@ impl SchemeSync for ShmScheme {
     fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
         let path = Rc::from(path);
         let entry = match self.maps.entry(Rc::clone(&path)) {
-            Entry::Occupied(mut e) => {
+            Entry::Occupied(e) => {
                 if flags & syscall::O_EXCL != 0 && flags & syscall::O_CREAT != 0 {
                     return Err(Error::new(EEXIST));
                 }
@@ -102,11 +102,22 @@ impl SchemeSync for ShmScheme {
     }
     fn ftruncate(&mut self, id: usize, len: u64, _ctx: &CallerCtx) -> Result<()> {
         let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
-        self.maps
+        match self
+            .maps
             .get_mut(path)
             .expect("handle pointing to nothing")
-            .buffer = Some(MmapGuard::alloc((len as usize).div_ceil(PAGE_SIZE))?);
-        Ok(())
+            .buffer
+        {
+            Some(_) => {
+                //TODO: Reallocating is unsafe here as we are mixing ftruncate with mmap
+                //      which requires the memory to be contiguous.
+                Err(Error::new(EIO))
+            }
+            ref mut buf @ None => {
+                *buf = Some(MmapGuard::alloc((len as usize))?);
+                Ok(())
+            }
+        }
     }
     fn mmap_prep(
         &mut self,
@@ -132,7 +143,7 @@ impl SchemeSync for ShmScheme {
             }
             //TODO: this should be only handled by ftruncate
             ref mut buf @ None => {
-                *buf = Some(MmapGuard::alloc(size.div_ceil(PAGE_SIZE))?);
+                *buf = Some(MmapGuard::alloc(size)?);
                 Ok(buf.as_mut().unwrap().as_ptr() + offset as usize)
             }
         }
@@ -180,9 +191,12 @@ impl SchemeSync for ShmScheme {
 pub struct MmapGuard {
     base: usize,
     size: usize,
+    // user specified, non-aligned size
+    len: usize,
 }
 impl MmapGuard {
-    pub fn alloc(page_count: usize) -> Result<Self> {
+    pub fn alloc(len: usize) -> Result<Self> {
+        let page_count = len.div_ceil(PAGE_SIZE);
         let size = page_count * PAGE_SIZE;
         let base = unsafe {
             syscall::fmap(
@@ -196,7 +210,7 @@ impl MmapGuard {
             )
         }?;
 
-        Ok(Self { base, size })
+        Ok(Self { base, size, len })
     }
     pub fn len(&self) -> usize {
         self.size
@@ -204,27 +218,24 @@ impl MmapGuard {
     pub fn as_ptr(&self) -> usize {
         self.base
     }
-    pub fn as_slice(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.base as *const u8, self.size) }
-    }
-    pub fn as_slice_mut(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, self.size) }
-    }
     pub fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize> {
         let read_len = buf.len();
         let end = offset
             .checked_add(read_len)
-            .ok_or_else(|| Error::new(ERANGE))?;
+            .ok_or_else(|| Error::new(ERANGE))
+            .map(|f| cmp::min(f, self.len))?;
 
-        if end > self.size {
-            return Err(Error::new(ERANGE));
+        if offset > self.len {
+            return Err(Error::new(EINVAL));
         }
 
-        let mmap_slice = Self::as_slice(self);
-        let source_slice = &mmap_slice[offset..end];
-        buf.copy_from_slice(source_slice);
+        unsafe {
+            let src_ptr = (self.base as *const u8).add(offset);
+            let dst_ptr = buf.as_mut_ptr();
+            core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, end - offset);
+        }
 
-        Ok(read_len)
+        Ok(end - offset)
     }
     pub fn write(&mut self, offset: usize, buf: &[u8]) -> Result<usize> {
         let write_len = buf.len();
@@ -232,13 +243,15 @@ impl MmapGuard {
             .checked_add(write_len)
             .ok_or_else(|| Error::new(ERANGE))?;
 
-        if end > self.size {
-            return Err(Error::new(ERANGE));
+        if end > self.len {
+            return Err(Error::new(EINVAL));
         }
 
-        let mmap_slice = Self::as_slice_mut(self);
-        let dest_slice = &mut mmap_slice[offset..end];
-        dest_slice.copy_from_slice(buf);
+        unsafe {
+            let src_ptr = buf.as_ptr();
+            let dst_ptr = (self.base as *mut u8).add(offset);
+            core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, write_len);
+        }
 
         Ok(write_len)
     }
