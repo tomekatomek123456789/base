@@ -83,6 +83,7 @@ impl Smolnetd {
         let protocol_addrs = vec![
             //This is a placeholder IP for DHCP
             IpCidr::new(IpAddress::v4(0, 0, 0, 0), 8),
+            IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8),
         ];
 
         let default_gw = Ipv4Address::from_str(getcfg("ip_router").unwrap().trim())
