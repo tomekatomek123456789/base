@@ -59,7 +59,7 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
 
     let mut scheme = ProcScheme::new(auth, &queue);
 
-    log::info!("process manager started");
+    log::debug!("process manager started");
     let _ = syscall::write(write_fd, &[0]);
     let _ = syscall::close(write_fd);
 
