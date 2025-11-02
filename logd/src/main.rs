@@ -8,8 +8,6 @@ mod scheme;
 fn daemon(daemon: redox_daemon::Daemon) -> ! {
     let socket = Socket::create("log").expect("logd: failed to create log scheme");
 
-    eprintln!("logd: ready for logging on log:");
-
     daemon.ready().expect("logd: failed to notify parent");
 
     let mut scheme = LogScheme::new();
