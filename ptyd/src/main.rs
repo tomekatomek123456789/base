@@ -45,7 +45,6 @@ fn main() {
             .subscribe(time_file.raw(), EventSource::Time, EventFlags::READ)
             .expect("pty: failed to watch events on time:");
 
-        println!("ptyd daemon ready");
         daemon.ready().expect("pty: failed to notify parent");
 
         //TODO: do not set timeout if not necessary
