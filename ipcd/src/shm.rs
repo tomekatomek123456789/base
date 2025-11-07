@@ -5,6 +5,7 @@ use std::{
     rc::Rc,
 };
 use syscall::{
+    data::Stat,
     error::*, schemev2::NewFdFlags, Error, Map, MapFlags, Result, MAP_PRIVATE, MAP_SHARED,
     PAGE_SIZE, PROT_READ, PROT_WRITE,
 };
@@ -98,6 +99,27 @@ impl SchemeSync for ShmScheme {
             // There is no other reference to this entry, drop
             entry.remove_entry();
         }
+        Ok(())
+    }
+    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
+        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let size = match self
+            .maps
+            .get(path)
+            .expect("handle pointing to nothing")
+            .buffer
+        {
+            Some(ref map) => map.len(),
+            None => 0,
+        };
+
+        //TODO: fill in more items?
+        *stat = Stat {
+            st_mode: syscall::MODE_FILE,
+            st_size: size as _,
+            ..Default::default()
+        };
+
         Ok(())
     }
     fn ftruncate(&mut self, id: usize, len: u64, _ctx: &CallerCtx) -> Result<()> {
