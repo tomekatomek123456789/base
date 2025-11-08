@@ -731,9 +731,9 @@ impl<'sock> UdsStreamScheme<'sock> {
         // Try to accept a waiting connection
         let Some(client_id) = socket.awaiting.pop_front() else {
             if flags & O_NONBLOCK == O_NONBLOCK {
-                return Ok(Some(OpenResult::WouldBlock));
+                return Err(Error::new(EAGAIN));
             } else {
-                return Err(Error::new(EWOULDBLOCK));
+                return Ok(Some(OpenResult::WouldBlock));
             }
         };
         Ok(self.accept_connection(socket, client_id)?)
@@ -893,9 +893,9 @@ impl<'sock> UdsStreamScheme<'sock> {
                     return if connection.is_peer_shutdown {
                         Ok(OpenResult::OtherSchemeMultiple { num_fds: 0 }) // EOF, no data to read
                     } else if (socket.flags as usize) & O_NONBLOCK == O_NONBLOCK {
-                        Ok(OpenResult::WouldBlock)
+                        Err(Error::new(EAGAIN))
                     } else {
-                        Err(Error::new(EWOULDBLOCK))
+                        Ok(OpenResult::WouldBlock)
                     };
                 }
 
