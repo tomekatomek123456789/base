@@ -5,7 +5,7 @@ use super::{
     DataPacket, MsgWriter, MIN_RECV_MSG_LEN,
 };
 
-use libc::{AF_UNIX, SO_DOMAIN, SO_PASSCRED};
+use libc::{AF_UNIX, SO_DOMAIN, SO_PASSCRED, SO_PEERCRED, ucred};
 use rand::prelude::*;
 use redox_rt::protocol::SocketCall;
 use redox_scheme::{
@@ -17,6 +17,7 @@ use std::{
     cmp,
     collections::{HashMap, HashSet, VecDeque},
     mem,
+    ptr,
     rc::Rc,
 };
 use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error, Stat};
@@ -158,7 +159,7 @@ impl Default for State {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Socket {
     primary_id: usize,
     path: Option<String>,
@@ -168,6 +169,7 @@ pub struct Socket {
     awaiting: VecDeque<usize>,
     connection: Option<Connection>,
     issued_token: Option<u64>,
+    ucred: ucred,
 }
 
 impl Socket {
@@ -178,6 +180,7 @@ impl Socket {
         options: HashSet<i32>,
         flags: usize,
         connection: Option<Connection>,
+        ctx: &CallerCtx,
     ) -> Self {
         Self {
             primary_id: id,
@@ -185,12 +188,19 @@ impl Socket {
             state,
             options,
             flags,
+            awaiting: VecDeque::new(),
             connection,
-            ..Default::default()
+            issued_token: None,
+            //TODO: when should ucred be updated? man 7 unix for SO_PEERCRED says on connect, listen, or socketpair
+            ucred: ucred {
+                pid: ctx.pid as _,
+                uid: ctx.uid as _,
+                gid: ctx.gid as _,
+            }
         }
     }
 
-    fn accept(&mut self, primary_id: usize, awaiting_client_id: usize) -> Result<Self> {
+    fn accept(&mut self, primary_id: usize, awaiting_client_id: usize, ctx: &CallerCtx) -> Result<Self> {
         if !self.is_listening() {
             eprintln!(
                 "accept(id: {}): Accept called on a non-listening socket.",
@@ -205,6 +215,7 @@ impl Socket {
             self.options.clone(),
             self.flags,
             Some(Connection::new(awaiting_client_id)),
+            ctx,
         ))
     }
 
@@ -360,9 +371,9 @@ impl<'sock> UdsStreamScheme<'sock> {
         Ok((remote_id, remote_rc.clone()))
     }
 
-    fn handle_unnamed_socket(&mut self, flags: usize) -> usize {
+    fn handle_unnamed_socket(&mut self, flags: usize, ctx: &CallerCtx) -> usize {
         let new_id = self.next_id;
-        let new = Socket::new(new_id, None, State::Unbound, HashSet::new(), flags, None);
+        let new = Socket::new(new_id, None, State::Unbound, HashSet::new(), flags, None, ctx);
         self.sockets.insert(new_id, Rc::new(RefCell::new(new)));
         self.next_id += 1;
         new_id
@@ -548,6 +559,21 @@ impl<'sock> UdsStreamScheme<'sock> {
                 payload[..domain.len()].copy_from_slice(&domain);
                 Ok(domain.len())
             }
+            SO_PEERCRED => {
+                let (_, remote_rc) = self.get_connected_peer(id)?;
+                let mut remote = remote_rc.borrow_mut();
+                payload.fill(0);
+                if payload.len() < mem::size_of::<ucred>() {
+                    eprintln!(
+                        "socket_getsockopt(id: {}): SO_PEERCRED payload buffer is too small. len: {}",
+                        id,
+                        payload.len()
+                    );
+                    return Err(Error::new(ENOBUFS));
+                }
+                unsafe { ptr::write(payload.as_mut_ptr() as *mut ucred, remote.ucred) }
+                Ok(mem::size_of::<ucred>())
+            }
             _ => {
                 eprintln!(
                     "socket_getsockopt(id: {}): Unsupported option: {}",
@@ -698,13 +724,14 @@ impl<'sock> UdsStreamScheme<'sock> {
         &mut self,
         listener_socket: &mut Socket,
         client_id: usize,
+        ctx: &CallerCtx
     ) -> Result<Option<OpenResult>> {
         let (new_id, new) = {
             let Ok(client_rc) = self.get_socket(client_id) else {
                 return Ok(None); // Client socket has been closed, nothing to accept
             };
             let new_id = self.next_id;
-            let new = listener_socket.accept(new_id, client_id)?;
+            let new = listener_socket.accept(new_id, client_id, ctx)?;
 
             let mut client_socket = client_rc.borrow_mut();
             client_socket.establish(new_id)?;
@@ -720,7 +747,7 @@ impl<'sock> UdsStreamScheme<'sock> {
         }))
     }
 
-    fn handle_accept(&mut self, id: usize, socket: &mut Socket) -> Result<Option<OpenResult>> {
+    fn handle_accept(&mut self, id: usize, socket: &mut Socket, ctx: &CallerCtx) -> Result<Option<OpenResult>> {
         let flags = socket.flags;
         if !socket.is_listening() {
             eprintln!(
@@ -737,7 +764,7 @@ impl<'sock> UdsStreamScheme<'sock> {
                 return Ok(Some(OpenResult::WouldBlock));
             }
         };
-        Ok(self.accept_connection(socket, client_id)?)
+        Ok(self.accept_connection(socket, client_id, ctx)?)
     }
 
     // Transition a Bound or Unbound socket to the Listening state.
@@ -763,14 +790,14 @@ impl<'sock> UdsStreamScheme<'sock> {
     // Handle a `dup` call for `b"listen"`.
     // If the socket is not yet listening, it transitions it to the Listening state.
     // If it is already listening, it tries to accept a pending connection.
-    fn handle_listen(&mut self, id: usize) -> Result<OpenResult> {
+    fn handle_listen(&mut self, id: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         loop {
             let socket_rc = self.get_socket(id)?.clone();
             let is_listening = socket_rc.borrow().is_listening();
 
             if is_listening {
                 let mut socket = socket_rc.borrow_mut();
-                match self.handle_accept(id, &mut socket)? {
+                match self.handle_accept(id, &mut socket, ctx)? {
                     Some(result) => return Ok(result),
                     None => continue,
                 }
@@ -781,10 +808,10 @@ impl<'sock> UdsStreamScheme<'sock> {
         }
     }
 
-    fn handle_connect_socketpair(&mut self, id: usize) -> Result<OpenResult> {
+    fn handle_connect_socketpair(&mut self, id: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let new_id = self.next_id;
         let flags = self.get_socket(id)?.borrow().flags;
-        let new = Socket::new(new_id, None, State::Connecting, HashSet::new(), flags, None);
+        let new = Socket::new(new_id, None, State::Connecting, HashSet::new(), flags, None, ctx);
         {
             let socket_rc = self.get_socket(id)?;
             let mut socket = socket_rc.borrow_mut();
@@ -1030,9 +1057,9 @@ impl<'sock> UdsStreamScheme<'sock> {
 }
 
 impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
-    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let new_id = if path.is_empty() {
-            self.handle_unnamed_socket(flags)
+            self.handle_unnamed_socket(flags, ctx)
         } else {
             eprintln!(
                 "open(path: '{}'): Attempting to open a named socket, which is not supported.",
@@ -1056,10 +1083,10 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         self.call_inner(id, payload, metadata, ctx)
     }
 
-    fn dup(&mut self, id: usize, buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn dup(&mut self, id: usize, buf: &[u8], ctx: &CallerCtx) -> Result<OpenResult> {
         match buf {
-            b"listen" => self.handle_listen(id),
-            b"connect" => self.handle_connect_socketpair(id),
+            b"listen" => self.handle_listen(id, ctx),
+            b"connect" => self.handle_connect_socketpair(id, ctx),
             b"recvfd" => self.handle_recvfd(id),
             _ => Err(Error::new(EINVAL)),
         }

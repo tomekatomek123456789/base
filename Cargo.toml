@@ -19,4 +19,6 @@ members = [
 exclude = ["bootstrap"]
 
 [patch.crates-io]
+# Needs libc 0.2 backport of https://github.com/rust-lang/libc/pull/4825
+libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-0.2" }
 net2 = { git = "https://gitlab.redox-os.org/redox-os/net2-rs.git", branch = "master" }

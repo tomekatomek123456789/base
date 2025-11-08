@@ -478,8 +478,7 @@ dependencies = [
 [[package]]
 name = "libc"
 version = "0.2.177"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
+source = "git+https://gitlab.redox-os.org/redox-os/liblibc.git?branch=redox-0.2#d795af0cee4d200c549a7134d50ce394ff4a74d5"
 
 [[package]]
 name = "libredox"
