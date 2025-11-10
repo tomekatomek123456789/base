@@ -3,7 +3,7 @@ use std::{
     fs::File,
     io::{self, prelude::*},
     os::unix::io::{AsRawFd, FromRawFd, RawFd},
-    str
+    str,
 };
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
@@ -14,9 +14,13 @@ fn main() -> io::Result<()> {
     let server = File::create("chan:log")?;
     let mut event_file = File::open("event:")?;
 
-    syscall::fcntl(server.as_raw_fd() as usize, syscall::F_SETFL, syscall::O_NONBLOCK)
-        .map(|_| ())
-        .map_err(from_syscall_error)?;
+    syscall::fcntl(
+        server.as_raw_fd() as usize,
+        syscall::F_SETFL,
+        syscall::O_NONBLOCK,
+    )
+    .map(|_| ())
+    .map_err(from_syscall_error)?;
     event_file.write(&syscall::Event {
         id: server.as_raw_fd() as usize,
         data: 0,
@@ -34,9 +38,11 @@ fn main() -> io::Result<()> {
             println!("Listener recevied flags: {:?}", event.flags);
             if event.flags & syscall::EVENT_WRITE == syscall::EVENT_WRITE {
                 loop {
-                    let stream = match syscall::dup(server.as_raw_fd() as usize, b"listen").map_err(from_syscall_error) {
+                    let stream = match syscall::dup(server.as_raw_fd() as usize, b"listen")
+                        .map_err(from_syscall_error)
+                    {
                         Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                        stream => stream?
+                        stream => stream?,
                     };
                     let stream = unsafe { File::from_raw_fd(stream as RawFd) };
 
@@ -64,11 +70,15 @@ fn main() -> io::Result<()> {
                             println!("--> EOF");
                             clients.remove(&event.data);
                             continue 'outer;
-                        },
+                        }
                         Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                        len => len?
+                        len => len?,
                     };
-                    println!("--> Read {}/128 bytes: {:?}", len, str::from_utf8(&buf[..len]));
+                    println!(
+                        "--> Read {}/128 bytes: {:?}",
+                        len,
+                        str::from_utf8(&buf[..len])
+                    );
                 }
             }
             if event.flags & syscall::EVENT_WRITE == syscall::EVENT_WRITE {
@@ -79,9 +89,14 @@ fn main() -> io::Result<()> {
                     let len = match client.write(BUF[written..].as_bytes()) {
                         Ok(0) => panic!("EOF should never happen here"),
                         Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                        len => len?
+                        len => len?,
                     };
-                    println!("--> Wrote {}/{} bytes: {:?}", len, BUF.len(), &BUF[written..]);
+                    println!(
+                        "--> Wrote {}/{} bytes: {:?}",
+                        len,
+                        BUF.len(),
+                        &BUF[written..]
+                    );
                     written += len;
                 }
             }

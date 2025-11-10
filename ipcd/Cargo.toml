@@ -8,7 +8,7 @@ libredox = { version = "0.1.8", features = ["call"]}
 redox-daemon = "0.1.2"
 redox_syscall = "0.5.17"
 redox-scheme = "0.8.0"
-redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", default-features = false }
+redox-rt = { git = "https://gitlab.redox-os.org/Ibuki.O/relibc.git", branch = "getpeername", default-features = false }
 redox_event = "0.4.0"
 anyhow = "1.0.97"
 libc = "0.2"

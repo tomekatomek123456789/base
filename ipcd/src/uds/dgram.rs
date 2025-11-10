@@ -203,6 +203,7 @@ impl<'sock> UdsDgramScheme<'sock> {
             SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
             SocketCall::Unbind => self.handle_unbind(id),
             SocketCall::GetToken => self.handle_get_token(id, payload),
+            SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
             _ => Err(Error::new(EOPNOTSUPP)),
         }
     }
@@ -432,6 +433,18 @@ impl<'sock> UdsDgramScheme<'sock> {
         }
         payload[..token_bytes_len].copy_from_slice(&token_bytes);
         return Ok(token_bytes_len);
+    }
+
+    fn handle_get_peer_name(&self, id: usize, payload: &mut [u8]) -> Result<usize> {
+        let (_, socket_rc) = self.get_connected_peer(id)?;
+        let socket_borrow = socket_rc.borrow();
+        match socket_borrow.path.as_ref() {
+            Some(path_string) => Self::fpath_inner(path_string, payload),
+            None => {
+                let empty_path = "".to_string();
+                Self::fpath_inner(&empty_path, payload)
+            }
+        }
     }
 
     fn handle_connect_socketpair(&mut self, id: usize) -> Result<OpenResult> {

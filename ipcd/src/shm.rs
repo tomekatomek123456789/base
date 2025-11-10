@@ -5,9 +5,8 @@ use std::{
     rc::Rc,
 };
 use syscall::{
-    data::Stat,
-    error::*, schemev2::NewFdFlags, Error, Map, MapFlags, Result, MAP_PRIVATE, MAP_SHARED,
-    PAGE_SIZE, PROT_READ, PROT_WRITE,
+    data::Stat, error::*, schemev2::NewFdFlags, Error, Map, MapFlags, Result, MAP_PRIVATE,
+    MAP_SHARED, PAGE_SIZE, PROT_READ, PROT_WRITE,
 };
 
 #[derive(Default)]

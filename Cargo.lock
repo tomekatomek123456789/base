@@ -329,7 +329,7 @@ dependencies = [
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#cb0acf3e579f755d63db89e0301b3666ae097c8d"
+source = "git+https://gitlab.redox-os.org/Ibuki.O/relibc.git?branch=getpeername#274e8a11eb3312855ebdc1d0228cb89e6abbf538"
 
 [[package]]
 name = "getrandom"
@@ -757,7 +757,7 @@ dependencies = [
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#cb0acf3e579f755d63db89e0301b3666ae097c8d"
+source = "git+https://gitlab.redox-os.org/Ibuki.O/relibc.git?branch=getpeername#274e8a11eb3312855ebdc1d0228cb89e6abbf538"
 dependencies = [
  "bitflags 2.10.0",
  "generic-rt",

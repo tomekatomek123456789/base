@@ -5,7 +5,7 @@ use super::{
     DataPacket, MsgWriter, MIN_RECV_MSG_LEN,
 };
 
-use libc::{AF_UNIX, SO_DOMAIN, SO_PASSCRED, SO_PEERCRED, ucred};
+use libc::{ucred, AF_UNIX, SO_DOMAIN, SO_PASSCRED, SO_PEERCRED};
 use rand::prelude::*;
 use redox_rt::protocol::SocketCall;
 use redox_scheme::{
@@ -16,8 +16,7 @@ use std::{
     cell::RefCell,
     cmp,
     collections::{HashMap, HashSet, VecDeque},
-    mem,
-    ptr,
+    mem, ptr,
     rc::Rc,
 };
 use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error, Stat};
@@ -196,11 +195,16 @@ impl Socket {
                 pid: ctx.pid as _,
                 uid: ctx.uid as _,
                 gid: ctx.gid as _,
-            }
+            },
         }
     }
 
-    fn accept(&mut self, primary_id: usize, awaiting_client_id: usize, ctx: &CallerCtx) -> Result<Self> {
+    fn accept(
+        &mut self,
+        primary_id: usize,
+        awaiting_client_id: usize,
+        ctx: &CallerCtx,
+    ) -> Result<Self> {
         if !self.is_listening() {
             eprintln!(
                 "accept(id: {}): Accept called on a non-listening socket.",
@@ -373,7 +377,15 @@ impl<'sock> UdsStreamScheme<'sock> {
 
     fn handle_unnamed_socket(&mut self, flags: usize, ctx: &CallerCtx) -> usize {
         let new_id = self.next_id;
-        let new = Socket::new(new_id, None, State::Unbound, HashSet::new(), flags, None, ctx);
+        let new = Socket::new(
+            new_id,
+            None,
+            State::Unbound,
+            HashSet::new(),
+            flags,
+            None,
+            ctx,
+        );
         self.sockets.insert(new_id, Rc::new(RefCell::new(new)));
         self.next_id += 1;
         new_id
@@ -386,19 +398,30 @@ impl<'sock> UdsStreamScheme<'sock> {
         metadata: &[u64],
         ctx: &CallerCtx,
     ) -> Result<usize> {
-        let Some(verb) = SocketCall::try_from_raw(*metadata.get(0).ok_or(Error::new(EINVAL))? as usize) else {
+        let Some(verb) =
+            SocketCall::try_from_raw(*metadata.get(0).ok_or(Error::new(EINVAL))? as usize)
+        else {
             eprintln!("call_inner: Invalid verb in metadata: {:?}", metadata);
             return Err(Error::new(EINVAL));
         };
         match verb {
             SocketCall::Bind => self.handle_bind(id, &payload),
             SocketCall::Connect => self.handle_connect(id, &payload),
-            SocketCall::SetSockOpt => self.handle_setsockopt(id, *metadata.get(1).ok_or(Error::new(EINVAL))? as i32, &payload),
-            SocketCall::GetSockOpt => self.handle_getsockopt(id, *metadata.get(1).ok_or(Error::new(EINVAL))? as i32, payload),
+            SocketCall::SetSockOpt => self.handle_setsockopt(
+                id,
+                *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
+                &payload,
+            ),
+            SocketCall::GetSockOpt => self.handle_getsockopt(
+                id,
+                *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
+                payload,
+            ),
             SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
             SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
             SocketCall::Unbind => self.handle_unbind(id),
             SocketCall::GetToken => self.handle_get_token(id, payload),
+            SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
             _ => Err(Error::new(EOPNOTSUPP)),
         }
     }
@@ -430,7 +453,7 @@ impl<'sock> UdsStreamScheme<'sock> {
             socket.state = State::Bound;
             token = self.rng.next_u64();
             socket.issued_token = Some(token);
-            
+
             //TODO: Hack since relibc does not listen()
             socket.start_listening()?;
         }
@@ -720,11 +743,23 @@ impl<'sock> UdsStreamScheme<'sock> {
         return Ok(token_bytes_len);
     }
 
+    fn handle_get_peer_name(&self, id: usize, payload: &mut [u8]) -> Result<usize> {
+        let (_, socket_rc) = self.get_connected_peer(id)?;
+        let socket_borrow = socket_rc.borrow();
+        match socket_borrow.path.as_ref() {
+            Some(path_string) => Self::fpath_inner(path_string, payload),
+            None => {
+                let empty_path = "".to_string();
+                Self::fpath_inner(&empty_path, payload)
+            }
+        }
+    }
+
     fn accept_connection(
         &mut self,
         listener_socket: &mut Socket,
         client_id: usize,
-        ctx: &CallerCtx
+        ctx: &CallerCtx,
     ) -> Result<Option<OpenResult>> {
         let (new_id, new) = {
             let Ok(client_rc) = self.get_socket(client_id) else {
@@ -747,7 +782,12 @@ impl<'sock> UdsStreamScheme<'sock> {
         }))
     }
 
-    fn handle_accept(&mut self, id: usize, socket: &mut Socket, ctx: &CallerCtx) -> Result<Option<OpenResult>> {
+    fn handle_accept(
+        &mut self,
+        id: usize,
+        socket: &mut Socket,
+        ctx: &CallerCtx,
+    ) -> Result<Option<OpenResult>> {
         let flags = socket.flags;
         if !socket.is_listening() {
             eprintln!(
@@ -811,7 +851,15 @@ impl<'sock> UdsStreamScheme<'sock> {
     fn handle_connect_socketpair(&mut self, id: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let new_id = self.next_id;
         let flags = self.get_socket(id)?.borrow().flags;
-        let new = Socket::new(new_id, None, State::Connecting, HashSet::new(), flags, None, ctx);
+        let new = Socket::new(
+            new_id,
+            None,
+            State::Connecting,
+            HashSet::new(),
+            flags,
+            None,
+            ctx,
+        );
         {
             let socket_rc = self.get_socket(id)?;
             let mut socket = socket_rc.borrow_mut();

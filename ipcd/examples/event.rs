@@ -1,19 +1,24 @@
 use std::{
     fs::File,
     io::{self, prelude::*},
-    os::unix::io::{AsRawFd, FromRawFd, RawFd}
+    os::unix::io::{AsRawFd, FromRawFd, RawFd},
 };
 
 fn from_syscall_error(error: syscall::Error) -> io::Error {
     io::Error::from_raw_os_error(error.errno as i32)
 }
 fn nonblock(file: &File) -> io::Result<()> {
-    syscall::fcntl(file.as_raw_fd() as usize, syscall::F_SETFL, syscall::O_NONBLOCK)
-        .map(|_| ())
-        .map_err(from_syscall_error)
+    syscall::fcntl(
+        file.as_raw_fd() as usize,
+        syscall::F_SETFL,
+        syscall::O_NONBLOCK,
+    )
+    .map(|_| ())
+    .map_err(from_syscall_error)
 }
 fn dup(file: &File, buf: &str) -> io::Result<File> {
-    let stream = syscall::dup(file.as_raw_fd() as usize, buf.as_bytes()).map_err(from_syscall_error)?;
+    let stream =
+        syscall::dup(file.as_raw_fd() as usize, buf.as_bytes()).map_err(from_syscall_error)?;
     Ok(unsafe { File::from_raw_fd(stream as RawFd) })
 }
 
@@ -42,12 +47,12 @@ fn main() -> io::Result<()> {
     event_file.write(&syscall::Event {
         id: time_file.as_raw_fd() as usize,
         flags: syscall::EVENT_READ,
-        data: TOKEN_TIMER
+        data: TOKEN_TIMER,
     })?;
     event_file.write(&syscall::Event {
         id: server.as_raw_fd() as usize,
         flags: syscall::EVENT_WRITE | syscall::EVENT_READ,
-        data: TOKEN_SERVER
+        data: TOKEN_SERVER,
     })?;
 
     let mut event = syscall::Event::default();
@@ -63,7 +68,7 @@ fn main() -> io::Result<()> {
     event_file.write(&syscall::Event {
         id: client.as_raw_fd() as usize,
         flags: syscall::EVENT_WRITE | syscall::EVENT_READ,
-        data: TOKEN_CLIENT
+        data: TOKEN_CLIENT,
     })?;
 
     event_file.read(&mut event)?;
@@ -83,7 +88,7 @@ fn main() -> io::Result<()> {
     event_file.write(&syscall::Event {
         id: stream.as_raw_fd() as usize,
         flags: syscall::EVENT_READ | syscall::EVENT_WRITE,
-        data: TOKEN_STREAM
+        data: TOKEN_STREAM,
     })?;
 
     event_file.read(&mut event)?;
