@@ -21,6 +21,15 @@ use std::{
 };
 use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error, Stat};
 
+#[derive(Clone, Copy, Default)]
+struct MsgFlags(libc::c_int);
+
+impl MsgFlags {
+    fn nonblock(&self) -> bool {
+        self.0 & libc::MSG_DONTWAIT == libc::MSG_DONTWAIT
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct Connection {
     peer: usize,
@@ -280,11 +289,11 @@ impl Socket {
         }
     }
 
-    fn require_connected_connection(&mut self) -> Result<&mut Connection> {
+    fn require_connected_connection(&mut self, msg_flags: MsgFlags) -> Result<&mut Connection> {
         match self.state {
             State::Established | State::Accepted => self.require_connection(),
             State::Connecting => {
-                if self.flags & O_NONBLOCK == O_NONBLOCK {
+                if self.flags & O_NONBLOCK == O_NONBLOCK || msg_flags.nonblock() {
                     Err(Error::new(EAGAIN))
                 } else {
                     Err(Error::new(EWOULDBLOCK))
@@ -309,12 +318,13 @@ impl Socket {
 
     fn serialize_to_msgstream(
         &mut self,
+        msg_flags: MsgFlags,
         stream: &mut [u8],
         name_buf_size: usize,
         iov_size: usize,
     ) -> Result<usize> {
         let options = self.options.clone();
-        let connection = self.require_connected_connection()?;
+        let connection = self.require_connected_connection(msg_flags)?;
         connection.serialize_to_msgstream(stream, name_buf_size, iov_size, options)
     }
 }
@@ -364,7 +374,9 @@ impl<'sock> UdsStreamScheme<'sock> {
     fn get_connected_peer(&self, id: usize) -> Result<(usize, Rc<RefCell<Socket>>), Error> {
         let mut socket = self.get_socket(id)?.borrow_mut();
 
-        let remote_id = socket.require_connected_connection()?.peer;
+        let remote_id = socket
+            .require_connected_connection(MsgFlags::default())?
+            .peer;
         let remote_rc = self.get_socket(remote_id).map_err(|e| {
             eprintln!("get_connected_peer(id: {}): Peer socket (id: {}) has vanished. Original error: {:?}", id, remote_id, e);
             Error::new(EPIPE)
@@ -423,8 +435,23 @@ impl<'sock> UdsStreamScheme<'sock> {
                 *metadata.get(1).ok_or(Error::new(EINVAL))? as i32,
                 payload,
             ),
-            SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
-            SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
+            SocketCall::SendMsg => self.handle_sendmsg(
+                id,
+                metadata
+                    .get(1)
+                    .map(|x| MsgFlags(*x as _))
+                    .unwrap_or_default(),
+                payload,
+                ctx,
+            ),
+            SocketCall::RecvMsg => self.handle_recvmsg(
+                id,
+                metadata
+                    .get(1)
+                    .map(|x| MsgFlags(*x as _))
+                    .unwrap_or_default(),
+                payload,
+            ),
             SocketCall::Unbind => self.handle_unbind(id),
             SocketCall::GetToken => self.handle_get_token(id, payload),
             SocketCall::GetPeerName => self.handle_get_peer_name(id, payload),
@@ -613,7 +640,13 @@ impl<'sock> UdsStreamScheme<'sock> {
         }
     }
 
-    fn handle_sendmsg(&mut self, id: usize, msg_stream: &[u8], ctx: &CallerCtx) -> Result<usize> {
+    fn handle_sendmsg(
+        &mut self,
+        id: usize,
+        msg_flags: MsgFlags,
+        msg_stream: &[u8],
+        ctx: &CallerCtx,
+    ) -> Result<usize> {
         if msg_stream.is_empty() {
             eprintln!("msg_stream is empty, returning EINVAL.");
             return Err(Error::new(EINVAL));
@@ -626,6 +659,7 @@ impl<'sock> UdsStreamScheme<'sock> {
             self.proc_creds_capability,
             &mut remote_rc.borrow_mut(),
             name,
+            msg_flags,
             msg_stream,
             ctx,
         )?;
@@ -637,6 +671,7 @@ impl<'sock> UdsStreamScheme<'sock> {
         cap_fd: usize,
         socket: &mut Socket,
         name: Option<String>,
+        msg_flags: MsgFlags,
         msg_stream: &[u8],
         ctx: &CallerCtx,
     ) -> Result<usize> {
@@ -645,7 +680,7 @@ impl<'sock> UdsStreamScheme<'sock> {
             return Err(Error::new(EINVAL));
         }
 
-        let connection = socket.require_connected_connection()?;
+        let connection = socket.require_connected_connection(msg_flags)?;
 
         let (pid, uid, gid) = get_uid_gid_from_pid(cap_fd, ctx.pid)?;
         let packet = DataPacket::from_stream(
@@ -659,7 +694,12 @@ impl<'sock> UdsStreamScheme<'sock> {
         Ok(payload_len)
     }
 
-    fn handle_recvmsg(&mut self, id: usize, msg_stream: &mut [u8]) -> Result<usize> {
+    fn handle_recvmsg(
+        &mut self,
+        id: usize,
+        msg_flags: MsgFlags,
+        msg_stream: &mut [u8],
+    ) -> Result<usize> {
         let socket_rc = self.get_socket(id)?;
         let mut socket = socket_rc.borrow_mut();
         let flags = socket.flags;
@@ -680,13 +720,13 @@ impl<'sock> UdsStreamScheme<'sock> {
             return if connection.is_peer_shutdown {
                 // EOF, no data to read
                 return Self::write_eof(msg_stream);
-            } else if (flags as usize) & O_NONBLOCK == O_NONBLOCK {
+            } else if (flags as usize) & O_NONBLOCK == O_NONBLOCK || msg_flags.nonblock() {
                 Err(Error::new(EAGAIN))
             } else {
                 Err(Error::new(EWOULDBLOCK))
             };
         }
-        Self::recvmsg_inner(&mut socket, msg_stream)
+        Self::recvmsg_inner(&mut socket, msg_flags, msg_stream)
     }
 
     fn write_eof(buffer: &mut [u8]) -> Result<usize> {
@@ -699,10 +739,15 @@ impl<'sock> UdsStreamScheme<'sock> {
         Ok(MIN_RECV_MSG_LEN)
     }
 
-    fn recvmsg_inner(socket: &mut Socket, msg_stream: &mut [u8]) -> Result<usize> {
+    fn recvmsg_inner(
+        socket: &mut Socket,
+        msg_flags: MsgFlags,
+        msg_stream: &mut [u8],
+    ) -> Result<usize> {
         let (prepared_name_len, prepared_whole_iov_size, _) = read_msghdr_info(msg_stream)?;
 
         let written_len = socket.serialize_to_msgstream(
+            msg_flags,
             msg_stream,
             prepared_name_len,
             prepared_whole_iov_size,
@@ -752,6 +797,7 @@ impl<'sock> UdsStreamScheme<'sock> {
     fn handle_get_peer_name(&self, id: usize, payload: &mut [u8]) -> Result<usize> {
         let (_, socket_rc) = self.get_connected_peer(id)?;
         let socket_borrow = socket_rc.borrow();
+        eprintln!("getpeername {} {:?}", id, socket_borrow.path);
         match socket_borrow.path.as_ref() {
             Some(path_string) => Self::fpath_inner(path_string, payload),
             None => {
@@ -901,7 +947,7 @@ impl<'sock> UdsStreamScheme<'sock> {
 
         match socket.state {
             State::Established | State::Accepted => {
-                let connection = socket.require_connected_connection()?;
+                let connection = socket.require_connected_connection(MsgFlags::default())?;
                 let fd = connection.fds.pop_front().ok_or(Error::new(EWOULDBLOCK))?;
                 Ok(OpenResult::OtherScheme { fd })
             }
@@ -916,7 +962,7 @@ impl<'sock> UdsStreamScheme<'sock> {
         let mut receiver = receiver_rc.borrow_mut();
         let name = receiver.path.clone();
 
-        let connection = receiver.require_connected_connection()?;
+        let connection = receiver.require_connected_connection(MsgFlags::default())?;
 
         if !buf.is_empty() {
             // Send readable only if it wasn't readable before
@@ -948,7 +994,7 @@ impl<'sock> UdsStreamScheme<'sock> {
         let receiver_rc = self.get_socket(receiver_id)?;
         let mut receiver = receiver_rc.borrow_mut();
 
-        let connection = receiver.require_connected_connection()?;
+        let connection = receiver.require_connected_connection(MsgFlags::default())?;
         for new_fd in &new_fds {
             connection.fds.push_back(*new_fd);
         }
@@ -969,7 +1015,7 @@ impl<'sock> UdsStreamScheme<'sock> {
 
         match socket.state {
             State::Established | State::Accepted => {
-                let connection = socket.require_connected_connection()?;
+                let connection = socket.require_connected_connection(MsgFlags::default())?;
 
                 if connection.fds.len() < recvfd_request.num_fds() {
                     return if connection.is_peer_shutdown {
@@ -1183,7 +1229,7 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
 
         match socket.state {
             State::Established | State::Accepted => {
-                let connection = socket.require_connected_connection()?;
+                let connection = socket.require_connected_connection(MsgFlags::default())?;
                 Self::read_inner(connection, buf, flags)
             }
             State::Closed => Ok(0),
