@@ -227,6 +227,14 @@ fn handle_scheme<'a>(
                     op,
                     awoken,
                 ),
+                Op::Fpath(mut op) => {
+                    //TODO: fill in useful path?
+                    let buf = op.buf();
+                    let scheme_path = b"/scheme/proc/";
+                    let scheme_bytes = core::cmp::min(scheme_path.len(), buf.len());
+                    buf[..scheme_bytes].copy_from_slice(&scheme_path[..scheme_bytes]);
+                    Response::ready_ok(scheme_bytes, op)
+                }
                 Op::Fsize { req, fd } => {
                     if let Handle::Ps(b) = &scheme.handles[fd] {
                         Response::ready_ok(b.len(), req)
