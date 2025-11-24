@@ -48,7 +48,7 @@ impl std::error::Error for Error {}
 
 impl convert::From<IOError> for Error {
     fn from(e: IOError) -> Self {
-        Error::from_io_error(e, "")
+        Error::from_io_error(e, "generic error")
     }
 }
 

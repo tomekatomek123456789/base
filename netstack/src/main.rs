@@ -150,14 +150,15 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
         .chain(event_queue.map(|r| r.map(|e| e.user_data)))
     {
         match event_res? {
-            EventSource::Network => smolnetd.on_network_scheme_event()?,
-            EventSource::Time => smolnetd.on_time_event()?,
-            EventSource::IpScheme => smolnetd.on_ip_scheme_event()?,
-            EventSource::UdpScheme => smolnetd.on_udp_scheme_event()?,
-            EventSource::TcpScheme => smolnetd.on_tcp_scheme_event()?,
-            EventSource::IcmpScheme => smolnetd.on_icmp_scheme_event()?,
-            EventSource::NetcfgScheme => smolnetd.on_netcfg_scheme_event()?,
+            EventSource::Network => smolnetd.on_network_scheme_event(),
+            EventSource::Time => smolnetd.on_time_event(),
+            EventSource::IpScheme => smolnetd.on_ip_scheme_event(),
+            EventSource::UdpScheme => smolnetd.on_udp_scheme_event(),
+            EventSource::TcpScheme => smolnetd.on_tcp_scheme_event(),
+            EventSource::IcmpScheme => smolnetd.on_icmp_scheme_event(),
+            EventSource::NetcfgScheme => smolnetd.on_netcfg_scheme_event(),
         }
+        .map_err(|e| error!("Received packet error: {:?}", e));
     }
     Ok(())
 }
