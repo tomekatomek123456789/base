@@ -2,7 +2,7 @@ use core::mem;
 use syscall::{data::Map, flag::MapFlags, number::SYS_FMAP};
 
 const STACK_SIZE: usize = 64 * 1024; // 64 KiB
-pub const USERMODE_END: usize = 1 << 47; // Assuming Sv48; it should work with Sv57 also
+pub const USERMODE_END: usize = 1 << 38;
 pub const STACK_START: usize = USERMODE_END - STACK_SIZE;
 
 static MAP: Map = Map {
