@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::rc::Weak;
-use std::{mem, slice};
 
 use syscall::error::{Error, Result, EBADF, EINVAL, EPIPE};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE};

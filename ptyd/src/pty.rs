@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 
 use redox_termios::*;
 use syscall;
-use syscall::error::{Error, Result, ENAMETOOLONG};
+use syscall::error::Result;
 
 pub struct Pty {
     pub id: usize,
