@@ -12,7 +12,7 @@ fmt:
     stage: build
     needs: []
     script:
-        - rustup component add rustfmt-preview
+        - rustup component add rustfmt
         # TODO add more packages as they get formatted
         - CHECK_ONLY=1 ./fmt.sh
 
