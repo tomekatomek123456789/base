@@ -13,12 +13,66 @@ members = [
     "ramfs",
     "randd",
     "zerod",
+
+    "drivers/common",
+    "drivers/executor",
+
+    "drivers/acpid",
+    "drivers/hwd",
+    "drivers/pcid",
+    "drivers/pcid-spawner",
+    "drivers/rtcd",
+    "drivers/vboxd",
+    "drivers/inputd",
+    "drivers/virtio-core",
+
+    "drivers/audio/ac97d",
+    "drivers/audio/ihdad",
+    "drivers/audio/sb16d",
+
+    "drivers/graphics/bgad",
+    "drivers/graphics/console-draw",
+    "drivers/graphics/fbbootlogd",
+    "drivers/graphics/driver-graphics",
+    "drivers/graphics/fbcond",
+    "drivers/graphics/graphics-ipc",
+    "drivers/graphics/vesad",
+    "drivers/graphics/virtio-gpud",
+
+    "drivers/input/ps2d",
+    "drivers/input/usbhidd",
+
+    "drivers/net/alxd",
+    "drivers/net/driver-network",
+    "drivers/net/e1000d",
+    "drivers/net/ixgbed",
+    "drivers/net/rtl8139d",
+    "drivers/net/rtl8168d",
+    "drivers/net/virtio-netd",
+
+    "drivers/storage/ahcid",
+    "drivers/storage/bcm2835-sdhcid",
+    "drivers/storage/driver-block",
+    "drivers/storage/ided",
+    "drivers/storage/lived",          # TODO: not really a driver...
+    "drivers/storage/nvmed",
+    "drivers/storage/usbscsid",
+    "drivers/storage/virtio-blkd",
+
+    "drivers/usb/xhcid",
+    "drivers/usb/usbctl",
+    "drivers/usb/usbhubd",
 ]
+
 
 # Bootstrap needs it's own profile configuration
 exclude = ["bootstrap"]
 
+[profile.release]
+lto = "fat"
+
 [patch.crates-io]
 # Needs libc 0.2 backport of https://github.com/rust-lang/libc/pull/4825
 libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-0.2" }
-net2 = { git = "https://gitlab.redox-os.org/redox-os/net2-rs.git", branch = "master" }
+orbclient = { git = "https://gitlab.redox-os.org/redox-os/orbclient.git", version = "0.3.44" }
+redox-daemon = { git = "https://gitlab.redox-os.org/redox-os/redox-daemon.git" }

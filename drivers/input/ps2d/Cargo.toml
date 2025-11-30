@@ -1,0 +1,17 @@
+[package]
+name = "ps2d"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+bitflags = "1"
+log = "0.4"
+orbclient = "0.3.27"
+redox_event = "0.4.1"
+redox_syscall = "0.5.10"
+redox-daemon = "0.1"
+redox-scheme = "0.6.2"
+libredox = "0.1.3"
+
+common = { path = "../../common" }
+inputd = { path = "../../inputd" }

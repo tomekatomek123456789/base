@@ -1,0 +1,10 @@
+[package]
+name = "driver-network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libredox = "0.1.3"
+redox-daemon = "0.1"
+redox-scheme = "0.4"
+redox_syscall = { version = "0.5", features = ["std"] }

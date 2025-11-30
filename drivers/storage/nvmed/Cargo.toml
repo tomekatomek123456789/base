@@ -1,0 +1,25 @@
+[package]
+name = "nvmed"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arrayvec = "0.7"
+bitflags = "2"
+futures = "0.3"
+libredox = "0.1.3"
+log = "0.4"
+parking_lot = "0.12.1"
+redox-daemon = "0.1"
+redox_event = "0.4.1"
+redox_syscall = { version = "0.5", features = ["std"] }
+smallvec = "1"
+
+executor = { path = "../../executor" }
+common = { path = "../../common" }
+driver-block = { path = "../driver-block" }
+partitionlib = { path = "../partitionlib" }
+pcid = { path = "../../pcid" }
+
+[features]
+default = []

@@ -1,0 +1,14 @@
+[package]
+name = "amlserde"
+version = "0.0.1"
+authors = ["Ron Williams"]
+repository = "https://gitlab.redox-os.org/redox-os/drivers"
+description = "Library for serializing AML symbols"
+categories = ["hardware-support"]
+license = "MIT/Apache-2.0"
+edition = "2021"
+
+[dependencies]
+acpi = { git = "https://github.com/jackpot51/acpi.git" }
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.7.3"
