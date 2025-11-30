@@ -179,6 +179,22 @@ pub fn run(file: &Path) -> Result<()> {
                             env::remove_var(&arg);
                         }
                     }
+                    "nowait" => {
+                        if let Some(cmd) = args.next() {
+                            let mut command = Command::new(cmd);
+
+                            for arg in args {
+                                command.arg(arg);
+                            }
+
+                            match command.spawn() {
+                                Ok(_child) => {}
+                                Err(err) => println!("init: failed to execute '{}': {}", line, err),
+                            }
+                        } else {
+                            println!("init: failed to run nowait: no argument");
+                        }
+                    }
                     _ => {
                         let mut command = Command::new(cmd.clone());
                         for arg in args {

@@ -1,4 +1,4 @@
-use std::{thread, time::{Duration, Instant}};
+use std::time::{Duration, Instant};
 
 pub struct Timeout {
     instant: Instant,

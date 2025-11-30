@@ -6,7 +6,6 @@ extern crate syscall;
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 use std::cell::RefCell;
-use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::usize;
@@ -44,7 +43,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 
     let address = unsafe { pcid_handle.map_bar(0) }.ptr.as_ptr() as usize;
 
-    let mut irq_file = pci_allocate_interrupt_vector(&mut pcid_handle, "ihdad");
+    let irq_file = pci_allocate_interrupt_vector(&mut pcid_handle, "ihdad");
 
     {
         let vend_prod: u32 = ((pci_config.func.full_device_id.vendor_id as u32) << 16)
