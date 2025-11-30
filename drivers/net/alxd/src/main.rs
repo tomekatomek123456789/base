@@ -9,15 +9,12 @@ extern crate syscall;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::io::{FromRawFd, RawFd};
 use std::{env, iter};
 
 use event::{user_data, EventQueue};
-use libredox::flag;
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 use std::cell::RefCell;
-use syscall::error::EWOULDBLOCK;
 
 pub mod device;
 

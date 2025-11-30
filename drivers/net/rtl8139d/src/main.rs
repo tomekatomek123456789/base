@@ -55,7 +55,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 
     let bar = map_bar(&mut pcid_handle);
 
-    let mut irq_file = pci_allocate_interrupt_vector(&mut pcid_handle, "rtl8139d");
+    let irq_file = pci_allocate_interrupt_vector(&mut pcid_handle, "rtl8139d");
 
     let mut scheme = NetworkScheme::new(
         move || unsafe {

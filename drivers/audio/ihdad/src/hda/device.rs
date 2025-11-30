@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::cmp;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -16,7 +15,7 @@ use common::timeout::Timeout;
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::CallerCtx;
 use redox_scheme::OpenResult;
-use syscall::error::{Error, Result, EACCES, EBADF, EINVAL, EIO, ENODEV, EWOULDBLOCK};
+use syscall::error::{Error, Result, EACCES, EBADF, EIO, ENODEV, EWOULDBLOCK};
 
 use spin::Mutex;
 use syscall::schemev2::NewFdFlags;
