@@ -1,0 +1,28 @@
+[package]
+name = "ihdgd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitbang-hal = "0.3"
+#TODO: edid is abandoned, fork it an maintain?
+edid = "0.3.0"
+#TODO: waiting for bitbang-hal to update to embedded-hal 1.0
+embedded-hal = "0.2.7"
+log = "0.4"
+nb = "1.0"
+# Patched to allow for exact range allocation
+range-alloc = { git = "https://github.com/jackpot51/range-alloc.git" }
+void = "1.0"
+
+common = { path = "../../common" }
+daemon = { path = "../../../daemon" }
+driver-graphics = { path = "../driver-graphics" }
+graphics-ipc = { path = "../graphics-ipc" }
+inputd = { path = "../../inputd" }
+pcid = { path = "../../pcid" }
+
+libredox = "0.1.3"
+redox-scheme = "0.8"
+redox_event = "0.4.1"
+redox_syscall = "0.6"

@@ -37,6 +37,7 @@ members = [
     "drivers/graphics/driver-graphics",
     "drivers/graphics/fbcond",
     "drivers/graphics/graphics-ipc",
+    "drivers/graphics/ihdgd",
     "drivers/graphics/vesad",
     "drivers/graphics/virtio-gpud",
 
