@@ -39,9 +39,11 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     // Must launch after acpid but before probe calls /scheme/acpi/symbols
     match process::Command::new("pcid").spawn() {
         Ok(mut child) => match child.wait() {
-            Ok(status) => if !status.success() {
-                log::error!("pcid exited with status {}", status);
-            },
+            Ok(status) => {
+                if !status.success() {
+                    log::error!("pcid exited with status {}", status);
+                }
+            }
             Err(err) => {
                 log::error!("failed to wait for pcid: {}", err);
             }

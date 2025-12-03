@@ -182,7 +182,7 @@ fn main() {
         .expect(USAGE)
         .parse::<u8>()
         .expect("Expected integer as input of interface");
-    
+
     let name = format!("{}_{}_{}_hid", scheme, port, interface_num);
     common::setup_logging(
         "usb",

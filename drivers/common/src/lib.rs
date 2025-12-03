@@ -19,7 +19,7 @@ pub mod sgl;
 /// Low latency timeout for driver loops
 pub mod timeout;
 
-pub use logger::{output_level, file_level, setup_logging};
+pub use logger::{file_level, output_level, setup_logging};
 
 /// Specifies the write behavior for a specific region of memory
 ///

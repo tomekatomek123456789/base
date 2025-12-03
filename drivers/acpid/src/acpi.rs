@@ -262,7 +262,8 @@ impl AmlSymbols {
         let handler = AmlPhysMemHandler::new(Arc::clone(&self.page_cache));
         //TODO: use these parsed tables for the rest of acpid
         let rsdp_address = usize::from_str_radix(&std::env::var("RSDP_ADDR")?, 16)?;
-        let tables = unsafe { AcpiTables::from_rsdp(handler.clone(), rsdp_address).map_err(format_err)? };
+        let tables =
+            unsafe { AcpiTables::from_rsdp(handler.clone(), rsdp_address).map_err(format_err)? };
         let platform = AcpiPlatform::new(tables, handler).map_err(format_err)?;
         let interpreter = Interpreter::new_from_platform(&platform).map_err(format_err)?;
         self.aml_context = Some(interpreter);
@@ -279,7 +280,9 @@ impl AmlSymbols {
                 }
             }
         }
-        self.aml_context.as_mut().expect("AML context not initialized")
+        self.aml_context
+            .as_mut()
+            .expect("AML context not initialized")
     }
 
     pub fn symbols_cache(&self) -> &FxHashMap<String, String> {

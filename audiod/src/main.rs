@@ -60,7 +60,8 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
     let ns = libredox::call::mkns(&[
         //IoSlice::new(b"memory"), TODO: already included, uncommenting gives EEXIST
         IoSlice::new(b"rand"), // for HashMap
-    ]).context("failed to make namespace")?;
+    ])
+    .context("failed to make namespace")?;
     libredox::call::setrens(ns, ns).context("failed to set namespace")?;
 
     // Spawn a thread to mix and send audio data

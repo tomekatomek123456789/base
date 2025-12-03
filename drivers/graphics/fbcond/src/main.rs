@@ -23,7 +23,7 @@ fn main() {
         "fbcond",
         "fbcond",
         common::output_level(),
-        common::file_level()
+        common::file_level(),
     );
 
     daemon::Daemon::new(|daemon| inner(daemon, &vt_ids));

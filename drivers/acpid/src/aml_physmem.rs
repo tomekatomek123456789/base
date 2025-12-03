@@ -152,14 +152,14 @@ impl AmlPhysMemHandler {
             match libredox::Fd::open(
                 "/scheme/pci/access",
                 libredox::flag::O_RDWR | libredox::flag::O_CLOEXEC,
-                0
+                0,
             ) {
                 Ok(fd) => Some(fd),
                 Err(err) => {
                     log::error!("failed to open /scheme/pci/access: {}", err);
                     None
                 }
-            }
+            },
         );
         Self { page_cache, pci_fd }
     }
@@ -172,11 +172,11 @@ impl AmlPhysMemHandler {
         // Offset: u16, 12 bits, 4096 total, at 0 bits
         [
             kind.into(),
-            (u64::from(addr.segment()) << 28) |
-            (u64::from(addr.bus()) << 20) |
-            (u64::from(addr.device()) << 15) |
-            (u64::from(addr.function()) << 12) |
-            u64::from(off)
+            (u64::from(addr.segment()) << 28)
+                | (u64::from(addr.bus()) << 20)
+                | (u64::from(addr.device()) << 15)
+                | (u64::from(addr.function()) << 12)
+                | u64::from(off),
         ]
     }
 
@@ -184,13 +184,16 @@ impl AmlPhysMemHandler {
         let metadata = Self::pci_call_metadata(1, addr, off);
         match &*self.pci_fd {
             Some(pci_fd) => match pci_fd.call_ro(value, syscall::CallFlags::empty(), &metadata) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(err) => {
                     log::error!("read pci {addr}@{off:04X}:{:02X}: {}", value.len(), err);
                 }
             },
             None => {
-                log::error!("read pci {addr}@{off:04X}:{:02X}: pci access not available", value.len());
+                log::error!(
+                    "read pci {addr}@{off:04X}:{:02X}: pci access not available",
+                    value.len()
+                );
             }
         }
     }
@@ -199,11 +202,11 @@ impl AmlPhysMemHandler {
         let metadata = Self::pci_call_metadata(2, addr, off);
         match &*self.pci_fd {
             Some(pci_fd) => match pci_fd.call_wo(value, syscall::CallFlags::empty(), &metadata) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(err) => {
                     log::error!("write pci {addr}@{off:04X}={value:02X?}: {}", err);
                 }
-            }
+            },
             None => {
                 log::error!("write pci {addr}@{off:04X}={value:02X?}: pci access not available");
             }

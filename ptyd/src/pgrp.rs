@@ -44,7 +44,10 @@ impl Resource for PtyPgrp {
             let pty = pty_lock.borrow();
 
             //println!("READ PGRP {}: {}", pty.id, pty.pgrp);
-            let dst_buf = buf.get_mut(..4).and_then(|b| <&mut [u8; 4]>::try_from(b).ok()).ok_or(Error::new(EBADF))?;
+            let dst_buf = buf
+                .get_mut(..4)
+                .and_then(|b| <&mut [u8; 4]>::try_from(b).ok())
+                .ok_or(Error::new(EBADF))?;
             *dst_buf = (pty.pgrp as u32).to_ne_bytes();
 
             Ok(Some(4))
@@ -57,7 +60,11 @@ impl Resource for PtyPgrp {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
 
-            let new_pgrp = u32::from_ne_bytes(buf.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).ok_or(Error::new(EBADF))?);
+            let new_pgrp = u32::from_ne_bytes(
+                buf.get(..4)
+                    .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                    .ok_or(Error::new(EBADF))?,
+            );
             pty.pgrp = new_pgrp as usize;
             //println!("WRITE PGRP {}: {} => {}", pty.id, pty.pgrp, new_pgrp);
 
