@@ -1,10 +1,10 @@
 #![feature(never_type)]
 
-use std::io;
+use std::io::{self, PipeWriter, Read, Write};
 
 #[must_use = "Daemon::ready must be called"]
 pub struct Daemon {
-    write_pipe: libc::c_int,
+    write_pipe: PipeWriter,
 }
 
 fn errno() -> io::Error {
@@ -13,67 +13,30 @@ fn errno() -> io::Error {
 
 impl Daemon {
     pub fn new<F: FnOnce(Daemon) -> !>(f: F) -> io::Result<!> {
-        let mut pipes = [0; 2];
-
-        match unsafe { libc::pipe(pipes.as_mut_ptr()) } {
-            0 => (),
-            -1 => return Err(errno()),
-            _ => unreachable!(),
-        }
-
-        let [read_pipe, write_pipe] = pipes;
+        let (mut read_pipe, write_pipe) = std::io::pipe()?;
 
         match unsafe { libc::fork() } {
             0 => {
-                let _ = unsafe { libc::close(read_pipe) };
+                drop(read_pipe);
 
                 f(Daemon { write_pipe })
             }
             -1 => return Err(errno()),
             _pid => {
-                let _ = unsafe { libc::close(write_pipe) };
+                drop(write_pipe);
 
                 let mut data = [0];
 
-                let res = loop {
-                    match unsafe { libc::read(read_pipe, data.as_mut_ptr().cast(), data.len()) } {
-                        -1 if errno().kind() == io::ErrorKind::Interrupted => continue,
-                        -1 => break Err(errno()),
+                read_pipe.read_exact(&mut data)?;
 
-                        count => break Ok(count as usize),
-                    }
-                };
-
-                let _ = unsafe { libc::close(read_pipe) };
-
-                if res? == 1 {
-                    unsafe { libc::_exit(data[0].into()) };
-                } else {
-                    Err(io::Error::from_raw_os_error(libc::EIO))
-                }
+                unsafe { libc::_exit(data[0].into()) };
             }
         }
     }
 
-    pub fn ready(self) -> io::Result<()> {
-        let res;
+    pub fn ready(mut self) -> io::Result<()> {
+        self.write_pipe.write_all(&[0])?;
 
-        unsafe {
-            let src = [0_u8];
-            res = loop {
-                match libc::write(self.write_pipe, src.as_ptr().cast(), src.len()) {
-                    -1 if errno().kind() == io::ErrorKind::Interrupted => continue,
-                    -1 => break Err(errno()),
-                    count => break Ok(count),
-                }
-            };
-            let _ = libc::close(self.write_pipe);
-        }
-
-        if res? == 1 {
-            Ok(())
-        } else {
-            Err(io::Error::from_raw_os_error(libc::EIO))
-        }
+        Ok(())
     }
 }
