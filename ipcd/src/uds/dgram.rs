@@ -737,9 +737,9 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
         }
     }
 
-    fn fevent(&mut self, id: usize, flags: EventFlags, ctx: &CallerCtx) -> Result<EventFlags> {
+    fn fevent(&mut self, id: usize, flags: EventFlags, _ctx: &CallerCtx) -> Result<EventFlags> {
         let socket_rc = self.get_socket(id)?;
-        let mut socket = socket_rc.borrow_mut();
+        let socket = socket_rc.borrow_mut();
 
         let mut ready = EventFlags::empty();
         if flags.contains(EVENT_READ) && !socket.messages.is_empty() {
@@ -752,7 +752,7 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
         Ok(ready)
     }
 
-    fn fstat(&mut self, id: usize, stat: &mut Stat, ctx: &CallerCtx) -> Result<()> {
+    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         self.get_socket(id)?;
 
         *stat = Stat {
