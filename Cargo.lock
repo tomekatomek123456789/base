@@ -506,7 +506,6 @@ name = "daemon"
 version = "0.0.0"
 dependencies = [
  "libc",
- "libredox",
 ]
 
 [[package]]
