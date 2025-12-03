@@ -30,10 +30,6 @@ pub enum Error {
     SyscallError(syscall::Error),
 }
 
-pub fn main() {
-    daemon::Daemon::new(daemon_runner);
-}
-
 #[repr(C)]
 pub struct BlockGeometry {
     pub cylinders: VolatileCell<u16>,
@@ -102,8 +98,23 @@ pub struct BlockVirtRequest {
 
 const_assert_eq!(core::mem::size_of::<BlockVirtRequest>(), 16);
 
-fn daemon(daemon: daemon::Daemon) -> anyhow::Result<()> {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn main() {
+    pcid_interface::pci_daemon(daemon_runner);
+}
+
+fn daemon_runner(redox_daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
+    daemon(redox_daemon, pcid_handle).unwrap();
+    unreachable!();
+}
+
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow::Result<()> {
+    common::setup_logging(
+        "disk",
+        "pci",
+        "virtio-blkd",
+        common::output_level(),
+        common::file_level(),
+    );
 
     // Double check that we have the right device.
     //
@@ -168,16 +179,4 @@ fn daemon(daemon: daemon::Daemon) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn daemon_runner(redox_daemon: daemon::Daemon) -> ! {
-    common::setup_logging(
-        "disk",
-        "pci",
-        "virtio-blkd",
-        common::output_level(),
-        common::file_level(),
-    );
-    daemon(redox_daemon).unwrap();
-    unreachable!();
 }

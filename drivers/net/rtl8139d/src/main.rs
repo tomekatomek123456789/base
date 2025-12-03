@@ -35,9 +35,11 @@ fn map_bar(pcid_handle: &mut PciFunctionHandle) -> *mut u8 {
     panic!("rtl8139d: failed to find BAR");
 }
 
-fn daemon(daemon: daemon::Daemon) -> ! {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn main() {
+    pcid_interface::pci_daemon(daemon);
+}
 
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let pci_config = pcid_handle.config();
 
     let mut name = pci_config.func.name();
@@ -110,8 +112,4 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         }
     }
     unreachable!()
-}
-
-fn main() {
-    daemon::Daemon::new(daemon);
 }

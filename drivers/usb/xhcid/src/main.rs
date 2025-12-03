@@ -115,10 +115,6 @@ fn get_int_method(pcid_handle: &mut PciFunctionHandle) -> (Option<File>, Interru
     }
 }
 
-fn main() {
-    daemon::Daemon::new(daemon);
-}
-
 //TODO: cleanup CSZ support
 fn daemon_with_context_size<const N: usize>(
     daemon: daemon::Daemon,
@@ -185,8 +181,11 @@ fn daemon_with_context_size<const N: usize>(
     }
 }
 
-fn daemon(daemon: daemon::Daemon) -> ! {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn main() {
+    pcid_interface::pci_daemon(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let address = unsafe { pcid_handle.map_bar(0) }.ptr.as_ptr() as usize;
     let cap = unsafe { &mut *(address as *mut xhci::CapabilityRegs) };
     if cap.csz() {

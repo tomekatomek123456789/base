@@ -57,10 +57,10 @@ fn time_arm(time_handle: &mut File, secs: i64) -> io::Result<()> {
 }
 
 fn main() {
-    daemon::Daemon::new(daemon);
+    pcid_interface::pci_daemon(daemon);
 }
-fn daemon(daemon: daemon::Daemon) -> ! {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let pci_config = pcid_handle.config();
 
     let scheme_name = format!("disk.{}-nvme", pci_config.func.name());
