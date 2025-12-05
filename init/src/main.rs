@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::fs::{read_dir, File};
-use std::io::{BufRead, BufReader, Result};
+use std::fs::read_dir;
+use std::io::Result;
 use std::path::Path;
 use std::process::Command;
+use std::{env, fs};
 
 use libredox::flag::{O_RDONLY, O_WRONLY};
 
@@ -20,10 +20,7 @@ fn switch_stdio(stdio: &str) -> Result<()> {
 }
 
 pub fn run(file: &Path) -> Result<()> {
-    let file = File::open(file)?;
-    let reader = BufReader::new(file);
-    for line_res in reader.lines() {
-        let line_raw = line_res?;
+    for line_raw in fs::read_to_string(file)?.lines() {
         let line = line_raw.trim();
         if !line.is_empty() && !line.starts_with('#') {
             let mut args = line.split(' ').map(|arg| {
