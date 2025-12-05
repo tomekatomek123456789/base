@@ -1,32 +1,11 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::CString;
 use std::fs::{read_dir, File};
 use std::io::{BufRead, BufReader, Result};
 use std::path::Path;
 use std::process::Command;
 
-use libredox::error::Error as OsError;
-
 use libredox::flag::{O_RDONLY, O_WRONLY};
-
-fn set_default_scheme(scheme: &str) -> std::result::Result<(), OsError> {
-    use std::ffi::{c_char, c_int};
-
-    extern "C" {
-        fn set_default_scheme(scheme: *const c_char) -> c_int;
-    }
-
-    let cstr =
-        CString::new(scheme.as_bytes()).expect(&format!("init: invalid default scheme {}", scheme));
-
-    let res = unsafe { set_default_scheme(cstr.as_ptr()) };
-
-    match res {
-        0 => Ok(()),
-        error_code => Err(OsError::new(error_code)),
-    }
-}
 
 fn switch_stdio(stdio: &str) -> Result<()> {
     let stdin = libredox::Fd::open(stdio, O_RDONLY, 0)?;
@@ -64,18 +43,6 @@ pub fn run(file: &Path) -> Result<()> {
                             }
                         } else {
                             println!("init: failed to cd: no argument");
-                        }
-                    }
-                    "set-default-scheme" => {
-                        if let Some(scheme) = args.next() {
-                            if let Err(err) = set_default_scheme(&scheme) {
-                                println!(
-                                    "init: failed to set default scheme to '{}': {}",
-                                    scheme, err
-                                );
-                            }
-                        } else {
-                            println!("init: failed to set default scheme: no argument");
                         }
                     }
                     "echo" => {
@@ -224,11 +191,7 @@ pub fn run(file: &Path) -> Result<()> {
 }
 
 pub fn main() {
-    if let Err(err) = set_default_scheme("initfs") {
-        println!("init: failed to set default scheme: {}", err);
-    }
-
-    let config = "/etc/init.rc";
+    let config = "/scheme/initfs/etc/init.rc";
     if let Err(err) = run(&Path::new(config)) {
         println!("init: failed to run {}: {}", config, err);
     }

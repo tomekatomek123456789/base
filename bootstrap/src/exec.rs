@@ -90,7 +90,7 @@ pub fn main() -> ! {
     // from this point, this_thr_fd is no longer valid
 
     const CWD: &[u8] = b"/scheme/initfs";
-    const DEFAULT_SCHEME: &[u8] = b"initfs";
+    const DEFAULT_SCHEME: &[u8] = b"file";
     let extrainfo = ExtraInfo {
         cwd: Some(CWD),
         default_scheme: Some(DEFAULT_SCHEME),
