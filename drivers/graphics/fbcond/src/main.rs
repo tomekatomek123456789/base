@@ -13,6 +13,9 @@ mod scheme;
 mod text;
 
 fn main() {
+    daemon::Daemon::new(daemon);
+}
+fn daemon(daemon: daemon::Daemon) -> ! {
     let vt_ids = env::args()
         .skip(1)
         .map(|arg| arg.parse().expect("invalid vt number"))
@@ -26,9 +29,6 @@ fn main() {
         common::file_level(),
     );
 
-    daemon::Daemon::new(|daemon| inner(daemon, &vt_ids));
-}
-fn inner(daemon: daemon::Daemon, vt_ids: &[usize]) -> ! {
     let mut event_queue = EventQueue::new().expect("fbcond: failed to create event queue");
 
     // FIXME listen for resize events from inputd and handle them
@@ -42,7 +42,7 @@ fn inner(daemon: daemon::Daemon, vt_ids: &[usize]) -> ! {
         )
         .expect("fbcond: failed to subscribe to scheme events");
 
-    let mut scheme = FbconScheme::new(vt_ids, &mut event_queue);
+    let mut scheme = FbconScheme::new(&vt_ids, &mut event_queue);
 
     // This is not possible for now as fbcond needs to open new displays at runtime for graphics
     // driver handoff. In the future inputd may directly pass a handle to the display instead.

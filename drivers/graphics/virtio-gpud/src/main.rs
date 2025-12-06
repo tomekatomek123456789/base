@@ -430,8 +430,23 @@ impl MoveCursor {
 
 static DEVICE: spin::Once<virtio_core::Device> = spin::Once::new();
 
-fn deamon(deamon: daemon::Daemon) -> anyhow::Result<()> {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn main() {
+    pcid_interface::pci_daemon(daemon_runner);
+}
+
+fn daemon_runner(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
+    deamon(daemon, pcid_handle).unwrap();
+    unreachable!();
+}
+
+fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow::Result<()> {
+    common::setup_logging(
+        "graphics",
+        "pci",
+        "virtio-gpud",
+        common::output_level(),
+        common::file_level(),
+    );
 
     // Double check that we have the right device.
     //
@@ -541,20 +556,4 @@ fn deamon(deamon: daemon::Daemon) -> anyhow::Result<()> {
     }
 
     std::process::exit(0);
-}
-
-fn daemon_runner(daemon: daemon::Daemon) -> ! {
-    deamon(daemon).unwrap();
-    unreachable!();
-}
-
-pub fn main() {
-    common::setup_logging(
-        "graphics",
-        "pci",
-        "virtio-gpud",
-        common::output_level(),
-        common::file_level(),
-    );
-    daemon::Daemon::new(daemon_runner);
 }

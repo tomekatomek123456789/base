@@ -19,71 +19,72 @@ mod winsize;
 use scheme::PtyScheme;
 
 fn main() {
-    daemon::Daemon::new(move |daemon| {
-        user_data! {
-            enum EventSource {
-                Socket,
-                Time,
+    daemon::Daemon::new(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon) -> ! {
+    user_data! {
+        enum EventSource {
+            Socket,
+            Time,
+        }
+    }
+
+    let event_queue = EventQueue::<EventSource>::new().expect("pty: failed to open event:");
+
+    let time_path = format!("/scheme/time/{}", flag::CLOCK_MONOTONIC);
+    let mut time_file =
+        Fd::open(&time_path, flag::O_NONBLOCK, 0).expect("pty: failed to open time:");
+
+    let socket = redox_scheme::Socket::nonblock("pty").expect("pty: failed to create pty scheme");
+
+    libredox::call::setrens(0, 0).expect("ptyd: failed to enter null namespace");
+
+    event_queue
+        .subscribe(socket.inner().raw(), EventSource::Socket, EventFlags::READ)
+        .expect("pty: failed to watch events on pty:");
+    event_queue
+        .subscribe(time_file.raw(), EventSource::Time, EventFlags::READ)
+        .expect("pty: failed to watch events on time:");
+
+    daemon.ready();
+
+    //TODO: do not set timeout if not necessary
+    timeout(&mut time_file).expect("pty: failed to set timeout");
+
+    let mut scheme = PtyScheme::new();
+    let mut todo = Vec::new();
+    let mut timeout_count = 0u64;
+
+    scan_requests(&socket, &mut scheme, &mut todo).expect("pty: could not scan requests");
+    do_todos(&socket, &mut scheme, &mut todo);
+    issue_events(&socket, &mut scheme);
+
+    for event_res in event_queue {
+        let event = event_res.expect("pty: failed to read from event queue");
+
+        match event.user_data {
+            EventSource::Socket => {
+                if scan_requests(&socket, &mut scheme, &mut todo).is_err() {
+                    break;
+                }
+            }
+            EventSource::Time => {
+                timeout(&mut time_file).expect("pty: failed to set timeout");
+
+                timeout_count = timeout_count.wrapping_add(1);
+
+                for (_id, handle) in scheme.handles.iter_mut() {
+                    handle.timeout(timeout_count);
+                }
             }
         }
 
-        let event_queue = EventQueue::<EventSource>::new().expect("pty: failed to open event:");
-
-        let time_path = format!("/scheme/time/{}", flag::CLOCK_MONOTONIC);
-        let mut time_file =
-            Fd::open(&time_path, flag::O_NONBLOCK, 0).expect("pty: failed to open time:");
-
-        let socket =
-            redox_scheme::Socket::nonblock("pty").expect("pty: failed to create pty scheme");
-
-        libredox::call::setrens(0, 0).expect("ptyd: failed to enter null namespace");
-
-        event_queue
-            .subscribe(socket.inner().raw(), EventSource::Socket, EventFlags::READ)
-            .expect("pty: failed to watch events on pty:");
-        event_queue
-            .subscribe(time_file.raw(), EventSource::Time, EventFlags::READ)
-            .expect("pty: failed to watch events on time:");
-
-        daemon.ready();
-
-        //TODO: do not set timeout if not necessary
-        timeout(&mut time_file).expect("pty: failed to set timeout");
-
-        let mut scheme = PtyScheme::new();
-        let mut todo = Vec::new();
-        let mut timeout_count = 0u64;
-
-        scan_requests(&socket, &mut scheme, &mut todo).expect("pty: could not scan requests");
         do_todos(&socket, &mut scheme, &mut todo);
         issue_events(&socket, &mut scheme);
+    }
 
-        for event_res in event_queue {
-            let event = event_res.expect("pty: failed to read from event queue");
-
-            match event.user_data {
-                EventSource::Socket => {
-                    if scan_requests(&socket, &mut scheme, &mut todo).is_err() {
-                        break;
-                    }
-                }
-                EventSource::Time => {
-                    timeout(&mut time_file).expect("pty: failed to set timeout");
-
-                    timeout_count = timeout_count.wrapping_add(1);
-
-                    for (_id, handle) in scheme.handles.iter_mut() {
-                        handle.timeout(timeout_count);
-                    }
-                }
-            }
-
-            do_todos(&socket, &mut scheme, &mut todo);
-            issue_events(&socket, &mut scheme);
-        }
-
-        std::process::exit(0);
-    });
+    std::process::exit(0);
 }
 
 struct Todo {

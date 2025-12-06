@@ -88,7 +88,11 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
 }
 
 fn main() {
-    Daemon::new(|x| match daemon(x) {
+    Daemon::new(inner);
+}
+
+fn inner(x: Daemon) -> ! {
+    match daemon(x) {
         Ok(()) => {
             process::exit(0);
         }
@@ -96,5 +100,5 @@ fn main() {
             eprintln!("audiod: {}", err);
             process::exit(1);
         }
-    });
+    }
 }

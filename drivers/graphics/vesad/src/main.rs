@@ -12,9 +12,13 @@ use crate::scheme::{FbAdapter, FrameBuffer};
 mod scheme;
 
 fn main() {
+    daemon::Daemon::new(daemon);
+}
+fn daemon(daemon: daemon::Daemon) -> ! {
     if env::var("FRAMEBUFFER_WIDTH").is_err() {
         println!("vesad: No boot framebuffer");
-        return;
+        daemon.ready();
+        std::process::exit(0);
     }
 
     let width = usize::from_str_radix(
@@ -45,7 +49,8 @@ fn main() {
 
     if phys == 0 {
         println!("vesad: Boot framebuffer at address 0");
-        return;
+        daemon.ready();
+        std::process::exit(0);
     }
 
     let mut framebuffers = vec![unsafe { FrameBuffer::new(phys, width, height, stride) }];
@@ -69,9 +74,6 @@ fn main() {
         };
     }
 
-    daemon::Daemon::new(|daemon| inner(daemon, framebuffers));
-}
-fn inner(daemon: daemon::Daemon, framebuffers: Vec<FrameBuffer>) -> ! {
     let mut inputd_display_handle = DisplayHandle::new_early("vesa").unwrap();
 
     let mut scheme = GraphicsScheme::new(FbAdapter { framebuffers }, "display.vesa".to_owned());

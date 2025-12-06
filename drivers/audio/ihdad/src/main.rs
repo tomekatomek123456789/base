@@ -23,9 +23,11 @@ QEMU ICH9    8086:293E
 82801H ICH8  8086:284B
 */
 
-fn daemon(daemon: daemon::Daemon) -> ! {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn main() {
+    pcid_interface::pci_daemon(daemon);
+}
 
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let pci_config = pcid_handle.config();
 
     let mut name = pci_config.func.name();
@@ -137,9 +139,4 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
         std::process::exit(0);
     }
-}
-
-fn main() {
-    // Daemonize
-    daemon::Daemon::new(daemon);
 }

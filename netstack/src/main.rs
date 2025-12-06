@@ -164,13 +164,15 @@ fn run(daemon: daemon::Daemon) -> Result<()> {
 }
 
 fn main() {
-    daemon::Daemon::new(move |daemon| {
-        logger::init_logger("smolnetd");
+    daemon::Daemon::new(daemon_runner);
+}
 
-        if let Err(err) = run(daemon) {
-            error!("smoltcpd: {}", err);
-            process::exit(1);
-        }
-        process::exit(0);
-    });
+fn daemon_runner(daemon: daemon::Daemon) -> ! {
+    logger::init_logger("smolnetd");
+
+    if let Err(err) = run(daemon) {
+        error!("smoltcpd: {}", err);
+        process::exit(1);
+    }
+    process::exit(0);
 }

@@ -14,16 +14,18 @@ use self::uds::dgram::UdsDgramScheme;
 use self::uds::stream::UdsStreamScheme;
 
 fn main() {
-    daemon::Daemon::new(move |daemon| {
-        // TODO: Better error handling
-        match inner(daemon) {
-            Ok(()) => std::process::exit(0),
-            Err(error) => {
-                println!("ipcd failed: {error}");
-                std::process::exit(1);
-            }
+    daemon::Daemon::new(daemon_runner);
+}
+
+fn daemon_runner(daemon: daemon::Daemon) -> ! {
+    // TODO: Better error handling
+    match inner(daemon) {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            println!("ipcd failed: {error}");
+            std::process::exit(1);
         }
-    });
+    }
 }
 
 fn inner(daemon: daemon::Daemon) -> anyhow::Result<()> {

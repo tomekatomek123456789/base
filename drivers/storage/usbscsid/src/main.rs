@@ -12,6 +12,9 @@ use crate::protocol::Protocol;
 use crate::scsi::Scsi;
 
 fn main() {
+    daemon::Daemon::new(daemon);
+}
+fn daemon(daemon: daemon::Daemon) -> ! {
     let mut args = env::args().skip(1);
 
     const USAGE: &'static str = "usbscsid <scheme> <port> <protocol>";
@@ -33,9 +36,6 @@ fn main() {
         scheme, port, protocol
     );
 
-    daemon::Daemon::new(move |d| daemon(d, scheme, port, protocol));
-}
-fn daemon(daemon: daemon::Daemon, scheme: String, port: PortId, protocol: u8) -> ! {
     let disk_scheme_name = format!("disk.usb-{scheme}+{port}-scsi");
 
     // TODO: Use eventfds.

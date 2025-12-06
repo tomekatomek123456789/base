@@ -16,7 +16,7 @@ use std::{
     cell::RefCell,
     cmp,
     collections::{HashMap, HashSet, VecDeque},
-    mem, ptr,
+    mem,
     rc::Rc,
     slice,
 };
@@ -383,7 +383,7 @@ impl<'sock> UdsStreamScheme<'sock> {
         })
     }
 
-    fn post_fevent(&self, id: usize, mut flags: EventFlags) -> Result<()> {
+    fn post_fevent(&self, id: usize, flags: EventFlags) -> Result<()> {
         /*TODO: filter out unnecessary flags?
         if let Ok(socket_rc) = self.get_socket(id) {
             let socket = socket_rc.borrow();
@@ -1324,13 +1324,13 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         }
     }
 
-    fn fevent(&mut self, id: usize, flags: EventFlags, ctx: &CallerCtx) -> Result<EventFlags> {
+    fn fevent(&mut self, id: usize, flags: EventFlags, _ctx: &CallerCtx) -> Result<EventFlags> {
         let socket_rc = self.get_socket(id)?;
         let socket = socket_rc.borrow();
         Ok(socket.events() & flags)
     }
 
-    fn fstat(&mut self, id: usize, stat: &mut Stat, ctx: &CallerCtx) -> Result<()> {
+    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         self.get_socket(id)?;
 
         *stat = Stat {

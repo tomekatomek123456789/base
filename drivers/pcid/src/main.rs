@@ -187,6 +187,10 @@ fn enable_function(
 }
 
 fn main() {
+    daemon::Daemon::new(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon) -> ! {
     let mut args = pico_args::Arguments::from_env();
     let verbosity = (0..).find(|_| !args.contains("-v")).unwrap_or(0);
     let log_level = match verbosity {
@@ -197,10 +201,6 @@ fn main() {
 
     common::setup_logging("bus", "pci", "pcid", log_level, log::LevelFilter::Info);
 
-    daemon::Daemon::new(move |daemon| main_inner(daemon));
-}
-
-fn main_inner(daemon: daemon::Daemon) -> ! {
     let pcie = Pcie::new();
     let mut tree = BTreeMap::new();
 

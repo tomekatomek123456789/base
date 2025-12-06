@@ -14,11 +14,10 @@ use log::{error, info};
 pub mod ahci;
 
 fn main() {
-    daemon::Daemon::new(daemon);
+    pcid_interface::pci_daemon(daemon);
 }
 
-fn daemon(daemon: daemon::Daemon) -> ! {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let pci_config = pcid_handle.config();
 
     let mut name = pci_config.func.name();
