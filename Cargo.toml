@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "audiod",
+    "daemon",
     "init",
     "initfs",
     "initfs/archive-common",
@@ -72,4 +73,3 @@ exclude = ["bootstrap"]
 # Needs libc 0.2 backport of https://github.com/rust-lang/libc/pull/4825
 libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-0.2" }
 orbclient = { git = "https://gitlab.redox-os.org/redox-os/orbclient.git", version = "0.3.44" }
-redox-daemon = { git = "https://gitlab.redox-os.org/redox-os/redox-daemon.git" }

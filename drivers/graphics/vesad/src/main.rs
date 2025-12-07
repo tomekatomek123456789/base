@@ -12,9 +12,13 @@ use crate::scheme::{FbAdapter, FrameBuffer};
 mod scheme;
 
 fn main() {
+    daemon::Daemon::new(daemon);
+}
+fn daemon(daemon: daemon::Daemon) -> ! {
     if env::var("FRAMEBUFFER_WIDTH").is_err() {
         println!("vesad: No boot framebuffer");
-        return;
+        daemon.ready();
+        std::process::exit(0);
     }
 
     let width = usize::from_str_radix(
@@ -45,7 +49,8 @@ fn main() {
 
     if phys == 0 {
         println!("vesad: Boot framebuffer at address 0");
-        return;
+        daemon.ready();
+        std::process::exit(0);
     }
 
     let mut framebuffers = vec![unsafe { FrameBuffer::new(phys, width, height, stride) }];
@@ -69,10 +74,6 @@ fn main() {
         };
     }
 
-    redox_daemon::Daemon::new(|daemon| inner(daemon, framebuffers))
-        .expect("failed to create daemon");
-}
-fn inner(daemon: redox_daemon::Daemon, framebuffers: Vec<FrameBuffer>) -> ! {
     let mut inputd_display_handle = DisplayHandle::new_early("vesa").unwrap();
 
     let mut scheme = GraphicsScheme::new(FbAdapter { framebuffers }, "display.vesa".to_owned());
@@ -103,7 +104,7 @@ fn inner(daemon: redox_daemon::Daemon, framebuffers: Vec<FrameBuffer>) -> ! {
 
     libredox::call::setrens(0, 0).expect("vesad: failed to enter null namespace");
 
-    daemon.ready().expect("failed to notify parent");
+    daemon.ready();
 
     let all = [Source::Input, Source::Scheme];
     for event in all

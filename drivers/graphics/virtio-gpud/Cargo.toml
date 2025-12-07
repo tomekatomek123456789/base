@@ -11,13 +11,13 @@ futures = { version = "0.3.28", features = ["executor"] }
 anyhow = "1.0.71"
 
 common = { path = "../../common" }
+daemon = { path = "../../../daemon" }
 driver-graphics = { path = "../driver-graphics" }
 graphics-ipc = { path = "../graphics-ipc" }
 virtio-core = { path = "../../virtio-core" }
 pcid = { path = "../../pcid" }
 inputd = { path = "../../inputd" }
 
-redox-daemon = "0.1"
 redox_event = "0.4.1"
 redox_syscall = "0.5"
 orbclient = "0.3.27"

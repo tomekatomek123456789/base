@@ -5,10 +5,10 @@ use crate::scheme::LogScheme;
 
 mod scheme;
 
-fn daemon(daemon: redox_daemon::Daemon) -> ! {
+fn daemon(daemon: daemon::Daemon) -> ! {
     let socket = Socket::create("log").expect("logd: failed to create log scheme");
 
-    daemon.ready().expect("logd: failed to notify parent");
+    daemon.ready();
 
     let mut scheme = LogScheme::new();
 
@@ -34,5 +34,5 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 }
 
 fn main() {
-    redox_daemon::Daemon::new(daemon).expect("logd: failed to daemonize");
+    daemon::Daemon::new(daemon);
 }

@@ -103,13 +103,18 @@ impl Disk for LiveDisk {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+    daemon::Daemon::new(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon) -> ! {
     let mut phys = 0;
     let mut size = 0;
 
     // TODO: handle error
     for line in std::fs::read_to_string("/scheme/sys/env")
-        .context("failed to read env")?
+        .context("failed to read env")
+        .unwrap()
         .lines()
     {
         let mut parts = line.splitn(2, '=');
@@ -126,49 +131,47 @@ fn main() -> anyhow::Result<()> {
     }
 
     if phys == 0 || size == 0 {
-        // No live disk data, no need to say anything or exit with error
+        // No live disk data, no need to say anything or exit with
+        daemon.ready();
         std::process::exit(0);
     }
 
-    redox_daemon::Daemon::new(move |daemon| {
-        let event_queue = event::EventQueue::new().unwrap();
+    let event_queue = event::EventQueue::new().unwrap();
 
-        event::user_data! {
-            enum Event {
-                Scheme,
-            }
-        };
-
-        let mut scheme = DiskScheme::new(
-            Some(daemon),
-            "disk.live".to_owned(),
-            BTreeMap::from([(
-                0,
-                LiveDisk::new(phys, size).unwrap_or_else(|err| {
-                    eprintln!("failed to initialize livedisk scheme: {}", err);
-                    std::process::exit(1)
-                }),
-            )]),
-            &TrivialExecutor,
-        );
-
-        libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
-
-        event_queue
-            .subscribe(
-                scheme.event_handle().raw(),
-                Event::Scheme,
-                event::EventFlags::READ,
-            )
-            .unwrap();
-
-        for event in event_queue {
-            match event.unwrap().user_data {
-                Event::Scheme => TrivialExecutor.block_on(scheme.tick()).unwrap(),
-            }
+    event::user_data! {
+        enum Event {
+            Scheme,
         }
+    };
 
-        std::process::exit(0);
-    })
-    .map_err(|err| anyhow!("failed to start daemon: {}", err))?;
+    let mut scheme = DiskScheme::new(
+        Some(daemon),
+        "disk.live".to_owned(),
+        BTreeMap::from([(
+            0,
+            LiveDisk::new(phys, size).unwrap_or_else(|err| {
+                eprintln!("failed to initialize livedisk scheme: {}", err);
+                std::process::exit(1)
+            }),
+        )]),
+        &TrivialExecutor,
+    );
+
+    libredox::call::setrens(0, 0).expect("nvmed: failed to enter null namespace");
+
+    event_queue
+        .subscribe(
+            scheme.event_handle().raw(),
+            Event::Scheme,
+            event::EventFlags::READ,
+        )
+        .unwrap();
+
+    for event in event_queue {
+        match event.unwrap().user_data {
+            Event::Scheme => TrivialExecutor.block_on(scheme.tick()).unwrap(),
+        }
+    }
+
+    std::process::exit(0);
 }

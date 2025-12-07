@@ -360,14 +360,12 @@ impl SchemeMut for RandScheme {
     }
 }
 
-fn daemon(daemon: redox_daemon::Daemon) -> ! {
+fn daemon(daemon: daemon::Daemon) -> ! {
     let socket = Socket::<V2>::create("rand").expect("randd: failed to create rand scheme");
 
     let mut scheme = RandScheme::new();
 
-    daemon
-        .ready()
-        .expect("randd: failed to mark daemon as ready");
+    daemon.ready();
 
     libredox::call::setrens(0, 0).expect("randd: failed to enter null namespace");
 
@@ -388,5 +386,5 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 }
 
 fn main() {
-    redox_daemon::Daemon::new(daemon).expect("randd: failed to daemonize");
+    daemon::Daemon::new(daemon);
 }

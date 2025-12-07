@@ -51,7 +51,7 @@ fn get_network_adapter() -> Result<String> {
     }
 }
 
-fn run(daemon: redox_daemon::Daemon) -> Result<()> {
+fn run(daemon: daemon::Daemon) -> Result<()> {
     let adapter = get_network_adapter()?;
     trace!("opening {adapter}:");
     let network_fd = Fd::open(&format!("/scheme/{adapter}"), O_RDWR | O_NONBLOCK, 0)
@@ -97,7 +97,7 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
     let event_queue = EventQueue::<EventSource>::new().context("failed to create event queue")?;
 
-    daemon.ready().expect("smolnetd: failed to notify parent");
+    daemon.ready();
 
     event_queue
         .subscribe(network_fd.raw(), EventSource::Network, EventFlags::READ)
@@ -164,14 +164,15 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 }
 
 fn main() {
-    redox_daemon::Daemon::new(move |daemon| {
-        logger::init_logger("smolnetd");
+    daemon::Daemon::new(daemon_runner);
+}
 
-        if let Err(err) = run(daemon) {
-            error!("smoltcpd: {}", err);
-            process::exit(1);
-        }
-        process::exit(0);
-    })
-    .expect("smoltcp: failed to daemonize");
+fn daemon_runner(daemon: daemon::Daemon) -> ! {
+    logger::init_logger("smolnetd");
+
+    if let Err(err) = run(daemon) {
+        error!("smoltcpd: {}", err);
+        process::exit(1);
+    }
+    process::exit(0);
 }

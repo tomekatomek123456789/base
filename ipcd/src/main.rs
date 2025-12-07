@@ -14,20 +14,21 @@ use self::uds::dgram::UdsDgramScheme;
 use self::uds::stream::UdsStreamScheme;
 
 fn main() {
-    redox_daemon::Daemon::new(move |daemon| {
-        // TODO: Better error handling
-        match inner(daemon) {
-            Ok(()) => std::process::exit(0),
-            Err(error) => {
-                println!("ipcd failed: {error}");
-                std::process::exit(1);
-            }
-        }
-    })
-    .expect("ipcd: failed to daemonize");
+    daemon::Daemon::new(daemon_runner);
 }
 
-fn inner(daemon: redox_daemon::Daemon) -> anyhow::Result<()> {
+fn daemon_runner(daemon: daemon::Daemon) -> ! {
+    // TODO: Better error handling
+    match inner(daemon) {
+        Ok(()) => std::process::exit(0),
+        Err(error) => {
+            println!("ipcd failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn inner(daemon: daemon::Daemon) -> anyhow::Result<()> {
     event::user_data! {
         enum EventSource {
             ChanSocket,
@@ -67,7 +68,7 @@ fn inner(daemon: redox_daemon::Daemon) -> anyhow::Result<()> {
     );
     let mut uds_dgram_handler = ReadinessBased::new(&uds_dgram_socket, 16);
 
-    daemon.ready().unwrap();
+    daemon.ready();
 
     // Create event listener for both files
     let mut event_queue = EventQueue::<EventSource>::new()

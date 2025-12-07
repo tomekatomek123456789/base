@@ -134,7 +134,7 @@ impl SchemeSync for PciScheme {
                 addr: _,
                 ref mut st,
             } => Self::read_channel(st, buf),
-            _ => Err(Error::new(EBADF))
+            _ => Err(Error::new(EBADF)),
         }
     }
     fn getdents<'buf>(
@@ -232,7 +232,7 @@ impl SchemeSync for PciScheme {
                                 ((value >> 15) & 0x1F) as u8,
                                 ((value >> 12) & 0x7) as u8,
                             ),
-                            (value & 0xFFF) as u16
+                            (value & 0xFFF) as u16,
                         )
                     }
                     None => return Err(Error::new(EINVAL)),
@@ -259,7 +259,9 @@ impl SchemeSync for PciScheme {
                     }
                     if write {
                         let value = u32::from_le_bytes(bytes);
-                        unsafe { self.pcie.write(addr, start + i, value); }
+                        unsafe {
+                            self.pcie.write(addr, start + i, value);
+                        }
                     }
                 }
                 Ok(payload.len())

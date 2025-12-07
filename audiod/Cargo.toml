@@ -5,7 +5,7 @@ authors = ["Jeremy Soller <jackpot51@gmail.com>"]
 edition = "2021"
 
 [dependencies]
-redox-daemon = "0.1.2"
+daemon = { path = "../daemon" }
 redox_syscall = { version = "0.5", features = ["std"] }
 libc = "0.2"
 libredox = { version = "0.1", features = ["mkns"] }

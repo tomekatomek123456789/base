@@ -22,10 +22,10 @@ fn get_dtb() -> Vec<u8> {
 }
 
 fn main() {
-    redox_daemon::Daemon::new(daemon).expect("mmc:failed to daemonize");
+    daemon::Daemon::new(daemon);
 }
 
-fn daemon(daemon: redox_daemon::Daemon) -> ! {
+fn daemon(daemon: daemon::Daemon) -> ! {
     let dtb_data = get_dtb();
     println!("read from OS, len = {}", dtb_data.len());
     if dtb_data.len() == 0 {

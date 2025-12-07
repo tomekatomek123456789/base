@@ -1,32 +1,11 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::ffi::CString;
-use std::fs::{read_dir, File};
-use std::io::{BufRead, BufReader, Result};
+use std::fs::read_dir;
+use std::io::Result;
 use std::path::Path;
 use std::process::Command;
-
-use libredox::error::Error as OsError;
+use std::{env, fs};
 
 use libredox::flag::{O_RDONLY, O_WRONLY};
-
-fn set_default_scheme(scheme: &str) -> std::result::Result<(), OsError> {
-    use std::ffi::{c_char, c_int};
-
-    extern "C" {
-        fn set_default_scheme(scheme: *const c_char) -> c_int;
-    }
-
-    let cstr =
-        CString::new(scheme.as_bytes()).expect(&format!("init: invalid default scheme {}", scheme));
-
-    let res = unsafe { set_default_scheme(cstr.as_ptr()) };
-
-    match res {
-        0 => Ok(()),
-        error_code => Err(OsError::new(error_code)),
-    }
-}
 
 fn switch_stdio(stdio: &str) -> Result<()> {
     let stdin = libredox::Fd::open(stdio, O_RDONLY, 0)?;
@@ -41,194 +20,170 @@ fn switch_stdio(stdio: &str) -> Result<()> {
 }
 
 pub fn run(file: &Path) -> Result<()> {
-    let file = File::open(file)?;
-    let reader = BufReader::new(file);
-    for line_res in reader.lines() {
-        let line_raw = line_res?;
-        let line = line_raw.trim();
-        if !line.is_empty() && !line.starts_with('#') {
-            let mut args = line.split(' ').map(|arg| {
-                if arg.starts_with('$') {
-                    env::var(&arg[1..]).unwrap_or(String::new())
-                } else {
-                    arg.to_string()
-                }
-            });
-
-            if let Some(cmd) = args.next() {
-                match cmd.as_str() {
-                    "cd" => {
-                        if let Some(dir) = args.next() {
-                            if let Err(err) = env::set_current_dir(&dir) {
-                                println!("init: failed to cd to '{}': {}", dir, err);
-                            }
-                        } else {
-                            println!("init: failed to cd: no argument");
-                        }
-                    }
-                    "set-default-scheme" => {
-                        if let Some(scheme) = args.next() {
-                            if let Err(err) = set_default_scheme(&scheme) {
-                                println!(
-                                    "init: failed to set default scheme to '{}': {}",
-                                    scheme, err
-                                );
-                            }
-                        } else {
-                            println!("init: failed to set default scheme: no argument");
-                        }
-                    }
-                    "echo" => {
-                        if let Some(arg) = args.next() {
-                            print!("{}", arg);
-                        }
-                        for arg in args {
-                            print!(" {}", arg);
-                        }
-                        print!("\n");
-                    }
-                    "export" => {
-                        if let Some(var) = args.next() {
-                            let mut value = String::new();
-                            if let Some(arg) = args.next() {
-                                value.push_str(&arg);
-                            }
-                            for arg in args {
-                                value.push(' ');
-                                value.push_str(&arg);
-                            }
-                            env::set_var(var, value);
-                        } else {
-                            println!("init: failed to export: no argument");
-                        }
-                    }
-                    "run" => {
-                        if let Some(new_file) = args.next() {
-                            if let Err(err) = run(&Path::new(&new_file)) {
-                                println!("init: failed to run '{}': {}", new_file, err);
-                            }
-                        } else {
-                            println!("init: failed to run: no argument");
-                        }
-                    }
-                    "run.d" => {
-                        // This must be a BTreeMap to iterate in sorted order.
-                        let mut entries = BTreeMap::new();
-                        let mut missing_arg = true;
-
-                        for new_dir in args {
-                            if !Path::new(&new_dir).exists() {
-                                // Skip non-existent dirs
-                                continue;
-                            }
-                            missing_arg = false;
-
-                            match read_dir(&new_dir) {
-                                Ok(list) => {
-                                    for entry_res in list {
-                                        match entry_res {
-                                            Ok(entry) => {
-                                                // This intentionally overwrites older entries with
-                                                // the same filename to allow overriding entries in
-                                                // one search dir with those in a later search dir.
-                                                entries.insert(entry.file_name(), entry.path());
-                                            }
-                                            Err(err) => {
-                                                println!(
-                                                    "init: failed to run.d: '{}': {}",
-                                                    new_dir, err
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(err) => {
-                                    println!("init: failed to run.d: '{}': {}", new_dir, err);
-                                }
-                            }
-                        }
-
-                        if missing_arg {
-                            println!(
-                                "init: failed to run.d: no argument or all dirs are non-existent"
-                            );
-                        } else {
-                            // This takes advantage of BTreeMap iterating in sorted order.
-                            for (_, entry_path) in entries {
-                                if let Err(err) = run(&entry_path) {
-                                    println!(
-                                        "init: failed to run '{}': {}",
-                                        entry_path.display(),
-                                        err
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    "stdio" => {
-                        if let Some(stdio) = args.next() {
-                            if let Err(err) = switch_stdio(&stdio) {
-                                println!("init: failed to switch stdio to '{}': {}", stdio, err);
-                            }
-                        } else {
-                            println!("init: failed to set stdio: no argument");
-                        }
-                    }
-                    "unset" => {
-                        for arg in args {
-                            env::remove_var(&arg);
-                        }
-                    }
-                    "nowait" => {
-                        if let Some(cmd) = args.next() {
-                            let mut command = Command::new(cmd);
-
-                            for arg in args {
-                                command.arg(arg);
-                            }
-
-                            match command.spawn() {
-                                Ok(_child) => {}
-                                Err(err) => println!("init: failed to execute '{}': {}", line, err),
-                            }
-                        } else {
-                            println!("init: failed to run nowait: no argument");
-                        }
-                    }
-                    _ => {
-                        let mut command = Command::new(cmd.clone());
-                        for arg in args {
-                            command.arg(arg);
-                        }
-
-                        match command.spawn() {
-                            Ok(mut child) => match child.wait() {
-                                Ok(exit_status) => {
-                                    if !exit_status.success() {
-                                        println!("{cmd} failed with {exit_status}");
-                                    }
-                                }
-                                Err(err) => {
-                                    println!("init: failed to wait for '{}': {}", line, err)
-                                }
-                            },
-                            Err(err) => println!("init: failed to execute '{}': {}", line, err),
-                        }
-                    }
-                }
-            }
-        }
+    for line in fs::read_to_string(file)?.lines() {
+        run_command(line);
     }
 
     Ok(())
 }
 
-pub fn main() {
-    if let Err(err) = set_default_scheme("initfs") {
-        println!("init: failed to set default scheme: {}", err);
+fn run_command(line_raw: &str) {
+    let line = line_raw.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return;
     }
+    let mut args = line.split(' ').map(|arg| {
+        if arg.starts_with('$') {
+            env::var(&arg[1..]).unwrap_or(String::new())
+        } else {
+            arg.to_string()
+        }
+    });
 
-    let config = "/etc/init.rc";
+    if let Some(cmd) = args.next() {
+        match cmd.as_str() {
+            "cd" => {
+                let Some(dir) = args.next() else {
+                    println!("init: failed to cd: no argument");
+                    return;
+                };
+                if let Err(err) = env::set_current_dir(&dir) {
+                    println!("init: failed to cd to '{}': {}", dir, err);
+                }
+            }
+            "echo" => {
+                println!("{}", args.collect::<Vec<_>>().join(" "));
+            }
+            "export" => {
+                let Some(var) = args.next() else {
+                    println!("init: failed to export: no argument");
+                    return;
+                };
+                let mut value = String::new();
+                if let Some(arg) = args.next() {
+                    value.push_str(&arg);
+                }
+                for arg in args {
+                    value.push(' ');
+                    value.push_str(&arg);
+                }
+                unsafe { env::set_var(var, value) };
+            }
+            "run" => {
+                let Some(new_file) = args.next() else {
+                    println!("init: failed to run: no argument");
+                    return;
+                };
+                if let Err(err) = run(&Path::new(&new_file)) {
+                    println!("init: failed to run '{}': {}", new_file, err);
+                }
+            }
+            "run.d" => {
+                // This must be a BTreeMap to iterate in sorted order.
+                let mut entries = BTreeMap::new();
+                let mut missing_arg = true;
+
+                for new_dir in args {
+                    if !Path::new(&new_dir).exists() {
+                        // Skip non-existent dirs
+                        continue;
+                    }
+                    missing_arg = false;
+
+                    let list = match read_dir(&new_dir) {
+                        Ok(list) => list,
+                        Err(err) => {
+                            println!("init: failed to run.d: '{}': {}", new_dir, err);
+                            continue;
+                        }
+                    };
+                    for entry_res in list {
+                        match entry_res {
+                            Ok(entry) => {
+                                // This intentionally overwrites older entries with
+                                // the same filename to allow overriding entries in
+                                // one search dir with those in a later search dir.
+                                entries.insert(entry.file_name(), entry.path());
+                            }
+                            Err(err) => {
+                                println!("init: failed to run.d: '{}': {}", new_dir, err);
+                            }
+                        }
+                    }
+                }
+
+                if missing_arg {
+                    println!("init: failed to run.d: no argument or all dirs are non-existent");
+                    return;
+                }
+
+                // This takes advantage of BTreeMap iterating in sorted order.
+                for (_, entry_path) in entries {
+                    if let Err(err) = run(&entry_path) {
+                        println!("init: failed to run '{}': {}", entry_path.display(), err);
+                    }
+                }
+            }
+            "stdio" => {
+                let Some(stdio) = args.next() else {
+                    println!("init: failed to set stdio: no argument");
+                    return;
+                };
+                if let Err(err) = switch_stdio(&stdio) {
+                    println!("init: failed to switch stdio to '{}': {}", stdio, err);
+                }
+            }
+            "unset" => {
+                for arg in args {
+                    unsafe { env::remove_var(&arg) };
+                }
+            }
+            "nowait" => {
+                let Some(cmd) = args.next() else {
+                    println!("init: failed to run nowait: no argument");
+                    return;
+                };
+                let mut command = Command::new(cmd);
+
+                for arg in args {
+                    command.arg(arg);
+                }
+
+                match command.spawn() {
+                    Ok(_child) => {}
+                    Err(err) => println!("init: failed to execute '{}': {}", line, err),
+                }
+            }
+            _ => {
+                let mut command = Command::new(cmd.clone());
+                for arg in args {
+                    command.arg(arg);
+                }
+
+                let mut child = match command.spawn() {
+                    Ok(child) => child,
+                    Err(err) => {
+                        println!("init: failed to execute '{}': {}", line, err);
+                        return;
+                    }
+                };
+                match child.wait() {
+                    Ok(exit_status) => {
+                        if !exit_status.success() {
+                            println!("{cmd} failed with {exit_status}");
+                        }
+                    }
+                    Err(err) => {
+                        println!("init: failed to wait for '{}': {}", line, err)
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn main() {
+    let config = "/scheme/initfs/etc/init.rc";
     if let Err(err) = run(&Path::new(config)) {
         println!("init: failed to run {}: {}", config, err);
     }

@@ -9,7 +9,7 @@ description = "In-memory filesystem for Redox, which is useful for early logging
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-redox-daemon = "0.1.2"
+daemon = { path = "../daemon" }
 redox_syscall = "0.5.10"
 redox-scheme = "0.5"
 libredox = "0.1.3"

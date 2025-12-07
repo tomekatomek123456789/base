@@ -487,12 +487,12 @@ impl InputScheme {
     }
 }
 
-fn deamon(deamon: redox_daemon::Daemon) -> anyhow::Result<()> {
+fn deamon(deamon: daemon::Daemon) -> anyhow::Result<()> {
     // Create the ":input" scheme.
     let socket_file = Socket::create("input")?;
     let mut scheme = InputScheme::new();
 
-    deamon.ready().unwrap();
+    deamon.ready();
 
     loop {
         scheme.has_new_events = false;
@@ -566,8 +566,8 @@ fn deamon(deamon: redox_daemon::Daemon) -> anyhow::Result<()> {
     }
 }
 
-fn daemon_runner(redox_daemon: redox_daemon::Daemon) -> ! {
-    deamon(redox_daemon).unwrap();
+fn daemon_runner(daemon: daemon::Daemon) -> ! {
+    deamon(daemon).unwrap();
     unreachable!();
 }
 
@@ -598,6 +598,6 @@ fn main() {
             _ => panic!("inputd: invalid argument: {}", val),
         }
     } else {
-        redox_daemon::Daemon::new(daemon_runner).expect("inputd: failed to daemonize");
+        daemon::Daemon::new(daemon_runner);
     }
 }

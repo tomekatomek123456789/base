@@ -8,10 +8,10 @@ version = "0.1.0"
 dependencies = [
  "bitflags 1.3.2",
  "common",
+ "daemon",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_event",
  "redox_syscall",
@@ -39,13 +39,13 @@ dependencies = [
  "amlserde",
  "arrayvec",
  "common",
+ "daemon",
  "libredox",
  "log",
  "num-derive",
  "num-traits",
  "parking_lot 0.12.5",
  "plain",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_event",
  "redox_syscall",
@@ -62,11 +62,11 @@ dependencies = [
  "bitflags 1.3.2",
  "byteorder",
  "common",
+ "daemon",
  "driver-block",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -86,8 +86,8 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_event",
  "redox_syscall",
@@ -209,10 +209,10 @@ name = "audiod"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "daemon",
  "ioslice",
  "libc",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.8.2 (git+https://gitlab.redox-os.org/redox-os/redox-scheme.git)",
  "redox_syscall",
 ]
@@ -240,10 +240,10 @@ name = "bcm2835-sdhcid"
 version = "0.1.0"
 dependencies = [
  "common",
+ "daemon",
  "driver-block",
  "fdt 0.2.0-alpha1",
  "libredox",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -253,12 +253,12 @@ name = "bgad"
 version = "0.1.0"
 dependencies = [
  "common",
+ "daemon",
  "inputd",
  "libredox",
  "log",
  "orbclient",
  "pcid",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_syscall",
 ]
@@ -502,6 +502,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
+name = "daemon"
+version = "0.0.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "defmt"
 version = "0.3.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -555,12 +562,12 @@ dependencies = [
 name = "driver-block"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "executor",
  "futures",
  "libredox",
  "log",
  "partitionlib",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_syscall",
 ]
@@ -582,8 +589,8 @@ dependencies = [
 name = "driver-network"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.4.0",
  "redox_syscall",
 ]
@@ -594,11 +601,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "driver-network",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -642,12 +649,12 @@ name = "fbbootlogd"
 version = "0.1.0"
 dependencies = [
  "console-draw",
+ "daemon",
  "graphics-ipc",
  "inputd",
  "libredox",
  "orbclient",
  "ransid",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_event",
  "redox_syscall",
@@ -659,13 +666,13 @@ version = "0.1.0"
 dependencies = [
  "common",
  "console-draw",
+ "daemon",
  "graphics-ipc",
  "inputd",
  "libredox",
  "log",
  "orbclient",
  "ransid",
- "redox-daemon",
  "redox-scheme 0.4.0",
  "redox_event",
  "redox_syscall",
@@ -906,9 +913,9 @@ version = "0.1.0"
 dependencies = [
  "amlserde",
  "common",
+ "daemon",
  "fdt 0.1.5",
  "log",
- "redox-daemon",
  "ron",
 ]
 
@@ -941,11 +948,11 @@ name = "ided"
 version = "0.1.0"
 dependencies = [
  "common",
+ "daemon",
  "driver-block",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -956,10 +963,10 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_event",
  "redox_syscall",
@@ -989,10 +996,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
+ "daemon",
  "libredox",
  "log",
  "orbclient",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_syscall",
 ]
@@ -1012,10 +1019,10 @@ name = "ipcd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "daemon",
  "libc",
  "libredox",
  "rand 0.8.5",
- "redox-daemon",
  "redox-rt",
  "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_event",
@@ -1040,10 +1047,10 @@ version = "1.0.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "driver-network",
  "libredox",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -1086,9 +1093,9 @@ name = "lived"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "daemon",
  "driver-block",
  "libredox",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -1112,8 +1119,8 @@ checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 name = "logd"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.5.0",
  "redox_syscall",
 ]
@@ -1169,6 +1176,7 @@ dependencies = [
  "arrayvec",
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "driver-block",
  "executor",
  "futures",
@@ -1177,7 +1185,6 @@ dependencies = [
  "parking_lot 0.12.5",
  "partitionlib",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
  "smallvec 1.15.1",
@@ -1297,6 +1304,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "common",
+ "daemon",
  "fdt 0.1.5",
  "libc",
  "libredox",
@@ -1304,7 +1312,6 @@ dependencies = [
  "pci_types",
  "pico-args",
  "plain",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_syscall",
  "serde",
@@ -1394,11 +1401,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags 1.3.2",
  "common",
+ "daemon",
  "inputd",
  "libredox",
  "log",
  "orbclient",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_event",
  "redox_syscall",
@@ -1408,8 +1415,8 @@ dependencies = [
 name = "ptyd"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.3.0",
  "redox_event",
  "redox_syscall",
@@ -1435,9 +1442,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 name = "ramfs"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "indexmap",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.5.0",
  "redox_syscall",
  "slab",
@@ -1521,11 +1528,11 @@ dependencies = [
 name = "randd"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "libredox",
  "rand_chacha 0.2.2",
  "rand_core 0.5.1",
  "raw-cpuid",
- "redox-daemon",
  "redox-scheme 0.2.4",
  "redox_syscall",
  "sha2",
@@ -1557,15 +1564,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "678054eb77286b51581ba43620cc911abf02758c91f93f479767aed0f90458b2"
 dependencies = [
  "rand_core 0.3.1",
-]
-
-[[package]]
-name = "redox-daemon"
-version = "0.1.3"
-source = "git+https://gitlab.redox-os.org/redox-os/redox-daemon.git#31ab115cf17d6fe333515bfe19ac477352a1dcc0"
-dependencies = [
- "libc",
- "libredox",
 ]
 
 [[package]]
@@ -1701,9 +1699,9 @@ name = "redox_netstack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "daemon",
  "libredox",
  "log",
- "redox-daemon",
  "redox-log",
  "redox-scheme 0.8.2 (git+https://gitlab.redox-os.org/redox-os/redox-scheme.git)",
  "redox_event",
@@ -1790,11 +1788,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "driver-network",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -1805,11 +1803,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "driver-network",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -1838,9 +1836,9 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "common",
+ "daemon",
  "libredox",
  "log",
- "redox-daemon",
  "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_event",
  "redox_syscall",
@@ -2277,10 +2275,10 @@ name = "usbscsid"
 version = "0.1.0"
 dependencies = [
  "base64 0.11.0",
+ "daemon",
  "driver-block",
  "libredox",
  "plain",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
  "thiserror 1.0.69",
@@ -2315,10 +2313,10 @@ name = "vboxd"
 version = "0.1.0"
 dependencies = [
  "common",
+ "daemon",
  "libredox",
  "orbclient",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -2340,13 +2338,13 @@ name = "vesad"
 version = "0.1.0"
 dependencies = [
  "common",
+ "daemon",
  "driver-graphics",
  "graphics-ipc",
  "inputd",
  "libredox",
  "orbclient",
  "ransid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
 ]
@@ -2357,12 +2355,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
+ "daemon",
  "driver-block",
  "futures",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
  "spin 0.10.0",
@@ -2394,6 +2392,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
+ "daemon",
  "driver-graphics",
  "futures",
  "graphics-ipc",
@@ -2402,7 +2401,6 @@ dependencies = [
  "log",
  "orbclient",
  "pcid",
- "redox-daemon",
  "redox_event",
  "redox_syscall",
  "spin 0.9.8",
@@ -2415,12 +2413,12 @@ name = "virtio-netd"
 version = "0.1.0"
 dependencies = [
  "common",
+ "daemon",
  "driver-network",
  "futures",
  "libredox",
  "log",
  "pcid",
- "redox-daemon",
  "redox_syscall",
  "static_assertions",
  "virtio-core",
@@ -2617,13 +2615,13 @@ dependencies = [
  "chashmap",
  "common",
  "crossbeam-channel",
+ "daemon",
  "futures",
  "lazy_static",
  "libredox",
  "log",
  "pcid",
  "plain",
- "redox-daemon",
  "redox-scheme 0.6.2",
  "redox_event",
  "redox_syscall",
@@ -2659,8 +2657,8 @@ dependencies = [
 name = "zerod"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "libredox",
- "redox-daemon",
  "redox-scheme 0.2.4",
  "redox_syscall",
 ]

@@ -115,13 +115,9 @@ fn get_int_method(pcid_handle: &mut PciFunctionHandle) -> (Option<File>, Interru
     }
 }
 
-fn main() {
-    redox_daemon::Daemon::new(daemon).expect("xhcid: failed to daemonize");
-}
-
 //TODO: cleanup CSZ support
 fn daemon_with_context_size<const N: usize>(
-    daemon: redox_daemon::Daemon,
+    daemon: daemon::Daemon,
     mut pcid_handle: PciFunctionHandle,
 ) -> ! {
     let pci_config = pcid_handle.config();
@@ -149,7 +145,7 @@ fn daemon_with_context_size<const N: usize>(
     let scheme_name = format!("usb.{}", name);
     let socket = Socket::create(scheme_name.clone()).expect("xhcid: failed to create usb scheme");
 
-    daemon.ready().expect("xhcid: failed to notify parent");
+    daemon.ready();
 
     let hci = Arc::new(
         Xhci::<N>::new(scheme_name, address, interrupt_method, pcid_handle)
@@ -185,8 +181,11 @@ fn daemon_with_context_size<const N: usize>(
     }
 }
 
-fn daemon(daemon: redox_daemon::Daemon) -> ! {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn main() {
+    pcid_interface::pci_daemon(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let address = unsafe { pcid_handle.map_bar(0) }.ptr.as_ptr() as usize;
     let cap = unsafe { &mut *(address as *mut xhci::CapabilityRegs) };
     if cap.csz() {

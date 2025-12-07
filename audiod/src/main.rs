@@ -11,7 +11,7 @@ use libredox::{error::Result, Fd};
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 
-use redox_daemon::Daemon;
+use daemon::Daemon;
 
 use self::scheme::AudioScheme;
 
@@ -50,7 +50,7 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
     let socket = Socket::create("audio").context("failed to create scheme")?;
 
     // The scheme is now ready to accept requests, notify the original process
-    daemon.ready().unwrap();
+    daemon.ready();
 
     let hw_file = Fd::open("/scheme/audiohw", flag::O_WRONLY | flag::O_CLOEXEC, 0)?;
 
@@ -60,7 +60,8 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
     let ns = libredox::call::mkns(&[
         //IoSlice::new(b"memory"), TODO: already included, uncommenting gives EEXIST
         IoSlice::new(b"rand"), // for HashMap
-    ]).context("failed to make namespace")?;
+    ])
+    .context("failed to make namespace")?;
     libredox::call::setrens(ns, ns).context("failed to set namespace")?;
 
     // Spawn a thread to mix and send audio data
@@ -86,8 +87,12 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
-    let Err(err) = Daemon::new(|x| match daemon(x) {
+fn main() {
+    Daemon::new(inner);
+}
+
+fn inner(x: Daemon) -> ! {
+    match daemon(x) {
         Ok(()) => {
             process::exit(0);
         }
@@ -95,8 +100,5 @@ fn main() -> anyhow::Result<()> {
             eprintln!("audiod: {}", err);
             process::exit(1);
         }
-    });
-
-    eprintln!("audiod: {}", err);
-    process::exit(1);
+    }
 }

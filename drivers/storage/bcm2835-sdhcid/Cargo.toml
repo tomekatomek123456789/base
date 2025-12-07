@@ -8,9 +8,9 @@ edition = "2021"
 [dependencies]
 fdt = { git = "https://github.com/repnop/fdt.git" }
 common = { path = "../../common" }
+daemon = { path = "../../../daemon" }
 driver-block = { path = "../driver-block" }
 
-redox-daemon = "0.1"
 libredox = "0.1.3"
 redox_syscall = { version = "0.5", features = ["std"] }
 redox_event = "0.4"

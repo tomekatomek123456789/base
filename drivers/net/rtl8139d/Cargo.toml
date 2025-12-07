@@ -9,8 +9,8 @@ libredox = "0.1.3"
 log = "0.4"
 redox_event = "0.4.1"
 redox_syscall = "0.5"
-redox-daemon = "0.1"
 
 common = { path = "../../common" }
+daemon = { path = "../../../daemon" }
 driver-network = { path = "../driver-network" }
 pcid = { path = "../../pcid" }

@@ -6,6 +6,7 @@ use std::ptr::NonNull;
 use std::{env, io};
 use std::{fmt, process};
 
+use daemon::Daemon;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 pub use bar::PciBar;
@@ -297,7 +298,7 @@ fn recv<T: DeserializeOwned>(r: &mut File) -> T {
 }
 
 impl PciFunctionHandle {
-    pub fn connect_default() -> Self {
+    fn connect_default() -> Self {
         let channel_fd = match env::var("PCID_CLIENT_CHANNEL") {
             Ok(channel_fd) => channel_fd,
             Err(err) => {
@@ -470,4 +471,11 @@ impl PciFunctionHandle {
             })
         }
     }
+}
+
+pub fn pci_daemon<F: FnOnce(Daemon, PciFunctionHandle) -> !>(f: F) -> ! {
+    Daemon::new(|daemon| {
+        let pcid_handle = PciFunctionHandle::connect_default();
+        f(daemon, pcid_handle)
+    })
 }

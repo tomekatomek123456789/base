@@ -1,6 +1,6 @@
 # Various daemons that relibc needs to function as well as a bunch of env vars
 # that should be set for every program.
-export PATH /bin
+export PATH /scheme/initfs/bin
 export RUST_BACKTRACE 1
 rtcd
 nulld
@@ -18,7 +18,6 @@ vesad
 unset FRAMEBUFFER_ADDR FRAMEBUFFER_VIRT FRAMEBUFFER_WIDTH FRAMEBUFFER_HEIGHT FRAMEBUFFER_STRIDE
 #TODO: unset FRAMEBUFFER1 and beyond?
 fbbootlogd
-inputd -A 1
 fbcond 2
 
 # Live disk
@@ -34,7 +33,6 @@ redoxfs --uuid $REDOXFS_UUID file $REDOXFS_BLOCK
 unset REDOXFS_UUID REDOXFS_BLOCK REDOXFS_PASSWORD_ADDR REDOXFS_PASSWORD_SIZE
 
 # Exit initfs
-set-default-scheme file
 cd /
 export PATH /usr/bin
 run.d /usr/lib/init.d /etc/init.d

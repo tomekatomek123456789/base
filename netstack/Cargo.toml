@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 redox_event = "0.4.1"
-redox-daemon = "0.1.2"
+daemon = { path = "../daemon" }
 redox_syscall = { version = "0.5", features = ["std"] }
 redox-log = "0.1"
 libredox = { version = "0.1.3", features = ["mkns"] }

@@ -9,11 +9,11 @@ orbclient = "0.3.27"
 ransid = "0.4"
 redox_event = "0.4"
 redox_syscall = "0.5"
-redox-daemon = "0.1"
 redox-scheme = "0.4"
 
 common = { path = "../../common" }
 console-draw = { path = "../console-draw" }
+daemon = { path = "../../../daemon" }
 graphics-ipc = { path = "../graphics-ipc" }
 inputd = { path = "../../inputd" }
 libredox = "0.1.3"

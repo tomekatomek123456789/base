@@ -47,12 +47,12 @@ enum Handle {
 impl<T: NetworkAdapter> NetworkScheme<T> {
     pub fn new(
         adapter_fn: impl FnOnce() -> T,
-        daemon: redox_daemon::Daemon,
+        daemon: daemon::Daemon,
         scheme_name: String,
     ) -> Self {
         assert!(scheme_name.starts_with("network"));
         let socket = Socket::nonblock(&scheme_name).expect("failed to create network scheme");
-        daemon.ready().expect("failed to mark daemon as ready");
+        daemon.ready();
         let adapter = adapter_fn();
         NetworkScheme {
             adapter,

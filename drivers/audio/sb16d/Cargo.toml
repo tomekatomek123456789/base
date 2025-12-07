@@ -8,7 +8,7 @@ bitflags = "2"
 common = { path = "../../common" }
 libredox = "0.1.3"
 log = "0.4"
-redox-daemon = "0.1"
+daemon = { path = "../../../daemon" }
 redox_event = "0.4.1"
 redox_syscall = "0.5"
 spin = "0.9"

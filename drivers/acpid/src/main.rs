@@ -13,7 +13,7 @@ mod aml_physmem;
 
 mod scheme;
 
-fn daemon(daemon: redox_daemon::Daemon) -> ! {
+fn daemon(daemon: daemon::Daemon) -> ! {
     common::setup_logging(
         "misc",
         "acpi",
@@ -28,7 +28,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 
     if rxsdt_raw_data.is_empty() {
         log::info!("System doesn't use ACPI");
-        daemon.ready().expect("acpid: failed to notify parent");
+        daemon.ready();
         std::process::exit(0);
     }
 
@@ -73,7 +73,7 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
     let mut event_queue = RawEventQueue::new().expect("acpid: failed to create event queue");
     let socket = Socket::nonblock("acpi").expect("acpid: failed to create disk scheme");
 
-    daemon.ready().expect("acpid: failed to notify parent");
+    daemon.ready();
 
     //TODO: needs to open /scheme/pci/access later! libredox::call::setrens(0, 0).expect("acpid: failed to enter null namespace");
 
@@ -144,5 +144,5 @@ fn daemon(daemon: redox_daemon::Daemon) -> ! {
 }
 
 fn main() {
-    redox_daemon::Daemon::new(daemon).expect("acpid: failed to daemonize");
+    daemon::Daemon::new(daemon);
 }

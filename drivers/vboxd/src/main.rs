@@ -191,7 +191,10 @@ impl VboxGuestInfo {
 }
 
 fn main() {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+    pcid_interface::pci_daemon(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
     let pci_config = pcid_handle.config();
 
     let mut name = pci_config.func.name();
@@ -206,130 +209,124 @@ fn main() {
 
     println!(" + VirtualBox {}", pci_config.func.display());
 
-    // Daemonize
-    redox_daemon::Daemon::new(move |daemon| {
-        common::acquire_port_io_rights().expect("vboxd: failed to get I/O permission");
+    common::acquire_port_io_rights().expect("vboxd: failed to get I/O permission");
 
-        let mut width = 0;
-        let mut height = 0;
-        let mut display_opt = File::open("inputd:producer").ok();
-        if let Some(ref display) = display_opt {
-            let mut buf: [u8; 4096] = [0; 4096];
-            if let Ok(count) = libredox::call::fpath(display.as_raw_fd() as usize, &mut buf) {
-                let path = unsafe { String::from_utf8_unchecked(Vec::from(&buf[..count])) };
-                let res = path.split(":").nth(1).unwrap_or("");
-                width = res
-                    .split("/")
-                    .nth(1)
-                    .unwrap_or("")
-                    .parse::<u32>()
-                    .unwrap_or(0);
-                height = res
-                    .split("/")
-                    .nth(2)
-                    .unwrap_or("")
-                    .parse::<u32>()
-                    .unwrap_or(0);
+    let mut width = 0;
+    let mut height = 0;
+    let mut display_opt = File::open("inputd:producer").ok();
+    if let Some(ref display) = display_opt {
+        let mut buf: [u8; 4096] = [0; 4096];
+        if let Ok(count) = libredox::call::fpath(display.as_raw_fd() as usize, &mut buf) {
+            let path = unsafe { String::from_utf8_unchecked(Vec::from(&buf[..count])) };
+            let res = path.split(":").nth(1).unwrap_or("");
+            width = res
+                .split("/")
+                .nth(1)
+                .unwrap_or("")
+                .parse::<u32>()
+                .unwrap_or(0);
+            height = res
+                .split("/")
+                .nth(2)
+                .unwrap_or("")
+                .parse::<u32>()
+                .unwrap_or(0);
+        }
+    }
+
+    let mut irq_file = irq.irq_handle("vboxd");
+
+    let mut port = Pio::<u32>::new(bar0 as u16);
+    let address = unsafe { pcid_handle.map_bar(1) }.ptr.as_ptr();
+    {
+        let vmmdev = unsafe { &mut *(address as *mut VboxVmmDev) };
+
+        let mut guest_info = VboxGuestInfo::new().expect("vboxd: failed to map GuestInfo");
+        guest_info.version.write(VBOX_VMMDEV_VERSION);
+        guest_info.ostype.write(0x100);
+        port.write(guest_info.physical() as u32);
+
+        let mut guest_caps = VboxGuestCaps::new().expect("vboxd: failed to map GuestCaps");
+        guest_caps.caps.write(1 << 2);
+        port.write(guest_caps.physical() as u32);
+
+        let mut set_mouse = VboxSetMouse::new().expect("vboxd: failed to map SetMouse");
+        set_mouse.features.write(1 << 4 | 1);
+        port.write(set_mouse.physical() as u32);
+
+        vmmdev
+            .guest_events
+            .write(VBOX_EVENT_DISPLAY | VBOX_EVENT_MOUSE);
+
+        user_data! {
+            enum Source {
+                Irq,
             }
         }
 
-        let mut irq_file = irq.irq_handle("vboxd");
+        let event_queue =
+            EventQueue::<Source>::new().expect("vboxd: Could not create event queue.");
+        event_queue
+            .subscribe(
+                irq_file.as_raw_fd() as usize,
+                Source::Irq,
+                event::EventFlags::READ,
+            )
+            .unwrap();
 
-        let mut port = Pio::<u32>::new(bar0 as u16);
-        let address = unsafe { pcid_handle.map_bar(1) }.ptr.as_ptr();
+        daemon.ready();
+
+        libredox::call::setrens(0, 0).expect("vboxd: failed to enter null namespace");
+
+        let mut bga = Bga::new();
+        let get_mouse = VboxGetMouse::new().expect("vboxd: failed to map GetMouse");
+        let display_change = VboxDisplayChange::new().expect("vboxd: failed to map DisplayChange");
+        let ack_events = VboxAckEvents::new().expect("vboxd: failed to map AckEvents");
+
+        for Source::Irq in iter::once(Source::Irq)
+            .chain(event_queue.map(|e| e.expect("vboxd: failed to get next event").user_data))
         {
-            let vmmdev = unsafe { &mut *(address as *mut VboxVmmDev) };
+            let mut irq = [0; 8];
+            if irq_file.read(&mut irq).unwrap() >= irq.len() {
+                let host_events = vmmdev.host_events.read();
+                if host_events != 0 {
+                    port.write(ack_events.physical() as u32);
+                    irq_file.write(&irq).unwrap();
 
-            let mut guest_info = VboxGuestInfo::new().expect("vboxd: failed to map GuestInfo");
-            guest_info.version.write(VBOX_VMMDEV_VERSION);
-            guest_info.ostype.write(0x100);
-            port.write(guest_info.physical() as u32);
-
-            let mut guest_caps = VboxGuestCaps::new().expect("vboxd: failed to map GuestCaps");
-            guest_caps.caps.write(1 << 2);
-            port.write(guest_caps.physical() as u32);
-
-            let mut set_mouse = VboxSetMouse::new().expect("vboxd: failed to map SetMouse");
-            set_mouse.features.write(1 << 4 | 1);
-            port.write(set_mouse.physical() as u32);
-
-            vmmdev
-                .guest_events
-                .write(VBOX_EVENT_DISPLAY | VBOX_EVENT_MOUSE);
-
-            user_data! {
-                enum Source {
-                    Irq,
-                }
-            }
-
-            let event_queue =
-                EventQueue::<Source>::new().expect("vboxd: Could not create event queue.");
-            event_queue
-                .subscribe(
-                    irq_file.as_raw_fd() as usize,
-                    Source::Irq,
-                    event::EventFlags::READ,
-                )
-                .unwrap();
-
-            daemon.ready().expect("failed to signal readiness");
-
-            libredox::call::setrens(0, 0).expect("vboxd: failed to enter null namespace");
-
-            let mut bga = Bga::new();
-            let get_mouse = VboxGetMouse::new().expect("vboxd: failed to map GetMouse");
-            let display_change =
-                VboxDisplayChange::new().expect("vboxd: failed to map DisplayChange");
-            let ack_events = VboxAckEvents::new().expect("vboxd: failed to map AckEvents");
-
-            for Source::Irq in iter::once(Source::Irq)
-                .chain(event_queue.map(|e| e.expect("vboxd: failed to get next event").user_data))
-            {
-                let mut irq = [0; 8];
-                if irq_file.read(&mut irq).unwrap() >= irq.len() {
-                    let host_events = vmmdev.host_events.read();
-                    if host_events != 0 {
-                        port.write(ack_events.physical() as u32);
-                        irq_file.write(&irq).unwrap();
-
-                        if host_events & VBOX_EVENT_DISPLAY == VBOX_EVENT_DISPLAY {
-                            port.write(display_change.physical() as u32);
-                            if let Some(ref mut display) = display_opt {
-                                let new_width = display_change.xres.read();
-                                let new_height = display_change.yres.read();
-                                if width != new_width || height != new_height {
-                                    width = new_width;
-                                    height = new_height;
-                                    println!("Display {}, {}", width, height);
-                                    bga.set_size(width as u16, height as u16);
-                                    let _ = display.write(
-                                        &orbclient::ResizeEvent { width, height }.to_event(),
-                                    );
-                                }
+                    if host_events & VBOX_EVENT_DISPLAY == VBOX_EVENT_DISPLAY {
+                        port.write(display_change.physical() as u32);
+                        if let Some(ref mut display) = display_opt {
+                            let new_width = display_change.xres.read();
+                            let new_height = display_change.yres.read();
+                            if width != new_width || height != new_height {
+                                width = new_width;
+                                height = new_height;
+                                println!("Display {}, {}", width, height);
+                                bga.set_size(width as u16, height as u16);
+                                let _ = display
+                                    .write(&orbclient::ResizeEvent { width, height }.to_event());
                             }
                         }
+                    }
 
-                        if host_events & VBOX_EVENT_MOUSE == VBOX_EVENT_MOUSE {
-                            port.write(get_mouse.physical() as u32);
-                            if let Some(ref mut display) = display_opt {
-                                let x = get_mouse.x.read() * width / 0x10000;
-                                let y = get_mouse.y.read() * height / 0x10000;
-                                let _ = display.write(
-                                    &orbclient::MouseEvent {
-                                        x: x as i32,
-                                        y: y as i32,
-                                    }
-                                    .to_event(),
-                                );
-                            }
+                    if host_events & VBOX_EVENT_MOUSE == VBOX_EVENT_MOUSE {
+                        port.write(get_mouse.physical() as u32);
+                        if let Some(ref mut display) = display_opt {
+                            let x = get_mouse.x.read() * width / 0x10000;
+                            let y = get_mouse.y.read() * height / 0x10000;
+                            let _ = display.write(
+                                &orbclient::MouseEvent {
+                                    x: x as i32,
+                                    y: y as i32,
+                                }
+                                .to_event(),
+                            );
                         }
                     }
                 }
             }
         }
+    }
 
-        std::process::exit(0);
-    })
-    .expect("vboxd: failed to daemonize");
+    std::process::exit(0);
 }

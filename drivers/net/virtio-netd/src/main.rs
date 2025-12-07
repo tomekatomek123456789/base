@@ -26,9 +26,26 @@ pub struct VirtHeader {
 static_assertions::const_assert_eq!(core::mem::size_of::<VirtHeader>(), 12);
 
 const MAX_BUFFER_LEN: usize = 65535;
+fn main() {
+    pcid_interface::pci_daemon(daemon_runner);
+}
 
-fn deamon(daemon: redox_daemon::Daemon) -> Result<(), Box<dyn std::error::Error>> {
-    let mut pcid_handle = PciFunctionHandle::connect_default();
+fn daemon_runner(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
+    deamon(daemon, pcid_handle).unwrap();
+    unreachable!();
+}
+
+fn deamon(
+    daemon: daemon::Daemon,
+    mut pcid_handle: PciFunctionHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    common::setup_logging(
+        "net",
+        "pci",
+        "virtio-netd",
+        common::output_level(),
+        common::file_level(),
+    );
 
     // Double check that we have the right device.
     //
@@ -117,20 +134,4 @@ fn deamon(daemon: redox_daemon::Daemon) -> Result<(), Box<dyn std::error::Error>
         event_queue.read(&mut [0; mem::size_of::<syscall::Event>()])?; // Wait for event
         scheme.tick()?;
     }
-}
-
-fn daemon_runner(redox_daemon: redox_daemon::Daemon) -> ! {
-    deamon(redox_daemon).unwrap();
-    unreachable!();
-}
-
-pub fn main() {
-    common::setup_logging(
-        "net",
-        "pci",
-        "virtio-netd",
-        common::output_level(),
-        common::file_level(),
-    );
-    redox_daemon::Daemon::new(daemon_runner).expect("virtio-core: failed to daemonize");
 }

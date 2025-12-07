@@ -8,43 +8,42 @@ use redox_scheme::{RequestKind, SignalBehavior};
 use self::scheme::Scheme;
 
 fn main() {
+    daemon::Daemon::new(daemon);
+}
+
+fn daemon(daemon: daemon::Daemon) -> ! {
     let scheme_name = env::args().nth(1).expect("Usage:\n\tramfs SCHEME_NAME");
 
-    redox_daemon::Daemon::new(move |daemon| {
-        let socket =
-            redox_scheme::Socket::create(&scheme_name).expect("ramfs: failed to create socket");
+    let socket =
+        redox_scheme::Socket::create(&scheme_name).expect("ramfs: failed to create socket");
 
-        let mut scheme = Scheme::new(scheme_name).expect("ramfs: failed to initialize scheme");
+    let mut scheme = Scheme::new(scheme_name).expect("ramfs: failed to initialize scheme");
 
-        libredox::call::setrens(0, 0).expect("ramfs: failed to enter null namespace");
+    libredox::call::setrens(0, 0).expect("ramfs: failed to enter null namespace");
 
-        daemon
-            .ready()
-            .expect("ramfs: failed to mark daemon as ready");
+    daemon.ready();
 
-        loop {
-            let Some(request) = socket
-                .next_request(SignalBehavior::Restart)
-                .expect("ramfs: failed to get next scheme request")
-            else {
-                break;
-            };
-            match request.kind() {
-                RequestKind::Call(call) => {
-                    let response = call.handle_sync(&mut scheme);
+    loop {
+        let Some(request) = socket
+            .next_request(SignalBehavior::Restart)
+            .expect("ramfs: failed to get next scheme request")
+        else {
+            break;
+        };
+        match request.kind() {
+            RequestKind::Call(call) => {
+                let response = call.handle_sync(&mut scheme);
 
-                    socket
-                        .write_responses(&[response], SignalBehavior::Restart)
-                        .expect("ramfs: failed to write next scheme response");
-                }
-                RequestKind::OnClose { id } => {
-                    scheme.on_close(id);
-                }
-                _ => (),
+                socket
+                    .write_responses(&[response], SignalBehavior::Restart)
+                    .expect("ramfs: failed to write next scheme response");
             }
+            RequestKind::OnClose { id } => {
+                scheme.on_close(id);
+            }
+            _ => (),
         }
+    }
 
-        process::exit(0);
-    })
-    .expect("ramfs: failed to create daemon");
+    process::exit(0);
 }
