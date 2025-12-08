@@ -1712,6 +1712,20 @@ impl<'a> ProcScheme<'a> {
                     drop(proc_guard);
 
                     if let Some(parent_rc) = self.processes.get(&ppid) {
+                        // When a process exits, the parent is sent SIGCHLD. The process has no threads
+                        // at this point.
+                        if let Err(err) = self.on_send_sig(
+                            current_pid,
+                            KillTarget::Proc(ppid),
+                            SIGCHLD as u8,
+                            &mut false,
+                            KillMode::Idempotent,
+                            true, // is_sigchld_to_parent
+                            awoken,
+                        ) {
+                            log::error!("failed to send SIGCHLD to parent PID {ppid:?}: {err}");
+                        }
+
                         if let Some(init_rc) = self.processes.get(&INIT_PID) {
                             awoken.extend(init_rc.borrow_mut().waitpid_waiting.drain(..));
 
