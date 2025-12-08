@@ -40,7 +40,8 @@ pub fn main() -> ! {
 
     let mut env_bytes = [0_u8; 4096];
     let envs = {
-        let fd = FdGuard::open("/scheme/sys/env", O_RDONLY).expect("bootstrap: failed to open env");
+        let fd = FdGuard::open("/scheme/sys/env", O_RDONLY | O_CLOEXEC)
+            .expect("bootstrap: failed to open env");
         let bytes_read = fd
             .read(&mut env_bytes)
             .expect("bootstrap: failed to read env");
@@ -102,11 +103,11 @@ pub fn main() -> ! {
 
     let path = "/scheme/initfs/bin/init";
 
-    let image_file = FdGuard::open(path, O_RDONLY)
+    let image_file = FdGuard::open(path, O_RDONLY | O_CLOEXEC)
         .expect("failed to open init")
         .to_upper()
         .unwrap();
-    let memory = FdGuard::open("/scheme/memory", 0)
+    let memory = FdGuard::open("/scheme/memory", O_CLOEXEC)
         .expect("failed to open memory")
         .to_upper()
         .unwrap();
