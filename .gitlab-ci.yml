@@ -1,4 +1,8 @@
 image: "redoxos/redoxer:latest"
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PROJECT_NAMESPACE == "redox-os"'
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"'
 
 stages:
   - build
