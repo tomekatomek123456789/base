@@ -1238,7 +1238,7 @@ impl<'a> ProcScheme<'a> {
             awoken.extend(parent.waitpid_waiting.drain(..));
         }
 
-        let proc_weak = Rc::downgrade(&proc_rc);
+        let proc_weak = Rc::downgrade(proc_rc);
         let shall_remove = {
             let mut old_group = groups.get(&old_pgid).ok_or(Error::new(ESRCH))?.borrow_mut();
             old_group.processes.retain(|w| !Weak::ptr_eq(w, &proc_weak));
@@ -1913,7 +1913,6 @@ impl<'a> ProcScheme<'a> {
         awoken: &mut VecDeque<VirtualId>,
     ) -> Result<()> {
         log::trace!("KILL(from {caller_pid:?}) TARGET {target:?} {signal} {mode:?}");
-        let num_succeeded = 0;
 
         // if this is set and we would otherwise have succeeded, return EINTR so it can check its
         // own mask
@@ -1952,6 +1951,8 @@ impl<'a> ProcScheme<'a> {
         log::trace!("match group {match_grp:?}");
 
         let mut err_opt = None;
+        // Number of processes successfully signaled.
+        let mut num_succeeded = 0;
 
         for (pid, proc_rc) in self.processes.iter() {
             if match_grp.map_or(false, |g| proc_rc.borrow().pgid != g) {
@@ -1967,15 +1968,25 @@ impl<'a> ProcScheme<'a> {
                 awoken,
             );
             match res {
-                Ok(()) => (),
+                Ok(()) => num_succeeded += 1,
                 Err(err) => err_opt = Some(err),
             }
         }
 
-        if num_succeeded == 0
-            && let Some(err) = err_opt
-        {
-            Err(err)
+        // > POSIX Issue 8: The `kill()` function is successful if the process has
+        // > permission to send `sig` to *any* of the processes specified by
+        // > `pid`.
+        //
+        // Thus, if *at least one* process was successfully signaled, `kill()`
+        // returns success.
+        if num_succeeded == 0 {
+            if let Some(err) = err_opt {
+                Err(err)
+            } else {
+                // No process or process group could be found corrsponding to
+                // that specified by `target`.
+                Err(Error::new(ESRCH))
+            }
         } else if killed_self {
             Err(Error::new(ERESTART))
         } else {
