@@ -2,18 +2,35 @@ image: "redoxos/redoxer:latest"
 
 stages:
   - build
-
+  - cross-build
   # TODO?
   # - test
 
-# TODO check if all drivers build
-
 fmt:
     stage: build
-    needs: []
     script:
         - rustup component add rustfmt
-        # TODO add more packages as they get formatted
         - CHECK_ONLY=1 ./fmt.sh
 
 # TODO: unit tests
+
+x86_64:
+    stage: build
+    script:
+        - rustup component add rustfmt
+        - ./check.sh
+
+i586:
+    stage: cross-build
+    script:
+        - ./check.sh --arch=i586
+
+aarch64:
+    stage: cross-build
+    script:
+        - ./check.sh --arch=aarch64
+
+riscv64gc:
+    stage: cross-build
+    script:
+        - ./check.sh --arch=riscv64gc
