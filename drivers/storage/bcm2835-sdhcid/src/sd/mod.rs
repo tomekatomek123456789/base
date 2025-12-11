@@ -14,6 +14,12 @@ pub(crate) unsafe fn wait_cycles(mut n: usize) {
     }
 }
 
+#[cfg(target_arch = "riscv64")]
+#[inline(always)]
+pub(crate) unsafe fn wait_msec(mut n: usize) {
+    todo!()
+}
+
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 pub(crate) unsafe fn wait_msec(mut n: usize) {
@@ -36,7 +42,7 @@ pub(crate) unsafe fn wait_msec(mut n: usize) {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
 pub(crate) unsafe fn wait_msec(n: usize) {
     thread::sleep(Duration::from_millis(n as u64));
