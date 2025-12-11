@@ -51,6 +51,8 @@ members = [
     "drivers/net/rtl8168d",
     "drivers/net/virtio-netd",
 
+    "drivers/redoxerd",
+
     "drivers/storage/ahcid",
     "drivers/storage/bcm2835-sdhcid",
     "drivers/storage/driver-block",
