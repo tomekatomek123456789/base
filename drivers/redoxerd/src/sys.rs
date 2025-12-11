@@ -48,3 +48,22 @@ mod imp {
         Ok(())
     }
 }
+
+#[cfg(target_arch = "riscv64")]
+mod imp {
+
+    pub fn exit(success: bool) {
+        todo!()
+        // let q = qemu_exit::RISCV64::new(addr);
+        // if success {
+        //     q.exit(51)
+        // } else {
+        //     q.exit(53)
+        // }
+    }
+
+    pub fn write_debug(b: u8) -> syscall::Result<()> {
+        // TODO
+        Ok(())
+    }
+}
