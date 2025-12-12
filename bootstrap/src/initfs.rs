@@ -6,10 +6,10 @@ use core::str;
 use alloc::string::String;
 
 use hashbrown::HashMap;
-use redox_initfs::{InitFs, Inode, InodeDir, InodeKind, InodeStruct, types::Timespec};
+use redox_initfs::{types::Timespec, InitFs, Inode, InodeDir, InodeKind, InodeStruct};
 
 use redox_path::canonicalize_to_standard;
-use redox_scheme::{CallerCtx, OpenResult, RequestKind, scheme::SchemeSync};
+use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, RequestKind};
 
 use redox_scheme::{SignalBehavior, Socket};
 use syscall::data::Stat;
@@ -19,6 +19,7 @@ use syscall::dirent::DirentKind;
 use syscall::error::*;
 use syscall::flag::*;
 use syscall::schemev2::NewFdFlags;
+use syscall::PAGE_SIZE;
 
 struct Handle {
     inode: Inode,
@@ -37,7 +38,8 @@ impl InitFsScheme {
         Self {
             handles: HashMap::default(),
             next_id: 0,
-            fs: InitFs::new(bytes).expect("failed to parse initfs"),
+            fs: InitFs::new(bytes, Some(PAGE_SIZE.try_into().unwrap()))
+                .expect("failed to parse initfs"),
         }
     }
 
@@ -302,6 +304,38 @@ impl SchemeSync for InitFsScheme {
         }
 
         Ok(())
+    }
+
+    fn mmap_prep(
+        &mut self,
+        id: usize,
+        offset: u64,
+        size: usize,
+        flags: MapFlags,
+        _ctx: &CallerCtx,
+    ) -> syscall::Result<usize> {
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+
+        let data = match Self::get_inode(&self.fs, handle.inode)?.kind() {
+            InodeKind::File(file) => file.data().map_err(|_| Error::new(EIO))?,
+            InodeKind::Dir(_) => return Err(Error::new(EISDIR)),
+            InodeKind::Link(link) => return Err(Error::new(ELOOP)),
+            InodeKind::Unknown => return Err(Error::new(EIO)),
+        };
+
+        if flags.contains(MapFlags::PROT_WRITE) {
+            return Err(Error::new(EPERM));
+        }
+
+        let Some(last_addr) = offset.checked_add(size as u64) else {
+            return Err(Error::new(EINVAL));
+        };
+
+        if last_addr > data.len().next_multiple_of(PAGE_SIZE) as u64 {
+            return Err(Error::new(EINVAL));
+        }
+
+        Ok(data.as_ptr() as usize)
     }
 }
 

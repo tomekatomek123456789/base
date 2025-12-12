@@ -23,7 +23,7 @@ fn main() -> Result<()> {
         .expect("expected the required arg IMAGE to exist");
 
     let bytes = std::fs::read(source).context("failed to read image into memory")?;
-    let initfs = InitFs::new(&bytes).context("failed to parse initfs header")?;
+    let initfs = InitFs::new(&bytes, None).context("failed to parse initfs header")?;
 
     dbg!(initfs.header());
 

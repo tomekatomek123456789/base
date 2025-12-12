@@ -107,16 +107,11 @@ pub fn main() -> ! {
         .expect("failed to open init")
         .to_upper()
         .unwrap();
-    let memory = FdGuard::open("/scheme/memory", O_CLOEXEC)
-        .expect("failed to open memory")
-        .to_upper()
-        .unwrap();
 
     fexec_impl(
         image_file,
         init_thr_fd,
         init_proc_fd,
-        &memory,
         path.as_bytes(),
         &[path.as_bytes()],
         &envs,
