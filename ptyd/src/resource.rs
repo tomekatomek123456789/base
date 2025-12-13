@@ -11,9 +11,9 @@ pub trait Resource {
     fn flags(&self) -> usize;
 
     fn path(&mut self, buf: &mut [u8]) -> Result<usize>;
-    fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>>;
-    fn write(&mut self, buf: &[u8]) -> Result<Option<usize>>;
-    fn sync(&mut self) -> Result<usize>;
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
+    fn write(&mut self, buf: &[u8]) -> Result<usize>;
+    fn sync(&mut self) -> Result<()>;
     fn fcntl(&mut self, cmd: usize, arg: usize) -> Result<usize>;
     fn fevent(&mut self) -> Result<EventFlags>;
     fn events(&mut self) -> EventFlags;

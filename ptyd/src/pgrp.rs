@@ -39,7 +39,7 @@ impl Resource for PtyPgrp {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let pty = pty_lock.borrow();
 
@@ -50,13 +50,13 @@ impl Resource for PtyPgrp {
                 .ok_or(Error::new(EBADF))?;
             *dst_buf = (pty.pgrp as u32).to_ne_bytes();
 
-            Ok(Some(4))
+            Ok(4)
         } else {
-            Ok(Some(0))
+            Ok(0)
         }
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<Option<usize>> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
 
@@ -68,14 +68,14 @@ impl Resource for PtyPgrp {
             pty.pgrp = new_pgrp as usize;
             //println!("WRITE PGRP {}: {} => {}", pty.id, pty.pgrp, new_pgrp);
 
-            Ok(Some(4))
+            Ok(4)
         } else {
             Err(Error::new(EPIPE))
         }
     }
 
-    fn sync(&mut self) -> Result<usize> {
-        Ok(0)
+    fn sync(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn fcntl(&mut self, cmd: usize, arg: usize) -> Result<usize> {

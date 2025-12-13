@@ -3,6 +3,7 @@ use std::rc::{Rc, Weak};
 
 use syscall::error::{Error, Result, EAGAIN, EINVAL};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE, O_NONBLOCK};
+use syscall::EWOULDBLOCK;
 
 use crate::pty::Pty;
 use crate::resource::Resource;
@@ -39,7 +40,7 @@ impl Resource for PtyControlTerm {
         self.pty.borrow_mut().path(buf)
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.notified_read = false;
 
         let mut pty = self.pty.borrow_mut();
@@ -60,28 +61,28 @@ impl Resource for PtyControlTerm {
                 pty.miso.push_front(new_packet);
             }
 
-            Ok(Some(i))
+            Ok(i)
         } else if self.flags & O_NONBLOCK == O_NONBLOCK || Rc::weak_count(&self.pty) == 0 {
             Err(Error::new(EAGAIN))
         } else {
-            Ok(None)
+            Err(Error::new(EWOULDBLOCK))
         }
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<Option<usize>> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let mut pty = self.pty.borrow_mut();
 
         if pty.mosi.len() >= 64 {
-            return Ok(None);
+            return Err(Error::new(EWOULDBLOCK));
         }
 
         pty.input(buf);
 
-        Ok(Some(buf.len()))
+        Ok(buf.len())
     }
 
-    fn sync(&mut self) -> Result<usize> {
-        Ok(0)
+    fn sync(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn fcntl(&mut self, cmd: usize, arg: usize) -> Result<usize> {

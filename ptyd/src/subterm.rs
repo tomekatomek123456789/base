@@ -3,6 +3,7 @@ use std::rc::Weak;
 
 use syscall::error::{Error, Result, EAGAIN, EINVAL, EPIPE};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE, O_NONBLOCK};
+use syscall::EWOULDBLOCK;
 
 use crate::pty::Pty;
 use crate::resource::Resource;
@@ -43,7 +44,7 @@ impl Resource for PtySubTerm {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         self.notified_read = false;
 
         if let Some(pty_lock) = self.pty.upgrade() {
@@ -63,40 +64,40 @@ impl Resource for PtySubTerm {
                     pty.mosi.push_front(packet[i..].to_vec());
                 }
 
-                Ok(Some(i))
+                Ok(i)
             } else if self.flags & O_NONBLOCK == O_NONBLOCK {
                 Err(Error::new(EAGAIN))
             } else {
-                Ok(None)
+                Err(Error::new(EWOULDBLOCK))
             }
         } else {
-            Ok(Some(0))
+            Ok(0)
         }
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<Option<usize>> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
 
             if pty.miso.len() >= 64 {
-                return Ok(None);
+                return Err(Error::new(EWOULDBLOCK));
             }
 
             pty.output(buf);
 
-            Ok(Some(buf.len()))
+            Ok(buf.len())
         } else {
             Err(Error::new(EPIPE))
         }
     }
 
-    fn sync(&mut self) -> Result<usize> {
+    fn sync(&mut self) -> Result<()> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
 
             pty.miso.push_back(vec![1]);
 
-            Ok(0)
+            Ok(())
         } else {
             Err(Error::new(EPIPE))
         }

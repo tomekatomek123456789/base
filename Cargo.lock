@@ -1417,7 +1417,7 @@ version = "0.1.0"
 dependencies = [
  "daemon",
  "libredox",
- "redox-scheme 0.3.0",
+ "redox-scheme 0.8.2",
  "redox_event",
  "redox_syscall",
  "redox_termios",
@@ -1618,16 +1618,6 @@ dependencies = [
  "generic-rt",
  "goblin",
  "plain",
- "redox_syscall",
-]
-
-[[package]]
-name = "redox-scheme"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63e7f06e1b19d8143043e959fbd7b76a37e759e3e9c6bbfc9c91c496b0b44d20"
-dependencies = [
- "libredox",
  "redox_syscall",
 ]
 

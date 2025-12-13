@@ -3,10 +3,12 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::str;
 
-use redox_scheme::SchemeBlock;
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult};
 use syscall::data::Stat;
 use syscall::error::{Error, Result, EBADF, EINVAL, ENOENT};
 use syscall::flag::{EventFlags, MODE_CHR};
+use syscall::schemev2::NewFdFlags;
 
 use crate::controlterm::PtyControlTerm;
 use crate::pgrp::PtyPgrp;
@@ -30,8 +32,8 @@ impl PtyScheme {
     }
 }
 
-impl SchemeBlock for PtyScheme {
-    fn open(&mut self, path: &str, flags: usize, _uid: u32, _gid: u32) -> Result<Option<usize>> {
+impl SchemeSync for PtyScheme {
+    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
         let path = path.trim_matches('/');
 
         if path.is_empty() {
@@ -42,7 +44,10 @@ impl SchemeBlock for PtyScheme {
             self.handles
                 .insert(id, Box::new(PtyControlTerm::new(pty, flags)));
 
-            Ok(Some(id))
+            Ok(OpenResult::ThisScheme {
+                number: id,
+                flags: NewFdFlags::empty(),
+            })
         } else {
             let control_term_id = path.parse::<usize>().or(Err(Error::new(EINVAL)))?;
             let pty = {
@@ -59,11 +64,14 @@ impl SchemeBlock for PtyScheme {
             self.handles
                 .insert(id, Box::new(PtySubTerm::new(pty, flags)));
 
-            Ok(Some(id))
+            Ok(OpenResult::ThisScheme {
+                number: id,
+                flags: NewFdFlags::empty(),
+            })
         }
     }
 
-    fn dup(&mut self, old_id: usize, buf: &[u8]) -> Result<Option<usize>> {
+    fn dup(&mut self, old_id: usize, buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
         let handle: Box<dyn Resource> = {
             let old_handle = self.handles.get(&old_id).ok_or(Error::new(EBADF))?;
 
@@ -82,7 +90,10 @@ impl SchemeBlock for PtyScheme {
         self.next_id += 1;
         self.handles.insert(id, handle);
 
-        Ok(Some(id))
+        Ok(OpenResult::ThisScheme {
+            number: id,
+            flags: NewFdFlags::empty(),
+        })
     }
 
     fn read(
@@ -91,7 +102,8 @@ impl SchemeBlock for PtyScheme {
         buf: &mut [u8],
         _offset: u64,
         _fcntl_flags: u32,
-    ) -> Result<Option<usize>> {
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
         handle.read(buf)
     }
@@ -102,27 +114,28 @@ impl SchemeBlock for PtyScheme {
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-    ) -> Result<Option<usize>> {
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
         handle.write(buf)
     }
 
-    fn fcntl(&mut self, id: usize, cmd: usize, arg: usize) -> Result<Option<usize>> {
+    fn fcntl(&mut self, id: usize, cmd: usize, arg: usize, _ctx: &CallerCtx) -> Result<usize> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
-        handle.fcntl(cmd, arg).map(Some)
+        handle.fcntl(cmd, arg)
     }
 
-    fn fevent(&mut self, id: usize, _flags: EventFlags) -> Result<Option<EventFlags>> {
+    fn fevent(&mut self, id: usize, _flags: EventFlags, _ctx: &CallerCtx) -> Result<EventFlags> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
-        handle.fevent().map(Some)
+        handle.fevent()
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
-        handle.path(buf).map(Some)
+        handle.path(buf)
     }
 
-    fn fstat(&mut self, id: usize, stat: &mut Stat) -> Result<Option<usize>> {
+    fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 
         *stat = Stat {
@@ -130,17 +143,15 @@ impl SchemeBlock for PtyScheme {
             ..Default::default()
         };
 
-        Ok(Some(0))
+        Ok(())
     }
 
-    fn fsync(&mut self, id: usize) -> Result<Option<usize>> {
+    fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
-        handle.sync().map(Some)
+        handle.sync()
     }
 
-    fn close(&mut self, id: usize) -> Result<Option<usize>> {
-        drop(self.handles.remove(&id));
-
-        Ok(Some(0))
+    fn on_close(&mut self, id: usize) {
+        self.handles.remove(&id);
     }
 }

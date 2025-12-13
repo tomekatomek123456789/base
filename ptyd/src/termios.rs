@@ -40,7 +40,7 @@ impl Resource for PtyTermios {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let pty = pty_lock.borrow();
             let termios: &[u8] = pty.termios.deref();
@@ -50,13 +50,13 @@ impl Resource for PtyTermios {
                 buf[i] = termios[i];
                 i += 1;
             }
-            Ok(Some(i))
+            Ok(i)
         } else {
-            Ok(Some(0))
+            Ok(0)
         }
     }
 
-    fn write(&mut self, buf: &[u8]) -> Result<Option<usize>> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
         if let Some(pty_lock) = self.pty.upgrade() {
             let mut pty = pty_lock.borrow_mut();
             let termios: &mut [u8] = pty.termios.deref_mut();
@@ -66,14 +66,14 @@ impl Resource for PtyTermios {
                 termios[i] = buf[i];
                 i += 1;
             }
-            Ok(Some(i))
+            Ok(i)
         } else {
             Err(Error::new(EPIPE))
         }
     }
 
-    fn sync(&mut self) -> Result<usize> {
-        Ok(0)
+    fn sync(&mut self) -> Result<()> {
+        Ok(())
     }
 
     fn fcntl(&mut self, cmd: usize, arg: usize) -> Result<usize> {
