@@ -1539,7 +1539,7 @@ dependencies = [
  "rand_chacha 0.2.2",
  "rand_core 0.5.1",
  "raw-cpuid",
- "redox-scheme 0.2.4",
+ "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_syscall",
  "sha2",
 ]
