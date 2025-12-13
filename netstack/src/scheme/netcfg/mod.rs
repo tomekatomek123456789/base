@@ -2,11 +2,12 @@
 mod nodes;
 mod notifier;
 
+use redox_scheme::{
+    scheme::SchemeSync, CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket,
+};
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{ErrorKind, Read, Write};
 use std::mem;
 use std::rc::Rc;
 use std::str;
@@ -14,10 +15,8 @@ use std::str::FromStr;
 use syscall;
 use syscall::data::Stat;
 use syscall::flag::{MODE_DIR, MODE_FILE};
-use syscall::{
-    Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket,
-    Result as SyscallResult, SchemeMut,
-};
+use syscall::schemev2::NewFdFlags;
+use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Result as SyscallResult};
 
 use crate::error::{Error, Result};
 use crate::link::DeviceList;
@@ -326,7 +325,7 @@ impl NetCfgFile {
 }
 
 pub struct NetCfgScheme {
-    scheme_file: File,
+    scheme_file: Socket,
     next_fd: usize,
     files: BTreeMap<usize, NetCfgFile>,
     root_node: CfgNodeRef,
@@ -336,7 +335,7 @@ pub struct NetCfgScheme {
 impl NetCfgScheme {
     pub fn new(
         iface: Interface,
-        scheme_file: File,
+        scheme_file: Socket,
         route_table: Rc<RefCell<RouteTable>>,
         devices: Rc<RefCell<DeviceList>>,
     ) -> NetCfgScheme {
@@ -361,23 +360,50 @@ impl NetCfgScheme {
 
     pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
         let result = loop {
-            let mut packet = SyscallPacket::default();
-            match self.scheme_file.read(&mut packet) {
-                Ok(0) => {
-                    //TODO: Cleanup must occur
+            let request = match self.scheme_file.next_request(SignalBehavior::Restart) {
+                Ok(Some(req)) => req,
+                Ok(None) => {
                     break Some(());
                 }
-                Ok(_) => (),
-                Err(err) => {
-                    if err.kind() == ErrorKind::WouldBlock {
-                        break None;
-                    } else {
-                        return Err(Error::from(err));
-                    }
+                Err(error)
+                    if error.errno == syscall::EWOULDBLOCK || error.errno == syscall::EAGAIN =>
+                {
+                    break None;
                 }
-            }
-            self.handle(&mut packet);
-            self.scheme_file.write_all(&packet)?;
+                Err(other) => {
+                    return Err(Error::from_syscall_error(
+                        other,
+                        "failed to receive new request",
+                    ))
+                }
+            };
+
+            let req = match request.kind() {
+                RequestKind::Call(c) => c,
+                RequestKind::OnClose { id } => {
+                    self.on_close(id);
+                    continue;
+                }
+                _ => {
+                    continue;
+                }
+            };
+            let caller = req.caller();
+            let op = match req.op() {
+                Ok(op) => op,
+                Err(req) => {
+                    self.scheme_file.write_response(
+                        Response::err(syscall::EOPNOTSUPP, req),
+                        SignalBehavior::Restart,
+                    );
+                    continue;
+                }
+            };
+            let resp = op.handle_sync(caller, self);
+            let _ = self
+                .scheme_file
+                .write_response(resp, SignalBehavior::Restart)
+                .map_err(|e| Error::from_syscall_error(e.into(), "failed to write response"))?;
         };
         self.notify_scheduled_fds();
         Ok(result)
@@ -386,13 +412,13 @@ impl NetCfgScheme {
     fn notify_scheduled_fds(&mut self) {
         let fds_to_notify = self.notifier.borrow_mut().get_notified_fds();
         for fd in fds_to_notify {
-            let _ = post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ.bits(), 1);
+            let _ = post_fevent(&self.scheme_file, fd, syscall::EVENT_READ.bits());
         }
     }
 }
 
-impl SchemeMut for NetCfgScheme {
-    fn open(&mut self, path: &str, _flags: usize, uid: u32, _gid: u32) -> SyscallResult<usize> {
+impl SchemeSync for NetCfgScheme {
+    fn open(&mut self, path: &str, _flags: usize, ctx: &CallerCtx) -> SyscallResult<OpenResult> {
         let mut current_node = Rc::clone(&self.root_node);
         for part in path.split('/') {
             if part.is_empty() {
@@ -421,31 +447,37 @@ impl SchemeMut for NetCfgScheme {
                 } else {
                     None
                 },
-                uid,
+                uid: ctx.uid,
                 pos: 0,
                 read_buf,
                 write_buf: vec![],
                 done: false,
             },
         );
-        Ok(fd)
+        Ok(OpenResult::ThisScheme {
+            number: fd,
+            flags: NewFdFlags::empty(),
+        })
     }
 
-    fn close(&mut self, fd: usize) -> SyscallResult<usize> {
+    fn on_close(&mut self, fd: usize) {
         trace!("close {}", fd);
         if let Some(mut file) = self.files.remove(&fd) {
             self.notifier.borrow_mut().unsubscribe(&file.path, fd);
             if !file.done {
-                file.commit().map(|_| 0)
-            } else {
-                Ok(0)
+                let _ = file.commit().map(|_| 0);
             }
-        } else {
-            Err(SyscallError::new(syscall::EBADF))
         }
     }
 
-    fn write(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<usize> {
+    fn write(
+        &mut self,
+        fd: usize,
+        buf: &[u8],
+        _offset: u64,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> SyscallResult<usize> {
         let file = self
             .files
             .get_mut(&fd)
@@ -474,7 +506,14 @@ impl SchemeMut for NetCfgScheme {
         Ok(buf.len())
     }
 
-    fn read(&mut self, fd: usize, buf: &mut [u8]) -> SyscallResult<usize> {
+    fn read(
+        &mut self,
+        fd: usize,
+        buf: &mut [u8],
+        _offset: u64,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> SyscallResult<usize> {
         let file = self
             .files
             .get_mut(&fd)
@@ -489,7 +528,7 @@ impl SchemeMut for NetCfgScheme {
         Ok(i)
     }
 
-    fn fstat(&mut self, fd: usize, stat: &mut Stat) -> SyscallResult<usize> {
+    fn fstat(&mut self, fd: usize, stat: &mut Stat, _ctx: &CallerCtx) -> SyscallResult<()> {
         let file = self
             .files
             .get_mut(&fd)
@@ -506,10 +545,15 @@ impl SchemeMut for NetCfgScheme {
         stat.st_gid = 0;
         stat.st_size = file.read_buf.len() as u64;
 
-        Ok(0)
+        Ok(())
     }
 
-    fn fevent(&mut self, fd: usize, events: SyscallEventFlags) -> SyscallResult<SyscallEventFlags> {
+    fn fevent(
+        &mut self,
+        fd: usize,
+        events: SyscallEventFlags,
+        _ctx: &CallerCtx,
+    ) -> SyscallResult<SyscallEventFlags> {
         let file = self
             .files
             .get_mut(&fd)
@@ -522,14 +566,14 @@ impl SchemeMut for NetCfgScheme {
         Ok(SyscallEventFlags::empty())
     }
 
-    fn fsync(&mut self, fd: usize) -> SyscallResult<usize> {
+    fn fsync(&mut self, fd: usize, _ctx: &CallerCtx) -> SyscallResult<()> {
         let file = self
             .files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
 
         if !file.done {
-            let res = file.commit().map(|_| 0);
+            let res = file.commit();
             file.done = true;
             res
         } else {

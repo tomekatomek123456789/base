@@ -7,12 +7,12 @@ use std::str;
 use syscall;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 
-use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{parse_endpoint, Smolnetd, SocketSet};
+use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
+use super::{parse_endpoint, SchemeWrapper, Smolnetd, SocketSet};
 use crate::port_set::PortSet;
 use crate::router::Router;
 
-pub type UdpScheme = SocketScheme<UdpSocket<'static>>;
+pub type UdpScheme = SchemeWrapper<UdpSocket<'static>>;
 
 impl<'a> SchemeSocket for UdpSocket<'a> {
     type SchemeDataT = PortSet;
@@ -117,7 +117,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
-    ) -> SyscallResult<Option<usize>> {
+    ) -> SyscallResult<usize> {
         if !file.data.is_specified() {
             return Err(SyscallError::new(syscall::EADDRNOTAVAIL));
         }
@@ -130,11 +130,11 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
                 endpoint.port,
             );
             self.send_slice(buf, endpoint).expect("Can't send slice");
-            Ok(Some(buf.len()))
+            Ok(buf.len())
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Ok(None) // internally scheduled to re-read
+            Err(SyscallError::new(syscall::EWOULDBLOCK)) // internally scheduled to re-read
         }
     }
 
@@ -142,14 +142,14 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
-    ) -> SyscallResult<Option<usize>> {
+    ) -> SyscallResult<usize> {
         if self.can_recv() {
             let (length, _) = self.recv_slice(buf).expect("Can't receive slice");
-            Ok(Some(length))
+            Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Ok(None) // internally scheduled to re-read
+            Err(SyscallError::new(syscall::EWOULDBLOCK)) // internally scheduled to re-read
         }
     }
 

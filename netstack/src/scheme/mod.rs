@@ -4,10 +4,17 @@ use crate::link::{loopback::LoopbackDevice, DeviceList};
 use crate::router::route_table::{RouteTable, Rule};
 use crate::router::Router;
 use crate::scheme::smoltcp::iface::SocketSet as SmoltcpSocketSet;
+use crate::scheme::socket::{SchemeSocket, SocketScheme};
+use libredox::flag;
 use libredox::Fd;
+use redox_scheme::{
+    scheme::{IntoTag, Op, SchemeResponse, SchemeSync},
+    CallerCtx, RequestKind, Response, SignalBehavior, Socket,
+};
 use smoltcp;
 use smoltcp::iface::{Config, Interface as SmoltcpInterface};
 use smoltcp::phy::Tracer;
+use smoltcp::socket::AnySocket;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
@@ -21,6 +28,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use syscall;
 use syscall::data::TimeSpec;
+use syscall::Error as SyscallError;
 
 use self::icmp::IcmpScheme;
 use self::ip::IpScheme;
@@ -73,12 +81,12 @@ impl Smolnetd {
     pub fn new(
         network_file: Fd,
         hardware_addr: EthernetAddress,
-        ip_file: Fd,
-        udp_file: Fd,
-        tcp_file: Fd,
-        icmp_file: Fd,
+        ip_file: Socket,
+        udp_file: Socket,
+        tcp_file: Socket,
+        icmp_file: Socket,
         time_file: Fd,
-        netcfg_file: Fd,
+        netcfg_file: Socket,
     ) -> Smolnetd {
         let protocol_addrs = vec![
             //This is a placeholder IP for DHCP
@@ -133,29 +141,29 @@ impl Smolnetd {
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                unsafe { File::from_raw_fd(ip_file.into_raw() as RawFd) },
+                ip_file,
             ),
             udp_scheme: UdpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                unsafe { File::from_raw_fd(udp_file.into_raw() as RawFd) },
+                udp_file,
             ),
             tcp_scheme: TcpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                unsafe { File::from_raw_fd(tcp_file.into_raw() as RawFd) },
+                tcp_file,
             ),
             icmp_scheme: IcmpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                unsafe { File::from_raw_fd(icmp_file.into_raw() as RawFd) },
+                icmp_file,
             ),
             netcfg_scheme: NetCfgScheme::new(
                 Rc::clone(&iface),
-                unsafe { File::from_raw_fd(netcfg_file.into_raw() as RawFd) },
+                netcfg_file,
                 Rc::clone(&route_table),
                 Rc::clone(&devices),
             ),
@@ -267,20 +275,13 @@ impl Smolnetd {
     }
 }
 
-fn post_fevent(scheme_file: &mut File, fd: usize, event: usize, data_len: usize) -> Result<()> {
-    scheme_file
-        .write(&syscall::Packet {
-            id: 0,
-            pid: 0,
-            uid: 0,
-            gid: 0,
-            a: syscall::number::SYS_FEVENT,
-            b: fd,
-            c: event,
-            d: data_len,
-        })
-        .map(|_| ())
-        .map_err(|e| Error::from_io_error(e, "failed to post fevent"))
+fn post_fevent(socket: &Socket, id: usize, flags: usize) -> syscall::error::Result<()> {
+    let fevent_response = Response::post_fevent(id, flags);
+    match socket.write_response(fevent_response, SignalBehavior::Restart) {
+        Ok(true) => Ok(()), // Write response success
+        Ok(false) => Err(syscall::error::Error::new(syscall::EAGAIN)), // Write response failed, retry.
+        Err(err) => Err(err),                                          // Error writing response
+    }
 }
 
 fn parse_endpoint(socket: &str) -> IpListenEndpoint {
@@ -296,4 +297,232 @@ fn parse_endpoint(socket: &str) -> IpListenEndpoint {
         .parse::<u16>()
         .unwrap_or(0);
     IpListenEndpoint { addr: host, port }
+}
+
+struct WaitHandle {
+    until: Option<TimeSpec>,
+    cancelling: bool,
+    packet: (Op, CallerCtx),
+}
+
+type WaitQueue = Vec<WaitHandle>;
+
+pub struct SchemeWrapper<SocketT>
+where
+    SocketT: SchemeSocket + AnySocket<'static>,
+{
+    scheme: socket::SocketScheme<SocketT>,
+    wait_queue: WaitQueue,
+}
+impl<SocketT> SchemeWrapper<SocketT>
+where
+    SocketT: SchemeSocket + AnySocket<'static>,
+{
+    pub fn new(
+        iface: Interface,
+        route_table: Rc<RefCell<RouteTable>>,
+        socket_set: Rc<RefCell<SocketSet>>,
+        scheme_file: Socket,
+    ) -> Self {
+        Self {
+            scheme: SocketScheme::<SocketT>::new(iface, route_table, socket_set, scheme_file),
+            wait_queue: Vec::new(),
+        }
+    }
+    pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
+        let result = loop {
+            let request = match self
+                .scheme
+                .scheme_file
+                .next_request(SignalBehavior::Restart)
+            {
+                Ok(Some(req)) => req,
+                Ok(None) => {
+                    break Some(());
+                }
+                Err(error)
+                    if error.errno == syscall::EWOULDBLOCK || error.errno == syscall::EAGAIN =>
+                {
+                    break None;
+                }
+                Err(other) => {
+                    return Err(Error::from_syscall_error(
+                        other,
+                        "failed to receive new request",
+                    ))
+                }
+            };
+
+            let req = match request.kind() {
+                RequestKind::Call(c) => c,
+                RequestKind::OnClose { id } => {
+                    self.scheme.on_close(id);
+                    continue;
+                }
+                RequestKind::Cancellation(req) => {
+                    if let Some(idx) = self
+                        .wait_queue
+                        .iter()
+                        .position(|q| q.packet.0.req_id() == req.id)
+                    {
+                        self.wait_queue[idx].cancelling = true;
+                    }
+                    continue;
+                }
+                _ => {
+                    continue;
+                }
+            };
+            let caller = req.caller();
+            let mut op = match req.op() {
+                Ok(op) => op,
+                Err(req) => {
+                    self.scheme
+                        .scheme_file
+                        .write_response(
+                            Response::err(syscall::EOPNOTSUPP, req),
+                            SignalBehavior::Restart,
+                        )
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                    continue;
+                }
+            };
+            let resp = match op.handle_sync_dont_consume(&caller, &mut self.scheme) {
+                SchemeResponse::Opened(Err(SyscallError {
+                    errno: syscall::EWOULDBLOCK,
+                }))
+                | SchemeResponse::Regular(Err(SyscallError {
+                    errno: syscall::EWOULDBLOCK,
+                })) if !op.is_explicitly_nonblock() => {
+                    match self.scheme.handle_block(&op) {
+                        Ok(timeout) => {
+                            self.wait_queue.push(WaitHandle {
+                                until: timeout,
+                                cancelling: false,
+                                packet: (op, caller),
+                            });
+                        }
+                        Err(err) => {
+                            let _ = self
+                                .scheme
+                                .scheme_file
+                                .write_response(
+                                    Response::err(err.errno, op),
+                                    SignalBehavior::Restart,
+                                )
+                                .map_err(|e| {
+                                    Error::from_syscall_error(e.into(), "failed to write response")
+                                })?;
+                            return Err(Error::from_syscall_error(
+                                err,
+                                "Can't handle blocked socket",
+                            ));
+                        }
+                    }
+                    continue;
+                }
+                SchemeResponse::Regular(r) => Response::new(r, op),
+                SchemeResponse::Opened(o) => Response::open_dup_like(o, op),
+            };
+            let _ = self
+                .scheme
+                .scheme_file
+                .write_response(resp, SignalBehavior::Restart)
+                .map_err(|e| Error::from_syscall_error(e.into(), "failed to write response"))?;
+        };
+        Ok(result)
+    }
+
+    pub fn notify_sockets(&mut self) -> Result<()> {
+        let cur_time = libredox::call::clock_gettime(flag::CLOCK_MONOTONIC)
+            .map_err(|e| Error::from_syscall_error(e.into(), "Can't get time"))?;
+
+        // Notify non-blocking sockets
+        let scheme = &mut self.scheme;
+
+        for (&fd, ref mut file) in &mut scheme.files {
+            let events = {
+                let mut socket_set = scheme.socket_set.borrow_mut();
+                file.events(&mut socket_set)
+            };
+            if events > 0 {
+                post_fevent(&scheme.scheme_file, fd, events)
+                    .map_err(|e| Error::from_syscall_error(e.into(), "failed to post fevent"))?;
+            }
+        }
+        // Wake up blocking queue
+        let queue = &mut self.wait_queue;
+        let mut i = 0;
+        while i < queue.len() {
+            let handle = &mut queue[i];
+            let (op, caller) = &mut handle.packet;
+            let res = op.handle_sync_dont_consume(caller, scheme);
+
+            match res {
+                SchemeResponse::Opened(Err(SyscallError {
+                    errno: syscall::EWOULDBLOCK,
+                }))
+                | SchemeResponse::Regular(Err(SyscallError {
+                    errno: syscall::EWOULDBLOCK,
+                })) if !op.is_explicitly_nonblock() => {
+                    if handle.cancelling {
+                        let (op, _) = queue.swap_remove(i).packet;
+                        scheme
+                            .scheme_file
+                            .write_response(
+                                Response::err(syscall::ECANCELED, op),
+                                SignalBehavior::Restart,
+                            )
+                            .map_err(|e| {
+                                Error::from_syscall_error(e.into(), "failed to write response")
+                            })?;
+                        continue;
+                    }
+                    match handle.until {
+                        Some(until)
+                            if (until.tv_sec < cur_time.tv_sec
+                                || (until.tv_sec == cur_time.tv_sec
+                                    && i64::from(until.tv_nsec) < i64::from(cur_time.tv_nsec))) =>
+                        {
+                            let (op, _) = queue.swap_remove(i).packet;
+                            let _ = scheme
+                                .scheme_file
+                                .write_response(
+                                    Response::err(syscall::ETIMEDOUT, op),
+                                    SignalBehavior::Restart,
+                                )
+                                .map_err(|e| {
+                                    Error::from_syscall_error(e.into(), "failed to write response")
+                                })?;
+                        }
+                        _ => {
+                            i += 1;
+                        }
+                    }
+                }
+                SchemeResponse::Regular(r) => {
+                    let (op, _) = queue.swap_remove(i).packet;
+                    let _ = scheme
+                        .scheme_file
+                        .write_response(Response::new(r, op), SignalBehavior::Restart)
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                }
+                SchemeResponse::Opened(o) => {
+                    let (op, _) = queue.swap_remove(i).packet;
+                    let _ = scheme
+                        .scheme_file
+                        .write_response(Response::open_dup_like(o, op), SignalBehavior::Restart)
+                        .map_err(|e| {
+                            Error::from_syscall_error(e.into(), "failed to write response")
+                        })?;
+                }
+            };
+        }
+
+        Ok(())
+    }
 }
