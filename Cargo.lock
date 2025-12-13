@@ -213,7 +213,7 @@ dependencies = [
  "ioslice",
  "libc",
  "libredox",
- "redox-scheme 0.8.2 (git+https://gitlab.redox-os.org/redox-os/redox-scheme.git)",
+ "redox-scheme 0.8.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_syscall",
 ]
 

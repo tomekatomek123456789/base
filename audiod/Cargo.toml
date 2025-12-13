@@ -9,6 +9,6 @@ daemon = { path = "../daemon" }
 redox_syscall = { version = "0.5", features = ["std"] }
 libc = "0.2"
 libredox = { version = "0.1", features = ["mkns"] }
-redox-scheme = { git = "https://gitlab.redox-os.org/redox-os/redox-scheme.git" }
+redox-scheme = "0.8.2"
 anyhow = "1.0.97"
 ioslice = "0.6.0"
