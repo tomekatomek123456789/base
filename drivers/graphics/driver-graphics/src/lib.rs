@@ -22,8 +22,8 @@ pub trait GraphicsAdapter {
     fn name(&self) -> &'static [u8];
     fn desc(&self) -> &'static [u8];
 
-    fn get_cap(&self, cap: u64) -> Result<u64>;
-    fn set_client_cap(&self, cap: u64, value: u64) -> Result<()>;
+    fn get_cap(&self, cap: u32) -> Result<u64>;
+    fn set_client_cap(&self, cap: u32, value: u64) -> Result<()>;
 
     /// The maximum amount of displays that could be attached.
     ///
@@ -463,29 +463,40 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     Ok(size_of::<ipc::Version>())
                 }
                 ipc::GET_CAP => {
-                    if payload.len() < size_of::<ipc::GetCap>() {
+                    if payload.len() < size_of::<drm_sys::drm_get_cap>() {
                         return Err(Error::new(EINVAL));
                     }
                     let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::GetCap>()], &mut ipc::GetCap>(
+                        transmute::<&mut [u8; size_of::<drm_sys::drm_get_cap>()], &mut drm_sys::drm_get_cap>(
                             payload.as_mut_array().unwrap(),
                         )
                     };
-                    payload.value = self.adapter.get_cap(payload.capability)?;
-                    Ok(size_of::<ipc::GetCap>())
+                    payload.value = self.adapter.get_cap(
+                        payload
+                            .capability
+                            .try_into()
+                            .map_err(|_| syscall::Error::new(EINVAL))?,
+                    )?;
+                    Ok(size_of::<drm_sys::drm_get_cap>())
                 }
                 ipc::SET_CLIENT_CAP => {
-                    if payload.len() < size_of::<ipc::SetClientCap>() {
+                    if payload.len() < size_of::<drm_sys::drm_set_client_cap>() {
                         return Err(Error::new(EINVAL));
                     }
                     let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::SetClientCap>()], &mut ipc::SetClientCap>(
-                            payload.as_mut_array().unwrap(),
-                        )
+                        transmute::<
+                            &mut [u8; size_of::<drm_sys::drm_set_client_cap>()],
+                            &mut drm_sys::drm_set_client_cap,
+                        >(payload.as_mut_array().unwrap())
                     };
-                    self.adapter
-                        .set_client_cap(payload.capability, payload.value)?;
-                    Ok(size_of::<ipc::SetClientCap>())
+                    self.adapter.set_client_cap(
+                        payload
+                            .capability
+                            .try_into()
+                            .map_err(|_| syscall::Error::new(EINVAL))?,
+                        payload.value,
+                    )?;
+                    Ok(size_of::<drm_sys::drm_set_client_cap>())
                 }
                 ipc::DISPLAY_COUNT => {
                     if payload.len() < size_of::<ipc::DisplayCount>() {

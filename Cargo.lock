@@ -577,6 +577,7 @@ name = "driver-graphics"
 version = "0.1.0"
 dependencies = [
  "common",
+ "drm-sys",
  "graphics-ipc",
  "inputd",
  "libredox",
@@ -593,6 +594,16 @@ dependencies = [
  "libredox",
  "redox-scheme 0.4.0",
  "redox_syscall",
+]
+
+[[package]]
+name = "drm-sys"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bafb66c8dbc944d69e15cfcc661df7e703beffbaec8bd63151368b06c5f9858c"
+dependencies = [
+ "libc",
+ "linux-raw-sys",
 ]
 
 [[package]]
@@ -855,6 +866,7 @@ name = "graphics-ipc"
 version = "0.1.0"
 dependencies = [
  "common",
+ "drm-sys",
  "libredox",
  "log",
 ]
@@ -1087,6 +1099,12 @@ dependencies = [
  "libc",
  "redox_syscall",
 ]
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a385b1be4e5c3e362ad2ffa73c392e53f031eaa5b7d648e64cd87f27f6063d7"
 
 [[package]]
 name = "lived"
