@@ -460,9 +460,8 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     payload.desc[..desc_len].copy_from_slice(&desc[..desc_len]);
                     payload.desc_len = desc.len();
 
-                    Ok(size_of::<ipc::DisplayCount>())
+                    Ok(size_of::<ipc::Version>())
                 }
-
                 ipc::GET_CAP => {
                     if payload.len() < size_of::<ipc::GetCap>() {
                         return Err(Error::new(EINVAL));
@@ -473,9 +472,21 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                         )
                     };
                     payload.value = self.adapter.get_cap(payload.capability)?;
-                    Ok(size_of::<ipc::DisplayCount>())
+                    Ok(size_of::<ipc::GetCap>())
                 }
-
+                ipc::SET_CLIENT_CAP => {
+                    if payload.len() < size_of::<ipc::SetClientCap>() {
+                        return Err(Error::new(EINVAL));
+                    }
+                    let payload = unsafe {
+                        transmute::<&mut [u8; size_of::<ipc::SetClientCap>()], &mut ipc::SetClientCap>(
+                            payload.as_mut_array().unwrap(),
+                        )
+                    };
+                    self.adapter
+                        .set_client_cap(payload.capability, payload.value)?;
+                    Ok(size_of::<ipc::SetClientCap>())
+                }
                 ipc::DISPLAY_COUNT => {
                     if payload.len() < size_of::<ipc::DisplayCount>() {
                         return Err(Error::new(EINVAL));
