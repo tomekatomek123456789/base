@@ -4,7 +4,7 @@ use std::ptr::{self, NonNull};
 
 use driver_graphics::{CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter};
 use graphics_ipc::v1::Damage;
-use graphics_ipc::v2::ipc::{CAP_DUMB_BUFFER, CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
+use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use syscall::{EINVAL, PAGE_SIZE};
 
 pub struct FbAdapter {
@@ -27,16 +27,16 @@ impl GraphicsAdapter for FbAdapter {
         b"VESA"
     }
 
-    fn get_cap(&self, cap: u64) -> syscall::Result<u64> {
+    fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
         match cap {
-            CAP_DUMB_BUFFER => Ok(1),
+            DRM_CAP_DUMB_BUFFER => Ok(1),
             _ => Err(syscall::Error::new(EINVAL)),
         }
     }
 
-    fn set_client_cap(&self, cap: u64, _value: u64) -> syscall::Result<()> {
+    fn set_client_cap(&self, cap: u32, _value: u64) -> syscall::Result<()> {
         match cap {
-            CLIENT_CAP_CURSOR_PLANE_HOTSPOT => Ok(()),
+            DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => Ok(()),
             _ => Err(syscall::Error::new(EINVAL)),
         }
     }
