@@ -432,6 +432,36 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
     ) -> Result<usize> {
         use graphics_ipc::v2::ipc;
 
+        const DRM_FORMAT_ARGB8888: u32 = 0x34325241; // 'AR24' fourcc code, for ARGB8888
+
+        fn id_index(id: u32) -> u32 {
+            id & 0xFF
+        }
+
+        fn conn_id(i: u32) -> u32 {
+            id_index(i) | (1 << 8)
+        }
+
+        fn crtc_id(i: u32) -> u32 {
+            id_index(i) | (1 << 9)
+        }
+
+        fn enc_id(i: u32) -> u32 {
+            id_index(i) | (1 << 10)
+        }
+
+        fn fb_id(i: u32) -> u32 {
+            id_index(i) | (1 << 11)
+        }
+
+        fn fb_handle_id(i: u32) -> u32 {
+            id_index(i) | (1 << 12)
+        }
+
+        fn plane_id(i: u32) -> u32 {
+            id_index(i) | (1 << 13)
+        }
+
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
             Handle::V1Screen { .. } => {
                 return Err(Error::new(EOPNOTSUPP));
@@ -465,6 +495,107 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                             .map_err(|_| syscall::Error::new(EINVAL))?,
                         data.value(),
                     )?;
+                    Ok(0)
+                }),
+                ipc::MODE_CARD_RES => ipc::DrmModeCardRes::with(payload, |mut data| {
+                    let count = self.adapter.display_count();
+                    let mut conn_ids = Vec::with_capacity(count);
+                    let mut crtc_ids = Vec::with_capacity(count);
+                    let mut enc_ids = Vec::with_capacity(count);
+                    let mut fb_ids = Vec::with_capacity(count);
+                    for i in 0..(count as u32) {
+                        conn_ids.push(conn_id(i));
+                        crtc_ids.push(crtc_id(i));
+                        enc_ids.push(enc_id(i));
+                        fb_ids.push(fb_id(i));
+                    }
+                    data.set_fb_id_ptr(&fb_ids);
+                    data.set_crtc_id_ptr(&crtc_ids);
+                    data.set_connector_id_ptr(&conn_ids);
+                    data.set_encoder_id_ptr(&enc_ids);
+                    data.set_min_width(0);
+                    data.set_max_width(16384);
+                    data.set_min_height(0);
+                    data.set_max_height(16384);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {
+                    let i = id_index(data.crtc_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    //TOOD: connectors
+                    data.set_fb_id(fb_id(i));
+                    data.set_x(0);
+                    data.set_y(0);
+                    data.set_gamma_size(0);
+                    data.set_mode_valid(0);
+                    //TODO: mode
+                    data.set_mode(Default::default());
+                    Ok(0)
+                }),
+                ipc::MODE_GET_ENCODER => ipc::DrmModeGetEncoder::with(payload, |mut data| {
+                    let i = id_index(data.encoder_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_crtc_id(crtc_id(i));
+                    data.set_possible_crtcs(1 << i);
+                    data.set_possible_clones(1 << i);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_CONNECTOR => ipc::DrmModeGetConnector::with(payload, |mut data| {
+                    let i = id_index(data.connector_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_modes_ptr(&[]);
+                    data.set_props_ptr(&[]);
+                    data.set_prop_values_ptr(&[]);
+                    data.set_encoders_ptr(&[enc_id(i)]);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_FB => ipc::DrmModeFbCmd::with(payload, |mut data| {
+                    let i = id_index(data.fb_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_width(width);
+                    data.set_height(height);
+                    data.set_pitch(width * 4); //TODO: stride
+                    data.set_bpp(32);
+                    data.set_depth(24);
+                    data.set_handle(fb_handle_id(i));
+                    Ok(0)
+                }),
+                ipc::MODE_GET_PLANE_RES => ipc::DrmModeGetPlaneRes::with(payload, |mut data| {
+                    let count = self.adapter.display_count();
+                    let mut ids = Vec::with_capacity(count);
+                    for i in 0..(count as u32) {
+                        ids.push(plane_id(i));
+                    }
+                    data.set_plane_id_ptr(&ids);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_PLANE => ipc::DrmModeGetPlane::with(payload, |mut data| {
+                    let i = id_index(data.plane_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_crtc_id(crtc_id(i));
+                    data.set_fb_id(fb_id(i));
+                    data.set_possible_crtcs(1 << i);
+                    data.set_format_type_ptr(&[DRM_FORMAT_ARGB8888]);
+                    Ok(0)
+                }),
+                ipc::MODE_OBJ_GET_PROPERTIES => {
+                    ipc::DrmModeObjGetProperties::with(payload, |mut data| {
+                        // TODO
+                        data.set_props_ptr(&[]);
+                        data.set_prop_values_ptr(&[]);
+                        Ok(0)
+                    })
+                }
+                ipc::MODE_GET_FB2 => ipc::DrmModeFbCmd2::with(payload, |mut data| {
+                    let i = id_index(data.fb_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_width(width);
+                    data.set_height(height);
+                    data.set_pixel_format(DRM_FORMAT_ARGB8888);
+                    data.set_handles([fb_handle_id(i), 0, 0, 0]);
+                    data.set_pitches([width * 4, 0, 0, 0]);
+                    data.set_offsets([0; 4]);
+                    data.set_modifier([0; 4]);
                     Ok(0)
                 }),
                 ipc::DISPLAY_COUNT => {
