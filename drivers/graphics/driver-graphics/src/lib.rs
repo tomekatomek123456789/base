@@ -467,9 +467,10 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                         return Err(Error::new(EINVAL));
                     }
                     let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<drm_sys::drm_get_cap>()], &mut drm_sys::drm_get_cap>(
-                            payload.as_mut_array().unwrap(),
-                        )
+                        transmute::<
+                            &mut [u8; size_of::<drm_sys::drm_get_cap>()],
+                            &mut drm_sys::drm_get_cap,
+                        >(payload.as_mut_array().unwrap())
                     };
                     payload.value = self.adapter.get_cap(
                         payload
