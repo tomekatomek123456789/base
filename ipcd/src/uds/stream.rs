@@ -405,12 +405,14 @@ impl<'sock> UdsStreamScheme<'sock> {
         self.sockets.get(&id).ok_or(Error::new(EBADF))
     }
 
-    fn get_connected_peer(&self, id: usize) -> Result<(usize, Rc<RefCell<Socket>>), Error> {
+    fn get_connected_peer(
+        &self,
+        id: usize,
+        flags: MsgFlags,
+    ) -> Result<(usize, Rc<RefCell<Socket>>), Error> {
         let mut socket = self.get_socket(id)?.borrow_mut();
 
-        let remote_id = socket
-            .require_connected_connection(MsgFlags::default())?
-            .peer;
+        let remote_id = socket.require_connected_connection(flags)?.peer;
         let remote_rc = self.get_socket(remote_id).map_err(|e| {
             eprintln!("get_connected_peer(id: {}): Peer socket (id: {}) has vanished. Original error: {:?}", id, remote_id, e);
             Error::new(EPIPE)
@@ -652,7 +654,7 @@ impl<'sock> UdsStreamScheme<'sock> {
         match option {
             libc::SO_DOMAIN => write_value(&AF_UNIX.to_le_bytes()),
             libc::SO_PEERCRED => {
-                let (_, remote_rc) = self.get_connected_peer(id)?;
+                let (_, remote_rc) = self.get_connected_peer(id, MsgFlags::default())?;
                 let remote = remote_rc.borrow();
                 write_value(unsafe {
                     slice::from_raw_parts(
@@ -690,47 +692,32 @@ impl<'sock> UdsStreamScheme<'sock> {
 
         let (bytes_written, remote_id) = {
             let name = self.get_socket(id)?.borrow().path.clone();
-            let (remote_id, remote_rc) = self.get_connected_peer(id)?;
+            let (remote_id, remote_rc) = self.get_connected_peer(id, msg_flags)?;
+            let mut socket = remote_rc.borrow_mut();
+            let connection = socket.require_connected_connection(msg_flags)?;
+            let (pid, uid, gid) = get_uid_gid_from_pid(self.proc_creds_capability, ctx.pid)?;
 
-            let bytes_written = Self::sendmsg_inner(
-                self.proc_creds_capability,
-                &mut remote_rc.borrow_mut(),
-                name,
-                msg_flags,
+            let packet = DataPacket::from_stream(
                 msg_stream,
-                ctx,
+                name,
+                Credential::new(pid as i32, uid as i32, gid as i32),
             )?;
-            (bytes_written, remote_id)
+
+            let payload_len = packet.len();
+
+            // sendmsg(2) on `SOCK_STREAM` with zero-byte payload is a no-op
+            // even if ancillary data is present. Note that this does not apply
+            // to `SOCK_DGRAM`.
+            if payload_len == 0 {
+                return Ok(0);
+            }
+
+            connection.packets.push_back(packet);
+            (payload_len, remote_id)
         };
+
         self.post_fevent(remote_id, EVENT_READ)?;
         Ok(bytes_written)
-    }
-
-    fn sendmsg_inner(
-        cap_fd: usize,
-        socket: &mut Socket,
-        name: Option<String>,
-        msg_flags: MsgFlags,
-        msg_stream: &[u8],
-        ctx: &CallerCtx,
-    ) -> Result<usize> {
-        if msg_stream.is_empty() {
-            eprintln!("sendmsg_inner: msg_stream is empty.");
-            return Err(Error::new(EINVAL));
-        }
-
-        let connection = socket.require_connected_connection(msg_flags)?;
-
-        let (pid, uid, gid) = get_uid_gid_from_pid(cap_fd, ctx.pid)?;
-        let packet = DataPacket::from_stream(
-            msg_stream,
-            name,
-            Credential::new(pid as i32, uid as i32, gid as i32),
-        )?;
-        let payload_len = packet.len();
-        connection.packets.push_back(packet);
-
-        Ok(payload_len)
     }
 
     fn handle_recvmsg(
@@ -834,7 +821,7 @@ impl<'sock> UdsStreamScheme<'sock> {
     }
 
     fn handle_get_peer_name(&self, id: usize, payload: &mut [u8]) -> Result<usize> {
-        let (_, socket_rc) = self.get_connected_peer(id)?;
+        let (_, socket_rc) = self.get_connected_peer(id, MsgFlags::default())?;
         let socket_borrow = socket_rc.borrow();
         match socket_borrow.path.as_ref() {
             Some(path_string) => Self::fpath_inner(path_string, payload),
@@ -1246,7 +1233,7 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         _flags: u32,
         ctx: &CallerCtx,
     ) -> Result<usize> {
-        let (receiver_id, _) = self.get_connected_peer(id)?;
+        let (receiver_id, _) = self.get_connected_peer(id, MsgFlags::default())?;
         self.write_inner(receiver_id, buf, ctx)
     }
 
@@ -1286,7 +1273,7 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
 
     fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
         let id = sendfd_request.id();
-        let (receiver_id, _) = self.get_connected_peer(id)?;
+        let (receiver_id, _) = self.get_connected_peer(id, MsgFlags::default())?;
 
         self.sendfd_inner(receiver_id, sendfd_request)
     }
