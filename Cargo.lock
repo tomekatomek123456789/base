@@ -813,7 +813,7 @@ dependencies = [
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#9db10bb0a9651b86012a0d58a3327df95a20a297"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3ebd43b4ceb77bfee2a9c155993ec2fb5843ad6b"
 
 [[package]]
 name = "getrandom"
@@ -866,9 +866,9 @@ name = "graphics-ipc"
 version = "0.1.0"
 dependencies = [
  "common",
- "drm-sys",
  "libredox",
  "log",
+ "redox-ioctl",
  "redox_syscall",
 ]
 
@@ -1617,6 +1617,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redox-ioctl"
+version = "0.1.0"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3ebd43b4ceb77bfee2a9c155993ec2fb5843ad6b"
+dependencies = [
+ "drm-sys",
+ "redox_syscall",
+]
+
+[[package]]
 name = "redox-log"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1631,7 +1640,7 @@ dependencies = [
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#9db10bb0a9651b86012a0d58a3327df95a20a297"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3ebd43b4ceb77bfee2a9c155993ec2fb5843ad6b"
 dependencies = [
  "bitflags 2.10.0",
  "generic-rt",

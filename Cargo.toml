@@ -75,3 +75,7 @@ exclude = ["bootstrap"]
 # Needs libc 0.2 backport of https://github.com/rust-lang/libc/pull/4825
 libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-0.2" }
 orbclient = { git = "https://gitlab.redox-os.org/redox-os/orbclient.git", version = "0.3.44" }
+
+[patch."https://gitlab.redox-os.org/redox-os/relibc.git"]
+#redox-rt = { path = "../../relibc/source/redox-rt" }
+#redox-ioctl = { path = "../../relibc/source/redox-ioctl" }
