@@ -1,12 +1,13 @@
 use std::fs::File;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::io::AsRawFd;
-use std::{io, mem, ptr};
+use std::{io, mem};
 
 use drm::control::connector::{self, State};
+use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use drm::control::Device as _;
 use drm::{ClientCapability, Device as _, DriverCapability};
-use libredox::flag;
+use drm_fourcc::DrmFourcc;
 
 pub use crate::common::{Damage, DisplayMap};
 
@@ -79,75 +80,22 @@ impl V2GraphicsHandle {
         Ok((u32::from(width), u32::from(height)))
     }
 
-    pub fn create_dumb_framebuffer(&self, width: u32, height: u32) -> io::Result<usize> {
-        let mut cmd = ipc::CreateDumbFramebuffer {
-            width,
-            height,
-
-            fb_id: 0,
-        };
-        unsafe {
-            sys_call(
-                &self.file,
-                &mut cmd,
-                0,
-                &[ipc::CREATE_DUMB_FRAMEBUFFER, 0, 0],
-            )?;
-        }
-        Ok(cmd.fb_id)
+    pub fn create_dumb_framebuffer(&self, width: u32, height: u32) -> io::Result<DumbBuffer> {
+        self.create_dumb_buffer((width, height), DrmFourcc::Argb8888, 32)
     }
 
-    pub fn map_dumb_framebuffer(
+    pub fn map_dumb_framebuffer<'a>(
         &self,
-        id: usize,
-        width: u32,
-        height: u32,
-    ) -> io::Result<DisplayMap> {
-        let mut cmd = ipc::DumbFramebufferMapOffset {
-            fb_id: id,
-            offset: 0,
-        };
-        unsafe {
-            sys_call(
-                &self.file,
-                &mut cmd,
-                0,
-                &[ipc::DUMB_FRAMEBUFFER_MAP_OFFSET, 0, 0],
-            )?;
-        }
-
-        let display_ptr = unsafe {
-            libredox::call::mmap(libredox::call::MmapArgs {
-                fd: self.file.as_raw_fd() as usize,
-                offset: cmd.offset as u64,
-                length: (width * height * 4) as usize,
-                prot: flag::PROT_READ | flag::PROT_WRITE,
-                flags: flag::MAP_SHARED,
-                addr: core::ptr::null_mut(),
-            })?
-        };
-        let offscreen = ptr::slice_from_raw_parts_mut(
-            display_ptr as *mut u32,
-            width as usize * height as usize,
-        );
-
-        Ok(unsafe { DisplayMap::new(offscreen, width as usize, height as usize) })
+        buffer: &'a mut DumbBuffer,
+    ) -> io::Result<DumbMapping<'a>> {
+        self.map_dumb_buffer(buffer)
     }
 
-    pub fn destroy_dumb_framebuffer(&self, id: usize) -> io::Result<usize> {
-        let mut cmd = ipc::DestroyDumbFramebuffer { fb_id: id };
-        unsafe {
-            sys_call(
-                &self.file,
-                &mut cmd,
-                0,
-                &[ipc::DESTROY_DUMB_FRAMEBUFFER, 0, 0],
-            )?;
-        }
-        Ok(cmd.fb_id)
+    pub fn destroy_dumb_framebuffer(&self, buffer: DumbBuffer) -> io::Result<()> {
+        self.destroy_dumb_buffer(buffer)
     }
 
-    pub fn update_plane(&self, display_id: usize, fb_id: usize, damage: Damage) -> io::Result<()> {
+    pub fn update_plane(&self, display_id: usize, fb_id: u32, damage: Damage) -> io::Result<()> {
         let mut cmd = ipc::UpdatePlane {
             display_id,
             fb_id,
@@ -166,34 +114,11 @@ pub mod ipc {
     pub use redox_ioctl::drm::*;
 
     // FIXME replace these with proper drm interfaces
-    pub const CREATE_DUMB_FRAMEBUFFER: u64 = 3;
-    #[repr(C, packed)]
-    pub struct CreateDumbFramebuffer {
-        pub width: u32,
-        pub height: u32,
-
-        pub fb_id: usize,
-    }
-
-    pub const DUMB_FRAMEBUFFER_MAP_OFFSET: u64 = 4;
-    #[repr(C, packed)]
-    pub struct DumbFramebufferMapOffset {
-        pub fb_id: usize,
-
-        pub offset: usize,
-    }
-
-    pub const DESTROY_DUMB_FRAMEBUFFER: u64 = 5;
-    #[repr(C, packed)]
-    pub struct DestroyDumbFramebuffer {
-        pub fb_id: usize,
-    }
-
     pub const UPDATE_PLANE: u64 = 6;
     #[repr(C, packed)]
     pub struct UpdatePlane {
         pub display_id: usize,
-        pub fb_id: usize,
+        pub fb_id: u32,
         pub damage: Damage,
     }
 }
