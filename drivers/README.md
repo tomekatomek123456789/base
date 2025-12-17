@@ -123,7 +123,7 @@ If you want to port a driver from a monolithic operating system to Redox you wil
 
 Datasheets are preferable (much more easy depending on device complexity), when they are freely available. Be aware that datasheets are often provided under a [Non-Disclosure Agreement](https://en.wikipedia.org/wiki/Non-disclosure_agreement) from hardware vendors, which can affect the ability to create an MIT-licensed driver.
 
-If datasheets aren't available you need to do reverse-engineering of BSD or Linux drivers.
+If datasheets aren't available you need to do reverse-engineering of BSD or Linux drivers (if you want use a Linux driver as reference for your Redox driver please ask in the [Chat](https://doc.redox-os.org/book/chat.html) before the implementation to know/satisfy the license requirements and not waste your time, also if you use a BSD driver not licensed as BSD as reference).
 
 ### Libraries
 
