@@ -1,6 +1,7 @@
 #![feature(slice_as_array)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::c_char;
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem;
@@ -462,6 +463,40 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
             id_index(i) | (1 << 13)
         }
 
+        fn modeinfo_for_size(width: u32, height: u32) -> drm_sys::drm_mode_modeinfo {
+            let mut modeinfo = drm_sys::drm_mode_modeinfo {
+                // The actual visible display size
+                hdisplay: width as u16,
+                vdisplay: height as u16,
+
+                // These are used to calculate the refresh rate
+                clock: 60 * width * height / 1000,
+                htotal: width as u16,
+                vtotal: height as u16,
+                vscan: 0,
+                vrefresh: 60,
+
+                type_: drm_sys::DRM_MODE_TYPE_PREFERRED | drm_sys::DRM_MODE_TYPE_DRIVER,
+                name: [0; 32],
+
+                // These only matter when modesetting physical display adapters. For
+                // those we should be able to parse the EDID blob.
+                hsync_start: width as u16,
+                hsync_end: width as u16,
+                hskew: 0,
+                vsync_start: height as u16,
+                vsync_end: height as u16,
+                flags: 0,
+            };
+
+            let name = format!("{width}x{height}").into_bytes();
+            for (to, from) in modeinfo.name.iter_mut().zip(name) {
+                *to = from as c_char;
+            }
+
+            modeinfo
+        }
+
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
             Handle::V1Screen { .. } => {
                 return Err(Error::new(EOPNOTSUPP));
@@ -543,7 +578,8 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 ipc::MODE_GET_CONNECTOR => ipc::DrmModeGetConnector::with(payload, |mut data| {
                     let i = id_index(data.connector_id());
                     let (width, height) = self.adapter.display_size(i as usize);
-                    data.set_modes_ptr(&[]);
+                    data.set_connection(1 /* connected */);
+                    data.set_modes_ptr(&[modeinfo_for_size(width, height)]);
                     data.set_props_ptr(&[]);
                     data.set_prop_values_ptr(&[]);
                     data.set_encoders_ptr(&[enc_id(i)]);
@@ -598,36 +634,6 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     data.set_modifier([0; 4]);
                     Ok(0)
                 }),
-                ipc::DISPLAY_COUNT => {
-                    if payload.len() < size_of::<ipc::DisplayCount>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::DisplayCount>()], &mut ipc::DisplayCount>(
-                            payload.as_mut_array().unwrap(),
-                        )
-                    };
-                    payload.count = self.adapter.display_count();
-                    Ok(size_of::<ipc::DisplayCount>())
-                }
-                ipc::DISPLAY_SIZE => {
-                    if payload.len() < size_of::<ipc::DisplaySize>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::DisplaySize>()], &mut ipc::DisplaySize>(
-                            payload.as_mut_array().unwrap(),
-                        )
-                    };
-                    let display_id = payload.display_id;
-                    if display_id >= self.adapter.display_count() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let (width, height) = self.adapter.display_size(display_id);
-                    payload.width = width;
-                    payload.height = height;
-                    Ok(size_of::<ipc::DisplaySize>())
-                }
                 ipc::CREATE_DUMB_FRAMEBUFFER => {
                     if payload.len() < size_of::<ipc::CreateDumbFramebuffer>() {
                         return Err(Error::new(EINVAL));

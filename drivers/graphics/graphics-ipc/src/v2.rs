@@ -1,7 +1,11 @@
 use std::fs::File;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::io::AsRawFd;
 use std::{io, mem, ptr};
 
+use drm::control::connector::{self, State};
+use drm::control::Device as _;
+use drm::{ClientCapability, Device as _, DriverCapability};
 use libredox::flag;
 
 pub use crate::common::{Damage, DisplayMap};
@@ -44,29 +48,35 @@ pub struct V2GraphicsHandle {
     file: File,
 }
 
+impl AsFd for V2GraphicsHandle {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.file.as_fd()
+    }
+}
+
+impl drm::Device for V2GraphicsHandle {}
+impl drm::control::Device for V2GraphicsHandle {}
+
 impl V2GraphicsHandle {
     pub fn from_file(file: File) -> io::Result<Self> {
-        Ok(V2GraphicsHandle { file })
+        let handle = V2GraphicsHandle { file };
+        handle.set_client_capability(ClientCapability::CursorPlaneHotspot, true)?;
+        assert!(handle.get_driver_capability(DriverCapability::DumbBuffer)? == 1);
+        Ok(handle)
     }
 
-    pub fn display_count(&self) -> io::Result<usize> {
-        let mut cmd = ipc::DisplayCount { count: 0 };
-        unsafe {
-            sys_call(&self.file, &mut cmd, 0, &[ipc::DISPLAY_COUNT, 0, 0])?;
+    pub fn first_display(&self) -> io::Result<connector::Handle> {
+        for &connector in self.resource_handles().unwrap().connectors() {
+            if self.get_connector(connector, true)?.state() == State::Connected {
+                return Ok(connector);
+            }
         }
-        Ok(cmd.count)
+        Err(io::Error::other("no connected display"))
     }
 
-    pub fn display_size(&self, id: usize) -> io::Result<(u32, u32)> {
-        let mut cmd = ipc::DisplaySize {
-            display_id: id,
-            width: 0,
-            height: 0,
-        };
-        unsafe {
-            sys_call(&self.file, &mut cmd, 0, &[ipc::DISPLAY_SIZE, 0, 0])?;
-        }
-        Ok((cmd.width, cmd.height))
+    pub fn display_size(&self, handle: connector::Handle) -> io::Result<(u32, u32)> {
+        let (width, height) = self.get_connector(handle, true)?.modes()[0].size();
+        Ok((u32::from(width), u32::from(height)))
     }
 
     pub fn create_dumb_framebuffer(&self, width: u32, height: u32) -> io::Result<usize> {
@@ -156,21 +166,6 @@ pub mod ipc {
     pub use redox_ioctl::drm::*;
 
     // FIXME replace these with proper drm interfaces
-    pub const DISPLAY_COUNT: u64 = 1;
-    #[repr(C, packed)]
-    pub struct DisplayCount {
-        pub count: usize,
-    }
-
-    pub const DISPLAY_SIZE: u64 = 2;
-    #[repr(C, packed)]
-    pub struct DisplaySize {
-        pub display_id: usize,
-
-        pub width: u32,
-        pub height: u32,
-    }
-
     pub const CREATE_DUMB_FRAMEBUFFER: u64 = 3;
     #[repr(C, packed)]
     pub struct CreateDumbFramebuffer {

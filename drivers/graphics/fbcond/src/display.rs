@@ -33,7 +33,9 @@ impl Display {
 
         log::debug!("fbcond: Opened new display");
 
-        let (width, height) = new_display_handle.display_size(0).unwrap();
+        let (width, height) = new_display_handle
+            .display_size(new_display_handle.first_display().unwrap())
+            .unwrap();
         let fb = new_display_handle
             .create_dumb_framebuffer(width, height)
             .unwrap();
@@ -59,7 +61,11 @@ impl Display {
     }
 
     pub fn handle_resize(map: &mut DisplayMap, text_screen: &mut TextScreen) {
-        let (width, height) = match map.display_handle.display_size(0) {
+        let (width, height) = match map
+            .display_handle
+            .first_display()
+            .and_then(|handle| map.display_handle.display_size(handle))
+        {
             Ok((width, height)) => (width, height),
             Err(err) => {
                 log::error!("fbcond: failed to get display size: {}", err);
