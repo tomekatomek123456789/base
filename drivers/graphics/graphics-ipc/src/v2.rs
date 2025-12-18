@@ -9,7 +9,7 @@ use drm::control::Device as _;
 use drm::{ClientCapability, Device as _, DriverCapability};
 use drm_fourcc::DrmFourcc;
 
-pub use crate::common::{Damage, DisplayMap};
+pub use crate::common::Damage;
 
 extern "C" {
     fn redox_sys_call_v0(
