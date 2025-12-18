@@ -586,7 +586,7 @@ impl<'a> ProcScheme<'a> {
         match self.handles[req.id()] {
             ref mut st @ Handle::Init => {
                 let mut fd_out = usize::MAX;
-                if let Err(e) = req.obtain_fd(socket, FobtainFdFlags::empty(), Err(&mut fd_out)) {
+                if let Err(e) = req.obtain_fd(socket, FobtainFdFlags::empty(), core::slice::from_mut(&mut fd_out)) {
                     return Response::new(Err(e), req);
                 };
                 let fd = FdGuard::new(fd_out);

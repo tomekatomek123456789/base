@@ -7,8 +7,8 @@ edition = "2021"
 orbclient = "0.3.27"
 ransid = "0.4"
 redox_event = "0.4"
-redox_syscall = "0.5"
-redox-scheme = "0.8.2"
+redox_syscall = "0.6"
+redox-scheme = "0.8.3"
 
 console-draw = { path = "../console-draw" }
 daemon = { path = "../../../daemon" }

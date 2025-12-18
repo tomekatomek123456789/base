@@ -239,11 +239,18 @@ impl SchemeSync for Scheme {
             flags: NewFdFlags::POSITIONED,
         })
     }
-    fn rmdir(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
-        self.remove_dentry(path, ctx.uid, ctx.gid, true)
-    }
-    fn unlink(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
-        self.remove_dentry(path, ctx.uid, ctx.gid, false)
+    fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, ctx: &CallerCtx) -> Result<()> {
+        let _ = self
+            .filesystem
+            .files
+            .get_mut(&dirfd)
+            .ok_or(Error::new(EBADFD))?;
+        self.remove_dentry(
+            path,
+            ctx.uid,
+            ctx.gid,
+            flags & syscall::AT_REMOVEDIR == syscall::AT_REMOVEDIR,
+        )
     }
     fn read(
         &mut self,

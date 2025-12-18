@@ -14,5 +14,5 @@ log = "0.4"
 # TODO: migrate virtio to our executor
 futures = { version = "0.3.28", features = ["executor"] }
 
-redox_syscall = { version = "0.5", features = ["std"] }
-redox-scheme = "0.8.2"
+redox_syscall = { version = "0.6", features = ["std"] }
+redox-scheme = "0.8.3"

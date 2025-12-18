@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::os::fd::AsRawFd;
 
 use event::{EventQueue, UserData};
-use redox_scheme::SchemeBlock;
-use syscall::{Error, EventFlags, Result, EBADF, ENOENT, O_NONBLOCK};
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult};
+use syscall::schemev2::NewFdFlags;
+use syscall::{Error, EventFlags, Result, EACCES, EAGAIN, EBADF, ENOENT, O_NONBLOCK};
 
 use crate::display::Display;
 use crate::text::TextScreen;
@@ -25,7 +27,7 @@ impl UserData for VtIndex {
     }
 }
 
-pub struct Handle {
+pub struct FdHandle {
     pub vt_i: VtIndex,
     pub flags: usize,
     pub events: EventFlags,
@@ -35,7 +37,7 @@ pub struct Handle {
 pub struct FbconScheme {
     pub vts: BTreeMap<VtIndex, TextScreen>,
     next_id: usize,
-    pub handles: BTreeMap<usize, Handle>,
+    pub handles: BTreeMap<usize, FdHandle>,
 }
 
 impl FbconScheme {
@@ -60,32 +62,36 @@ impl FbconScheme {
             handles: BTreeMap::new(),
         }
     }
+
+    fn get_vt_handle_mut(&mut self, id: usize) -> Result<&mut FdHandle> {
+        match self.handles.get_mut(&id) {
+            Some(handle) => Ok(handle),
+            None => Err(Error::new(EBADF)),
+        }
+    }
 }
 
-impl SchemeBlock for FbconScheme {
-    fn open(
-        &mut self,
-        path_str: &str,
-        flags: usize,
-        _uid: u32,
-        _gid: u32,
-    ) -> Result<Option<usize>> {
+impl SchemeSync for FbconScheme {
+    fn open(&mut self, path_str: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
         let vt_i = VtIndex(path_str.parse::<usize>().map_err(|_| Error::new(ENOENT))?);
-        if let Some(_console) = self.vts.get_mut(&vt_i) {
+        if self.vts.contains_key(&vt_i) {
             let id = self.next_id;
             self.next_id += 1;
 
             self.handles.insert(
                 id,
-                Handle {
+                FdHandle {
                     vt_i,
-                    flags,
+                    flags: flags,
                     events: EventFlags::empty(),
                     notified_read: false,
                 },
             );
 
-            Ok(Some(id))
+            Ok(OpenResult::ThisScheme {
+                number: id,
+                flags: NewFdFlags::empty(),
+            })
         } else {
             Err(Error::new(ENOENT))
         }
@@ -95,20 +101,26 @@ impl SchemeBlock for FbconScheme {
         &mut self,
         id: usize,
         flags: syscall::EventFlags,
-    ) -> Result<Option<syscall::EventFlags>> {
-        let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+        _ctx: &CallerCtx,
+    ) -> Result<syscall::EventFlags> {
+        let handle = match self.handles.get_mut(&id) {
+            Some(handle) => Ok(handle),
+            None => Err(Error::new(EBADF)),
+        }?;
 
         handle.notified_read = false;
-
         handle.events = flags;
-        Ok(Some(syscall::EventFlags::empty()))
+
+        Ok(syscall::EventFlags::empty())
     }
 
-    fn fpath(&mut self, id: usize, buf: &mut [u8]) -> Result<Option<usize>> {
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+    fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
+        let handle = match self.handles.get(&id) {
+            Some(handle) => Ok(handle),
+            None => Err(Error::new(EBADF)),
+        }?;
 
         let path_str = format!("fbcon:{}", handle.vt_i.0);
-
         let path = path_str.as_bytes();
 
         let mut i = 0;
@@ -117,13 +129,21 @@ impl SchemeBlock for FbconScheme {
             i += 1;
         }
 
-        Ok(Some(i))
+        Ok(i)
     }
 
-    fn fsync(&mut self, id: usize) -> Result<Option<usize>> {
-        let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+    fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
+        match self.handles.get(&id) {
+            Some(_) => Ok(()),
+            None => Err(Error::new(EBADF)),
+        }
+    }
 
-        return Ok(Some(0));
+    fn fcntl(&mut self, id: usize, cmd: usize, arg: usize, _ctx: &CallerCtx) -> Result<usize> {
+        if !self.handles.get(&id).is_some() {
+            return Err(Error::new(EBADF));
+        };
+        Ok(0)
     }
 
     fn read(
@@ -132,18 +152,26 @@ impl SchemeBlock for FbconScheme {
         buf: &mut [u8],
         _offset: u64,
         _fcntl_flags: u32,
-    ) -> Result<Option<usize>> {
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        let handle = match self.handles.get(&id) {
+            Some(handle) => Ok(handle),
+            None => Err(Error::new(EBADF)),
+        }?;
 
         if let Some(screen) = self.vts.get_mut(&handle.vt_i) {
-            if !screen.can_read() && handle.flags & O_NONBLOCK != O_NONBLOCK {
-                return Ok(None);
+            if !screen.can_read() {
+                if handle.flags & O_NONBLOCK != 0 {
+                    Err(Error::new(EAGAIN))
+                } else {
+                    Err(Error::new(EAGAIN))
+                }
             } else {
-                return screen.read(buf).map(Some);
+                screen.read(buf)
             }
+        } else {
+            Err(Error::new(EBADF))
         }
-
-        Err(Error::new(EBADF))
     }
 
     fn write(
@@ -152,19 +180,21 @@ impl SchemeBlock for FbconScheme {
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
-    ) -> Result<Option<usize>> {
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
+        let handle = match self.handles.get(&id) {
+            Some(handle) => Ok(handle),
+            None => Err(Error::new(EBADF)),
+        }?;
 
         if let Some(console) = self.vts.get_mut(&handle.vt_i) {
-            console.write(buf).map(Some)
+            console.write(buf)
         } else {
             Err(Error::new(EBADF))
         }
     }
-}
 
-impl FbconScheme {
-    pub fn on_close(&mut self, id: usize) {
-        self.handles.remove(&id);
+    fn on_close(&mut self, id: usize) {
+        let _ = self.handles.remove(&id);
     }
 }

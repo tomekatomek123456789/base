@@ -8,7 +8,7 @@ edition = "2018"
 anyhow = "1.0"
 libredox = "0.1"
 redox_event = "0.4.1"
-redox_syscall = "0.5"
+redox_syscall = "0.6"
 redox_termios = "0.1"
 common = { path = "../common" }
 qemu-exit = "3.0.2"

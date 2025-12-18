@@ -7,10 +7,10 @@ authors = ["Anhad Singh <andypython@protonmail.com>"]
 [dependencies]
 anyhow = "1.0.71"
 log = "0.4.19"
-redox_syscall = { version = "0.5", features = ["std"] }
+redox_syscall = { version = "0.6", features = ["std"] }
 orbclient = "0.3.27"
 libredox = "0.1.3"
 
 common = { path = "../common" }
 daemon = { path = "../../daemon" }
-redox-scheme = "0.8.2"
+redox-scheme = "0.8.3"

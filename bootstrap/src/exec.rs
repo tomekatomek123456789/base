@@ -2,7 +2,7 @@ use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 use syscall::flag::{O_CLOEXEC, O_RDONLY};
-use syscall::{Error, EINTR};
+use syscall::{EINTR, Error};
 
 use redox_rt::proc::*;
 

@@ -6,8 +6,8 @@ version = "0.1.0"
 [dependencies]
 libredox = { version = "0.1.8", features = ["call"]}
 daemon = { path = "../daemon" }
-redox_syscall = "0.5.17"
-redox-scheme = "0.8.0"
+redox_syscall = "0.6"
+redox-scheme = "0.8.3"
 redox_event = "0.4.0"
 anyhow = "1.0.97"
 libc = "0.2"
