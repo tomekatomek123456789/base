@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use console_draw::{TextScreen, V2DisplayMap};
 use drm::buffer::Buffer;
 use drm::control::Device;
-use graphics_ipc::v2::V2GraphicsHandle;
+use graphics_ipc::v2::{Damage, V2GraphicsHandle};
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
 use redox_scheme::scheme::SchemeSync;
@@ -127,6 +127,8 @@ impl FbbootlogScheme {
         let mut i = self.scrollback_offset;
         self.text_screen
             .write(map, b"\x1B[1;1H\x1B[2J", &mut VecDeque::new());
+
+        let mut total_damage = Damage::NONE;
         while i < buffer_len {
             let mut damage =
                 self.text_screen
@@ -136,17 +138,16 @@ impl FbbootlogScheme {
             if i == buffer_len || yd + spare_lines * 16 > map.fb.size().1 as usize {
                 // render until end of screen
                 damage.height = map.fb.size().1 - damage.y;
-                map.display_handle
-                    .update_plane(0, u32::from(map.fb.handle()), damage)
-                    .unwrap();
+                total_damage = total_damage.merge(damage);
                 self.is_scrollback = i < buffer_len;
                 break;
             } else {
-                map.display_handle
-                    .update_plane(0, u32::from(map.fb.handle()), damage)
-                    .unwrap();
+                total_damage = total_damage.merge(damage);
             }
         }
+        map.display_handle
+            .update_plane(0, u32::from(map.fb.handle()), total_damage)
+            .unwrap();
     }
 
     fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
