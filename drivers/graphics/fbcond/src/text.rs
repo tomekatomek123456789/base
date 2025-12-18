@@ -124,15 +124,9 @@ impl TextScreen {
         if let Some(map) = &mut self.display.map {
             Display::handle_resize(map, &mut self.inner);
 
-            let damage = self.inner.write(
-                &mut console_draw::DisplayMap {
-                    offscreen: map.inner.ptr_mut(),
-                    width: map.inner.width(),
-                    height: map.inner.height(),
-                },
-                buf,
-                &mut self.input,
-            );
+            let damage = self
+                .inner
+                .write(unsafe { &mut map.console_map() }, buf, &mut self.input);
 
             self.display.sync_rect(damage);
         }

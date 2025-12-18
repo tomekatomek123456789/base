@@ -76,6 +76,11 @@ exclude = ["bootstrap"]
 libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-0.2" }
 orbclient = { git = "https://gitlab.redox-os.org/redox-os/orbclient.git", version = "0.3.44" }
 
+# Rustix doesn't support ioctls on Redox OS
+rustix = { git = "https://github.com/jackpot51/rustix.git", branch = "redox-ioctl" }
+drm = { git = "https://github.com/Smithay/drm-rs.git" }
+drm-sys = { git = "https://github.com/Smithay/drm-rs.git" }
+
 [patch."https://gitlab.redox-os.org/redox-os/relibc.git"]
 #redox-rt = { path = "../../relibc/source/redox-rt" }
 #redox-ioctl = { path = "../../relibc/source/redox-ioctl" }

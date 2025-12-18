@@ -1,6 +1,7 @@
 #![feature(slice_as_array)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::c_char;
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem;
@@ -82,8 +83,8 @@ enum Handle<T: GraphicsAdapter> {
     },
     V2 {
         vt: usize,
-        next_id: usize,
-        fbs: HashMap<usize, Arc<T::Framebuffer>>,
+        next_id: u32,
+        fbs: HashMap<u32, Arc<T::Framebuffer>>,
     },
 }
 
@@ -462,6 +463,44 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
             id_index(i) | (1 << 13)
         }
 
+        fn dumb_buffer_id(i: u32) -> u32 {
+            id_index(i) | (1 << 14)
+        }
+
+        fn modeinfo_for_size(width: u32, height: u32) -> drm_sys::drm_mode_modeinfo {
+            let mut modeinfo = drm_sys::drm_mode_modeinfo {
+                // The actual visible display size
+                hdisplay: width as u16,
+                vdisplay: height as u16,
+
+                // These are used to calculate the refresh rate
+                clock: 60 * width * height / 1000,
+                htotal: width as u16,
+                vtotal: height as u16,
+                vscan: 0,
+                vrefresh: 60,
+
+                type_: drm_sys::DRM_MODE_TYPE_PREFERRED | drm_sys::DRM_MODE_TYPE_DRIVER,
+                name: [0; 32],
+
+                // These only matter when modesetting physical display adapters. For
+                // those we should be able to parse the EDID blob.
+                hsync_start: width as u16,
+                hsync_end: width as u16,
+                hskew: 0,
+                vsync_start: height as u16,
+                vsync_end: height as u16,
+                flags: 0,
+            };
+
+            let name = format!("{width}x{height}").into_bytes();
+            for (to, from) in modeinfo.name.iter_mut().zip(name) {
+                *to = from as c_char;
+            }
+
+            modeinfo
+        }
+
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
             Handle::V1Screen { .. } => {
                 return Err(Error::new(EOPNOTSUPP));
@@ -543,7 +582,8 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 ipc::MODE_GET_CONNECTOR => ipc::DrmModeGetConnector::with(payload, |mut data| {
                     let i = id_index(data.connector_id());
                     let (width, height) = self.adapter.display_size(i as usize);
-                    data.set_modes_ptr(&[]);
+                    data.set_connection(1 /* connected */);
+                    data.set_modes_ptr(&[modeinfo_for_size(width, height)]);
                     data.set_props_ptr(&[]);
                     data.set_prop_values_ptr(&[]);
                     data.set_encoders_ptr(&[enc_id(i)]);
@@ -558,6 +598,50 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     data.set_bpp(32);
                     data.set_depth(24);
                     data.set_handle(fb_handle_id(i));
+                    Ok(0)
+                }),
+                ipc::MODE_CREATE_DUMB => ipc::DrmModeCreateDumb::with(payload, |mut data| {
+                    if data.bpp() != 32 {
+                        return Err(Error::new(EINVAL));
+                    }
+
+                    let fb = self
+                        .adapter
+                        .create_dumb_framebuffer(data.width(), data.height());
+
+                    *next_id += 1;
+                    fbs.insert(*next_id, Arc::new(fb));
+                    data.set_handle(dumb_buffer_id(*next_id as u32));
+                    data.set_pitch(data.width() * 4);
+                    data.set_size(u64::from(data.width()) * u64::from(data.height()) * 4);
+                    Ok(0)
+                }),
+                ipc::MODE_MAP_DUMB => ipc::DrmModeMapDumb::with(payload, |mut data| {
+                    if data.offset() != 0 {
+                        return Err(Error::new(EINVAL));
+                    }
+
+                    let fb_id = id_index(data.handle());
+
+                    if !fbs.contains_key(&fb_id) {
+                        return Err(Error::new(EINVAL));
+                    }
+
+                    // FIXME use a better scheme for creating map offsets
+                    assert!(
+                        ((fbs[&fb_id].width() * fbs[&fb_id].height() * 4) as usize)
+                            < MAP_FAKE_OFFSET_MULTIPLIER
+                    );
+
+                    data.set_offset((fb_id as usize * MAP_FAKE_OFFSET_MULTIPLIER) as u64);
+
+                    Ok(0)
+                }),
+                ipc::MODE_DESTROY_DUMB => ipc::DrmModeDestroyDumb::with(payload, |data| {
+                    let fb_id = id_index(data.handle());
+                    if fbs.remove(&fb_id).is_none() {
+                        return Err(Error::new(ENOENT));
+                    }
                     Ok(0)
                 }),
                 ipc::MODE_GET_PLANE_RES => ipc::DrmModeGetPlaneRes::with(payload, |mut data| {
@@ -598,100 +682,6 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     data.set_modifier([0; 4]);
                     Ok(0)
                 }),
-                ipc::DISPLAY_COUNT => {
-                    if payload.len() < size_of::<ipc::DisplayCount>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::DisplayCount>()], &mut ipc::DisplayCount>(
-                            payload.as_mut_array().unwrap(),
-                        )
-                    };
-                    payload.count = self.adapter.display_count();
-                    Ok(size_of::<ipc::DisplayCount>())
-                }
-                ipc::DISPLAY_SIZE => {
-                    if payload.len() < size_of::<ipc::DisplaySize>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::DisplaySize>()], &mut ipc::DisplaySize>(
-                            payload.as_mut_array().unwrap(),
-                        )
-                    };
-                    let display_id = payload.display_id;
-                    if display_id >= self.adapter.display_count() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let (width, height) = self.adapter.display_size(display_id);
-                    payload.width = width;
-                    payload.height = height;
-                    Ok(size_of::<ipc::DisplaySize>())
-                }
-                ipc::CREATE_DUMB_FRAMEBUFFER => {
-                    if payload.len() < size_of::<ipc::CreateDumbFramebuffer>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<
-                            &mut [u8; size_of::<ipc::CreateDumbFramebuffer>()],
-                            &mut ipc::CreateDumbFramebuffer,
-                        >(payload.as_mut_array().unwrap())
-                    };
-
-                    let fb = self
-                        .adapter
-                        .create_dumb_framebuffer(payload.width, payload.height);
-
-                    *next_id += 1;
-                    fbs.insert(*next_id, Arc::new(fb));
-                    payload.fb_id = *next_id;
-                    Ok(size_of::<ipc::CreateDumbFramebuffer>())
-                }
-                ipc::DUMB_FRAMEBUFFER_MAP_OFFSET => {
-                    if payload.len() < size_of::<ipc::DumbFramebufferMapOffset>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<
-                            &mut [u8; size_of::<ipc::DumbFramebufferMapOffset>()],
-                            &mut ipc::DumbFramebufferMapOffset,
-                        >(payload.as_mut_array().unwrap())
-                    };
-
-                    let fb_id = payload.fb_id;
-
-                    if !fbs.contains_key(&fb_id) {
-                        return Err(Error::new(EINVAL));
-                    }
-
-                    // FIXME use a better scheme for creating map offsets
-                    assert!(
-                        ((fbs[&fb_id].width() * fbs[&fb_id].height() * 4) as usize)
-                            < MAP_FAKE_OFFSET_MULTIPLIER
-                    );
-
-                    payload.offset = fb_id * MAP_FAKE_OFFSET_MULTIPLIER;
-
-                    Ok(size_of::<ipc::DumbFramebufferMapOffset>())
-                }
-                ipc::DESTROY_DUMB_FRAMEBUFFER => {
-                    if payload.len() < size_of::<ipc::DestroyDumbFramebuffer>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<
-                            &mut [u8; size_of::<ipc::DestroyDumbFramebuffer>()],
-                            &mut ipc::DestroyDumbFramebuffer,
-                        >(payload.as_mut_array().unwrap())
-                    };
-
-                    if fbs.remove(&{ payload.fb_id }).is_none() {
-                        return Err(Error::new(ENOENT));
-                    }
-
-                    Ok(size_of::<ipc::DestroyDumbFramebuffer>())
-                }
                 ipc::UPDATE_PLANE => {
                     if payload.len() < size_of::<ipc::UpdatePlane>() {
                         return Err(Error::new(EINVAL));
@@ -707,7 +697,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                         return Err(Error::new(EINVAL));
                     }
 
-                    let Some(framebuffer) = fbs.get(&{ payload.fb_id }) else {
+                    let Some(framebuffer) = fbs.get(&id_index(payload.fb_id)) else {
                         return Err(Error::new(EINVAL));
                     };
 
@@ -741,7 +731,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 next_id: _,
                 fbs,
             } => (
-                fbs.get(&(offset as usize / MAP_FAKE_OFFSET_MULTIPLIER))
+                fbs.get(&((offset as usize / MAP_FAKE_OFFSET_MULTIPLIER) as u32))
                     .ok_or(Error::new(EINVAL))
                     .unwrap(),
                 offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1),

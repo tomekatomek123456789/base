@@ -1,7 +1,9 @@
 use console_draw::TextScreen;
+use drm::buffer::Buffer;
+use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use graphics_ipc::v2::{Damage, V2GraphicsHandle};
 use inputd::ConsumerHandle;
-use std::{io, ptr};
+use std::{io, mem, ptr};
 
 pub struct Display {
     pub input_handle: ConsumerHandle,
@@ -10,8 +12,21 @@ pub struct Display {
 
 pub struct DisplayMap {
     display_handle: V2GraphicsHandle,
-    fb: usize,
-    pub inner: graphics_ipc::v2::DisplayMap,
+    fb: DumbBuffer,
+    mapping: DumbMapping<'static>,
+}
+
+impl DisplayMap {
+    pub unsafe fn console_map(&mut self) -> console_draw::DisplayMap {
+        console_draw::DisplayMap {
+            offscreen: ptr::slice_from_raw_parts_mut(
+                self.mapping.as_mut_ptr() as *mut u32,
+                self.mapping.len() / 4,
+            ),
+            width: self.fb.size().0 as usize,
+            height: self.fb.size().1 as usize,
+        }
+    }
 }
 
 impl Display {
@@ -33,73 +48,81 @@ impl Display {
 
         log::debug!("fbcond: Opened new display");
 
-        let (width, height) = new_display_handle.display_size(0).unwrap();
-        let fb = new_display_handle
+        let (width, height) = new_display_handle
+            .display_size(new_display_handle.first_display().unwrap())
+            .unwrap();
+        let mut fb = new_display_handle
             .create_dumb_framebuffer(width, height)
             .unwrap();
 
-        match new_display_handle.map_dumb_framebuffer(fb, width, height) {
-            Ok(map) => {
-                log::debug!(
-                    "fbcond: Mapped new display with size {}x{}",
-                    map.width(),
-                    map.height()
-                );
-
-                self.map = Some(DisplayMap {
-                    display_handle: new_display_handle,
-                    fb,
-                    inner: map,
-                });
-            }
+        let map = match new_display_handle.map_dumb_framebuffer(&mut fb) {
+            Ok(map) => unsafe { mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(map) },
             Err(err) => {
                 log::error!("failed to map display: {}", err);
-            }
-        }
-    }
-
-    pub fn handle_resize(map: &mut DisplayMap, text_screen: &mut TextScreen) {
-        let (width, height) = match map.display_handle.display_size(0) {
-            Ok((width, height)) => (width, height),
-            Err(err) => {
-                log::error!("fbcond: failed to get display size: {}", err);
-                (map.inner.width() as u32, map.inner.height() as u32)
+                return;
             }
         };
 
-        if width as usize != map.inner.width() || height as usize != map.inner.height() {
+        log::debug!(
+            "fbcond: Mapped new display with size {}x{}",
+            fb.size().0,
+            fb.size().1,
+        );
+
+        self.map = Some(DisplayMap {
+            display_handle: new_display_handle,
+            fb,
+            mapping: map,
+        });
+    }
+
+    pub fn handle_resize(map: &mut DisplayMap, text_screen: &mut TextScreen) {
+        let (width, height) = match map
+            .display_handle
+            .first_display()
+            .and_then(|handle| map.display_handle.display_size(handle))
+        {
+            Ok((width, height)) => (width, height),
+            Err(err) => {
+                log::error!("fbcond: failed to get display size: {}", err);
+                map.fb.size()
+            }
+        };
+
+        if (width, height) != map.fb.size() {
             match map.display_handle.create_dumb_framebuffer(width, height) {
-                Ok(fb) => match map.display_handle.map_dumb_framebuffer(fb, width, height) {
-                    Ok(mut new_map) => {
-                        let count = new_map.ptr().len();
-                        unsafe {
-                            ptr::write_bytes(new_map.ptr_mut() as *mut u32, 0, count);
+                Ok(mut fb) => {
+                    let mut new_map = match map.display_handle.map_dumb_framebuffer(&mut fb) {
+                        Ok(new_map) => unsafe {
+                            mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(new_map)
+                        },
+                        Err(err) => {
+                            eprintln!("fbcond: failed to open display: {}", err);
+                            return;
                         }
+                    };
 
-                        text_screen.resize(
-                            &mut console_draw::DisplayMap {
-                                offscreen: map.inner.ptr_mut(),
-                                width: map.inner.width(),
-                                height: map.inner.height(),
-                            },
-                            &mut console_draw::DisplayMap {
-                                offscreen: new_map.ptr_mut(),
-                                width: new_map.width(),
-                                height: new_map.height(),
-                            },
-                        );
+                    new_map.fill(0);
 
-                        let _ = map.display_handle.destroy_dumb_framebuffer(map.fb);
+                    text_screen.resize(
+                        unsafe { &mut map.console_map() },
+                        &mut console_draw::DisplayMap {
+                            offscreen: ptr::slice_from_raw_parts_mut(
+                                new_map.as_mut_ptr() as *mut u32,
+                                new_map.len() / 4,
+                            ),
+                            width: fb.size().0 as usize,
+                            height: fb.size().1 as usize,
+                        },
+                    );
 
-                        map.fb = fb;
-                        map.inner = new_map;
+                    let old_fb = mem::replace(&mut map.fb, fb);
+                    map.mapping = new_map;
 
-                        log::debug!("fbcond: mapped display");
-                    }
-                    Err(err) => {
-                        log::error!("fbcond: failed to open display: {}", err);
-                    }
-                },
+                    let _ = map.display_handle.destroy_dumb_framebuffer(old_fb);
+
+                    eprintln!("fbcond: mapped display");
+                }
                 Err(err) => {
                     log::error!("fbcond: failed to create framebuffer: {}", err);
                 }
@@ -109,7 +132,9 @@ impl Display {
 
     pub fn sync_rect(&mut self, damage: Damage) {
         if let Some(map) = &self.map {
-            map.display_handle.update_plane(0, map.fb, damage).unwrap();
+            map.display_handle
+                .update_plane(0, u32::from(map.fb.handle()), damage)
+                .unwrap();
         }
     }
 }
