@@ -8,7 +8,8 @@ use std::mem;
 use std::mem::transmute;
 use std::sync::Arc;
 
-use graphics_ipc::v1::{CursorDamage, Damage};
+use graphics_ipc::v1::CursorDamage;
+use graphics_ipc::v2::Damage;
 use inputd::{VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::SchemeSync;

@@ -4,12 +4,10 @@ use std::os::unix::io::AsRawFd;
 use std::{io, mem};
 
 use drm::control::connector::{self, State};
-use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use drm::control::Device as _;
 use drm::{ClientCapability, Device as _, DriverCapability};
-use drm_fourcc::DrmFourcc;
 
-pub use crate::common::{Damage, DisplayMap};
+pub use crate::common::Damage;
 
 extern "C" {
     fn redox_sys_call_v0(
@@ -73,26 +71,6 @@ impl V2GraphicsHandle {
             }
         }
         Err(io::Error::other("no connected display"))
-    }
-
-    pub fn display_size(&self, handle: connector::Handle) -> io::Result<(u32, u32)> {
-        let (width, height) = self.get_connector(handle, true)?.modes()[0].size();
-        Ok((u32::from(width), u32::from(height)))
-    }
-
-    pub fn create_dumb_framebuffer(&self, width: u32, height: u32) -> io::Result<DumbBuffer> {
-        self.create_dumb_buffer((width, height), DrmFourcc::Argb8888, 32)
-    }
-
-    pub fn map_dumb_framebuffer<'a>(
-        &self,
-        buffer: &'a mut DumbBuffer,
-    ) -> io::Result<DumbMapping<'a>> {
-        self.map_dumb_buffer(buffer)
-    }
-
-    pub fn destroy_dumb_framebuffer(&self, buffer: DumbBuffer) -> io::Result<()> {
-        self.destroy_dumb_buffer(buffer)
     }
 
     pub fn update_plane(&self, display_id: usize, fb_id: u32, damage: Damage) -> io::Result<()> {
