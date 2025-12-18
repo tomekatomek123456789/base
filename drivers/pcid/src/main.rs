@@ -13,7 +13,7 @@ use pci_types::{
 use redox_scheme::{RequestKind, SignalBehavior};
 
 use crate::cfg_access::Pcie;
-use pcid_interface::{FullDeviceId, LegacyInterruptLine, PciBar, PciFunction};
+use pcid_interface::{FullDeviceId, LegacyInterruptLine, PciBar, PciFunction, PciRom};
 
 mod cfg_access;
 mod driver_handler;
@@ -78,6 +78,41 @@ fn handle_parsed_header(
         debug!("    BAR{}", string);
     }
 
+    //TODO: submit to pci_types
+    let get_rom = |pci_address, offset| -> Option<PciRom> {
+        use pci_types::ConfigRegionAccess;
+
+        const ROM_ENABLED: u32 = 1;
+        const ROM_ADDRESS_MASK: u32 = 0xfffff800;
+
+        let data = unsafe { pcie.read(pci_address, offset) };
+        let enabled = (data & ROM_ENABLED) == ROM_ENABLED;
+        let addr = data & ROM_ADDRESS_MASK;
+
+        let size = unsafe {
+            pcie.write(pci_address, offset, ROM_ADDRESS_MASK | if enabled { ROM_ENABLED } else { 0 });
+            let mut readback = pcie.read(pci_address, offset);
+            pcie.write(pci_address, offset, data);
+
+            /*
+                * If the entire readback value is zero, the BAR is not implemented, so we return `None`.
+                */
+            if readback == 0x0 {
+                return None;
+            }
+
+            readback &= ROM_ADDRESS_MASK;
+            1 << readback.trailing_zeros()
+        };
+
+        Some(PciRom { addr, size, enabled })
+    };
+
+    let rom = get_rom(endpoint_header.header().address(), 0x30);
+    if let Some(rom) = rom {
+        debug!("    ROM={:08X}", rom.addr);
+    }
+
     let capabilities = if endpoint_header.status(pcie).has_capability_list() {
         endpoint_header.capabilities(pcie).collect::<Vec<_>>()
     } else {
@@ -91,8 +126,9 @@ fn handle_parsed_header(
 
     let func = Func {
         inner: pcid_interface::PciFunction {
-            bars,
             addr: endpoint_header.header().address(),
+            bars,
+            rom,
             legacy_interrupt_line: None, // Will be filled in when enabling the device
             full_device_id: full_device_id.clone(),
         },
