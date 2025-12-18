@@ -5,7 +5,7 @@ use common::{
 use embedded_hal::prelude::*;
 use pcid_interface::PciFunction;
 use range_alloc::RangeAllocator;
-use std::{collections::VecDeque, mem, ptr, sync::Arc, time::Duration};
+use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
 use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
 
 mod aux;
@@ -569,7 +569,7 @@ impl Device {
             Ok(edid_data)
         };
 
-        let mut gpio_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
+        let gpio_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
             let Some(port) = &ddi.gpio_port else {
                 return Err(Error::new(EIO));
             };
@@ -728,7 +728,7 @@ impl Device {
 
                     let mut v = dpclka_cfgcr0.read();
                     v &= !(DPCLKA_CFGCR0_CLOCK_MASK << clock_shift);
-                    v |= (dpll.dpclka_cfgcr0_clock_value << clock_shift);
+                    v |= dpll.dpclka_cfgcr0_clock_value << clock_shift;
                     dpclka_cfgcr0.write(v);
                 }
 
@@ -890,7 +890,7 @@ impl Device {
                         TRANS_DDI_FUNC_CTL_PORT_WIDTH_4;
 
                     if let Some(transcoder_index) = ddi.transcoder_index {
-                        ddi_func_ctl |= (transcoder_index << transcoder.ddi_func_ctl_ddi_shift);
+                        ddi_func_ctl |= transcoder_index << transcoder.ddi_func_ctl_ddi_shift;
                     }
 
                     match input {
@@ -1082,7 +1082,7 @@ impl Device {
             match event {
                 Event::DdiHotplug(ddi_name) => {
                     log::info!("DDI {} plugged", ddi_name);
-                    for attempt in 0..4 {
+                    for _attempt in 0..4 {
                         //TODO: gmbus times out!
                         match self.probe_ddi(ddi_name) {
                             Ok(true) => {

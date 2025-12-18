@@ -1,7 +1,7 @@
 use common::io::{Io, MmioPtr};
 use syscall::error::{Error, Result, EIO};
 
-use super::{DeviceKind, MmioRegion};
+use super::MmioRegion;
 
 pub const DPLL_CFGCR1_QDIV_RATIO_SHIFT: u32 = 10;
 pub const DPLL_CFGCR1_QDIV_RATIO_MASK: u32 = 0xFF << DPLL_CFGCR1_QDIV_RATIO_SHIFT;
@@ -150,7 +150,7 @@ impl Dpll {
                 | DPLL_CFGCR1_KDIV_MASK
                 | DPLL_CFGCR1_PDIV_MASK;
             v &= !mask;
-            v |= (setting.cfgcr1 & mask);
+            v |= setting.cfgcr1 & mask;
             self.cfgcr1.write(v);
         }
 
