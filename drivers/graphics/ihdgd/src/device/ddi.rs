@@ -2,7 +2,7 @@ use common::io::{Io, MmioPtr, WriteOnly};
 use std::sync::Arc;
 use syscall::error::{Error, Result, EIO};
 
-use super::{DeviceKind, GpioPort, MmioRegion};
+use super::{GpioPort, MmioRegion};
 
 // IHD-OS-TGL-Vol 2c-12.21 DDI_AUX_CTL
 pub const DDI_AUX_CTL_BUSY: u32 = 1 << 31;
@@ -262,7 +262,7 @@ impl Ddi {
         // Clear cmnkeeper_enable for HDMI
         {
             // It is not possible to read from GRP register, so use LN0 as template
-            let mut pcs_dw1_ln0 = self.port_pcs(PortPcsReg::Dw1, PortLane::Ln0).unwrap();
+            let pcs_dw1_ln0 = self.port_pcs(PortPcsReg::Dw1, PortLane::Ln0).unwrap();
             let mut pcs_dw1_grp =
                 WriteOnly::new(self.port_pcs(PortPcsReg::Dw1, PortLane::Grp).unwrap());
             let mut v = pcs_dw1_ln0.read();
@@ -293,7 +293,7 @@ impl Ddi {
         }
 
         // Clear training enable to change swing values
-        let mut tx_dw5_ln0 = self.port_tx(PortTxReg::Dw5, PortLane::Ln0).unwrap();
+        let tx_dw5_ln0 = self.port_tx(PortTxReg::Dw5, PortLane::Ln0).unwrap();
         let mut tx_dw5_grp = WriteOnly::new(self.port_tx(PortTxReg::Dw5, PortLane::Grp).unwrap());
         {
             let mut v = tx_dw5_ln0.read();
@@ -324,10 +324,10 @@ impl Ddi {
                 | PORT_TX_DW5_COEFF_POLARITY
                 | PORT_TX_DW5_SCALING_MODE_SEL_MASK
                 | PORT_TX_DW5_RTERM_SELECT_MASK);
-            v |= ((setting.dw5_2_tap_disable << PORT_TX_DW5_DISABLE_2_TAP_SHIFT)
+            v |= (setting.dw5_2_tap_disable << PORT_TX_DW5_DISABLE_2_TAP_SHIFT)
                 | PORT_TX_DW5_DISABLE_3_TAP
                 | (0b010 << PORT_TX_DW5_SCALING_MODE_SEL_SHIFT)
-                | (0b110 << PORT_TX_DW5_RTERM_SELECT_SHIFT));
+                | (0b110 << PORT_TX_DW5_RTERM_SELECT_SHIFT);
             tx_dw5_grp.write(v);
         }
 
@@ -344,9 +344,9 @@ impl Ddi {
             v &= !(PORT_TX_DW2_SWING_SEL_UPPER_MASK
                 | PORT_TX_DW2_SWING_SEL_LOWER_MASK
                 | PORT_TX_DW2_RCOMP_SCALAR_MASK);
-            v |= ((((setting.dw2_swing_sel >> 3) & 1) << PORT_TX_DW2_SWING_SEL_UPPER_SHIFT)
+            v |= (((setting.dw2_swing_sel >> 3) & 1) << PORT_TX_DW2_SWING_SEL_UPPER_SHIFT)
                 | ((setting.dw2_swing_sel & 0b111) << PORT_TX_DW2_SWING_SEL_LOWER_SHIFT)
-                | (0x98 << PORT_TX_DW2_RCOMP_SCALAR_SHIFT));
+                | (0x98 << PORT_TX_DW2_RCOMP_SCALAR_SHIFT);
             tx_dw2.write(v);
         }
 

@@ -1,8 +1,7 @@
+use std::convert::Infallible;
+
 use common::io::{Io, MmioPtr};
-use embedded_hal::{
-    blocking::i2c::{self, Operation, SevenBitAddress},
-    digital,
-};
+use embedded_hal::digital::v2 as digital;
 
 use super::MmioRegion;
 
@@ -57,25 +56,31 @@ pub struct GpioPin {
 }
 
 impl digital::InputPin for GpioPin {
-    fn is_high(&self) -> bool {
-        ((self.ctl.read() >> self.shift) & GPIO_VAL_IN) == GPIO_VAL_IN
+    type Error = Infallible;
+
+    fn is_high(&self) -> Result<bool, Infallible> {
+        Ok(((self.ctl.read() >> self.shift) & GPIO_VAL_IN) == GPIO_VAL_IN)
     }
 
-    fn is_low(&self) -> bool {
-        ((self.ctl.read() >> self.shift) & GPIO_VAL_IN) == 0
+    fn is_low(&self) -> Result<bool, Infallible> {
+        Ok(((self.ctl.read() >> self.shift) & GPIO_VAL_IN) == 0)
     }
 }
 
 impl digital::OutputPin for GpioPin {
-    fn set_low(&mut self) {
+    type Error = Infallible;
+
+    fn set_low(&mut self) -> Result<(), Infallible> {
         // Set GPIO to output with value 0
         let value = GPIO_DIR_MASK | GPIO_DIR_OUT | GPIO_VAL_MASK;
         self.ctl.write(value << self.shift);
+        Ok(())
     }
 
-    fn set_high(&mut self) {
+    fn set_high(&mut self) -> Result<(), Infallible> {
         // Assuming external pull-up, set GPIO to input
         let value = GPIO_DIR_MASK;
         self.ctl.write(value << self.shift);
+        Ok(())
     }
 }
