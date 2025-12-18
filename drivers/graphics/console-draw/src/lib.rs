@@ -2,10 +2,11 @@ extern crate ransid;
 
 use std::collections::VecDeque;
 use std::convert::{TryFrom, TryInto};
-use std::{cmp, ptr};
+use std::{cmp, io, mem, ptr};
 
 use drm::buffer::Buffer;
 use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
+use drm::control::Device;
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::V2GraphicsHandle;
 use orbclient::FONT;
@@ -17,7 +18,7 @@ pub struct V2DisplayMap {
 }
 
 impl V2DisplayMap {
-    pub unsafe fn console_map(&mut self) -> DisplayMap {
+    unsafe fn console_map(&mut self) -> DisplayMap {
         DisplayMap {
             offscreen: ptr::slice_from_raw_parts_mut(
                 self.mapping.as_mut_ptr() as *mut u32,
@@ -138,7 +139,14 @@ impl TextScreen {
 }
 
 impl TextScreen {
-    pub fn write(&mut self, map: &mut DisplayMap, buf: &[u8], input: &mut VecDeque<u8>) -> Damage {
+    pub fn write(
+        &mut self,
+        map: &mut V2DisplayMap,
+        buf: &[u8],
+        input: &mut VecDeque<u8>,
+    ) -> Damage {
+        let map = unsafe { &mut map.console_map() };
+
         let mut min_changed = map.height;
         let mut max_changed = 0;
         let mut line_changed = |line| {
@@ -249,7 +257,7 @@ impl TextScreen {
         damage
     }
 
-    pub fn resize(&mut self, old_map: &mut DisplayMap, new_map: &mut DisplayMap) {
+    pub fn resize(&mut self, old_map: &mut V2DisplayMap, mut new_fb: DumbBuffer) -> io::Result<()> {
         // FIXME fold row when target is narrower and maybe unfold when it is wider
         fn copy_row(
             old_map: &mut DisplayMap,
@@ -266,20 +274,45 @@ impl TextScreen {
             }
         }
 
-        if new_map.height >= old_map.height {
-            for row in 0..old_map.height {
-                copy_row(old_map, new_map, row, row);
-            }
-        } else {
-            let deleted_rows = (old_map.height - new_map.height).div_ceil(16);
-            for row in 0..new_map.height {
-                if row + (deleted_rows + 1) * 16 >= old_map.height {
-                    break;
+        let new_mapping = old_map.display_handle.map_dumb_buffer(&mut new_fb)?;
+        let mut new_mapping =
+            unsafe { mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(new_mapping) };
+
+        new_mapping.fill(0);
+
+        {
+            let old_map = unsafe { &mut old_map.console_map() };
+            let new_map = &mut DisplayMap {
+                offscreen: ptr::slice_from_raw_parts_mut(
+                    new_mapping.as_mut_ptr() as *mut u32,
+                    new_mapping.len() / 4,
+                ),
+                width: new_fb.size().0 as usize,
+                height: new_fb.size().1 as usize,
+            };
+
+            if new_map.height >= old_map.height {
+                for row in 0..old_map.height {
+                    copy_row(old_map, new_map, row, row);
                 }
-                copy_row(old_map, new_map, row + deleted_rows * 16, row);
+            } else {
+                let deleted_rows = (old_map.height - new_map.height).div_ceil(16);
+                for row in 0..new_map.height {
+                    if row + (deleted_rows + 1) * 16 >= old_map.height {
+                        break;
+                    }
+                    copy_row(old_map, new_map, row + deleted_rows * 16, row);
+                }
+                self.console.state.y = self.console.state.y.saturating_sub(deleted_rows);
             }
-            self.console.state.y = self.console.state.y.saturating_sub(deleted_rows);
         }
+
+        let old_fb = mem::replace(&mut old_map.fb, new_fb);
+        old_map.mapping = new_mapping;
+
+        let _ = old_map.display_handle.destroy_dumb_buffer(old_fb);
+
+        Ok(())
     }
 }
 

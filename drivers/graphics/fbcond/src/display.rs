@@ -4,7 +4,7 @@ use drm::control::dumbbuffer::DumbMapping;
 use drm::control::Device;
 use graphics_ipc::v2::{Damage, V2GraphicsHandle};
 use inputd::ConsumerHandle;
-use std::{io, mem, ptr};
+use std::{io, mem};
 
 pub struct Display {
     pub input_handle: ConsumerHandle,
@@ -76,37 +76,14 @@ impl Display {
                 .display_handle
                 .create_dumb_buffer((width, height), DrmFourcc::Argb8888, 32)
             {
-                Ok(mut fb) => {
-                    let mut new_map = match map.display_handle.map_dumb_buffer(&mut fb) {
-                        Ok(new_map) => unsafe {
-                            mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(new_map)
-                        },
+                Ok(fb) => {
+                    match text_screen.resize(map, fb) {
+                        Ok(()) => eprintln!("fbcond: mapped display"),
                         Err(err) => {
                             eprintln!("fbcond: failed to open display: {}", err);
                             return;
                         }
                     };
-
-                    new_map.fill(0);
-
-                    text_screen.resize(
-                        unsafe { &mut map.console_map() },
-                        &mut console_draw::DisplayMap {
-                            offscreen: ptr::slice_from_raw_parts_mut(
-                                new_map.as_mut_ptr() as *mut u32,
-                                new_map.len() / 4,
-                            ),
-                            width: fb.size().0 as usize,
-                            height: fb.size().1 as usize,
-                        },
-                    );
-
-                    let old_fb = mem::replace(&mut map.fb, fb);
-                    map.mapping = new_map;
-
-                    let _ = map.display_handle.destroy_dumb_buffer(old_fb);
-
-                    eprintln!("fbcond: mapped display");
                 }
                 Err(err) => {
                     log::error!("fbcond: failed to create framebuffer: {}", err);

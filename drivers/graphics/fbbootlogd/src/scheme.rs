@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::{cmp, mem, ptr};
+use std::{cmp, mem};
 
 use console_draw::{TextScreen, V2DisplayMap};
 use drm::buffer::{Buffer, DrmFourcc};
@@ -129,26 +129,25 @@ impl FbbootlogScheme {
             return;
         };
         let buffer_len = self.text_buffer.lines.len();
-        let dmap = unsafe { &mut map.console_map() };
         // for both extra space on wrapping text and a scrollback indicator
         let spare_lines = 3;
         self.is_scrollback = true;
         self.scrollback_offset = cmp::min(
             self.scrollback_offset,
-            buffer_len - dmap.height / 16 + spare_lines,
+            buffer_len - map.fb.size().1 as usize / 16 + spare_lines,
         );
         let mut i = self.scrollback_offset;
         self.text_screen
-            .write(dmap, b"\x1B[1;1H\x1B[2J", &mut VecDeque::new());
+            .write(map, b"\x1B[1;1H\x1B[2J", &mut VecDeque::new());
         while i < buffer_len {
             let mut damage =
                 self.text_screen
-                    .write(dmap, &self.text_buffer.lines[i][..], &mut VecDeque::new());
+                    .write(map, &self.text_buffer.lines[i][..], &mut VecDeque::new());
             i += 1;
             let yd = (damage.y + damage.height) as usize;
-            if i == buffer_len || yd + spare_lines * 16 > dmap.height {
+            if i == buffer_len || yd + spare_lines * 16 > map.fb.size().1 as usize {
                 // render until end of screen
-                damage.height = (dmap.height as u32) - damage.y;
+                damage.height = map.fb.size().1 - damage.y;
                 map.display_handle
                     .update_plane(0, u32::from(map.fb.handle()), damage)
                     .unwrap();
@@ -178,38 +177,13 @@ impl FbbootlogScheme {
                 .display_handle
                 .create_dumb_buffer((width, height), DrmFourcc::Argb8888, 32)
             {
-                Ok(mut fb) => {
-                    let mut new_map = match map.display_handle.map_dumb_buffer(&mut fb) {
-                        Ok(new_map) => unsafe {
-                            mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(new_map)
-                        },
-                        Err(err) => {
-                            eprintln!("fbbootlogd: failed to open display: {}", err);
-                            return;
-                        }
-                    };
-
-                    new_map.fill(0);
-
-                    text_screen.resize(
-                        unsafe { &mut map.console_map() },
-                        &mut console_draw::DisplayMap {
-                            offscreen: ptr::slice_from_raw_parts_mut(
-                                new_map.as_mut_ptr() as *mut u32,
-                                new_map.len() / 4,
-                            ),
-                            width: fb.size().0 as usize,
-                            height: fb.size().1 as usize,
-                        },
-                    );
-
-                    let old_fb = mem::replace(&mut map.fb, fb);
-                    map.mapping = new_map;
-
-                    let _ = map.display_handle.destroy_dumb_buffer(old_fb);
-
-                    eprintln!("fbbootlogd: mapped display");
-                }
+                Ok(fb) => match text_screen.resize(map, fb) {
+                    Ok(()) => eprintln!("fbbootlogd: mapped display"),
+                    Err(err) => {
+                        eprintln!("fbbootlogd: failed to open display: {}", err);
+                        return;
+                    }
+                },
                 Err(err) => {
                     eprintln!("fbbootlogd: failed to create framebuffer: {}", err);
                     return;
@@ -271,11 +245,7 @@ impl SchemeSync for FbbootlogScheme {
             self.text_buffer.write(buf);
 
             if !self.is_scrollback {
-                let damage = self.text_screen.write(
-                    unsafe { &mut map.console_map() },
-                    buf,
-                    &mut VecDeque::new(),
-                );
+                let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
 
                 if let Some(map) = &self.display_map {
                     map.display_handle
