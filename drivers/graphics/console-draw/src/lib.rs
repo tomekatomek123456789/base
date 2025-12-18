@@ -4,8 +4,30 @@ use std::collections::VecDeque;
 use std::convert::{TryFrom, TryInto};
 use std::{cmp, ptr};
 
+use drm::buffer::Buffer;
+use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
 use graphics_ipc::v1::Damage;
+use graphics_ipc::v2::V2GraphicsHandle;
 use orbclient::FONT;
+
+pub struct V2DisplayMap {
+    pub display_handle: V2GraphicsHandle,
+    pub fb: DumbBuffer,
+    pub mapping: DumbMapping<'static>,
+}
+
+impl V2DisplayMap {
+    pub unsafe fn console_map(&mut self) -> DisplayMap {
+        DisplayMap {
+            offscreen: ptr::slice_from_raw_parts_mut(
+                self.mapping.as_mut_ptr() as *mut u32,
+                self.mapping.len() / 4,
+            ),
+            width: self.fb.size().0 as usize,
+            height: self.fb.size().1 as usize,
+        }
+    }
+}
 
 pub struct DisplayMap {
     pub offscreen: *mut [u32],

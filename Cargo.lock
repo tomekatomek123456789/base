@@ -469,6 +469,7 @@ dependencies = [
 name = "console-draw"
 version = "0.1.0"
 dependencies = [
+ "drm",
  "graphics-ipc",
  "orbclient",
  "ransid",
@@ -956,7 +957,6 @@ version = "0.1.0"
 dependencies = [
  "common",
  "drm",
- "drm-fourcc",
  "libredox",
  "log",
  "redox-ioctl",

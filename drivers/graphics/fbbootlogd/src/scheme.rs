@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 use std::{cmp, mem, ptr};
 
-use console_draw::TextScreen;
-use drm::buffer::Buffer;
-use drm::control::dumbbuffer::{DumbBuffer, DumbMapping};
+use console_draw::{TextScreen, V2DisplayMap};
+use drm::buffer::{Buffer, DrmFourcc};
+use drm::control::dumbbuffer::DumbMapping;
+use drm::control::Device;
 use graphics_ipc::v2::V2GraphicsHandle;
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
@@ -12,28 +13,9 @@ use redox_scheme::{CallerCtx, OpenResult};
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, Result, EINVAL, ENOENT};
 
-pub struct DisplayMap {
-    display_handle: V2GraphicsHandle,
-    fb: DumbBuffer,
-    mapping: DumbMapping<'static>,
-}
-
-impl DisplayMap {
-    unsafe fn console_map(&mut self) -> console_draw::DisplayMap {
-        console_draw::DisplayMap {
-            offscreen: ptr::slice_from_raw_parts_mut(
-                self.mapping.as_mut_ptr() as *mut u32,
-                self.mapping.len() / 4,
-            ),
-            width: self.fb.size().0 as usize,
-            height: self.fb.size().1 as usize,
-        }
-    }
-}
-
 pub struct FbbootlogScheme {
     pub input_handle: ConsumerHandle,
-    display_map: Option<DisplayMap>,
+    display_map: Option<V2DisplayMap>,
     text_screen: console_draw::TextScreen,
     text_buffer: console_draw::TextBuffer,
     is_scrollback: bool,
@@ -68,13 +50,15 @@ impl FbbootlogScheme {
         };
 
         let (width, height) = new_display_handle
-            .display_size(new_display_handle.first_display().unwrap())
-            .unwrap();
+            .get_connector(new_display_handle.first_display().unwrap(), true)
+            .unwrap()
+            .modes()[0]
+            .size();
         let mut fb = new_display_handle
-            .create_dumb_framebuffer(width, height)
+            .create_dumb_buffer((width.into(), height.into()), DrmFourcc::Argb8888, 32)
             .unwrap();
 
-        let display_map = match new_display_handle.map_dumb_framebuffer(&mut fb) {
+        let display_map = match new_display_handle.map_dumb_buffer(&mut fb) {
             Ok(display_map) => unsafe {
                 mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(display_map)
             },
@@ -84,7 +68,7 @@ impl FbbootlogScheme {
             }
         };
 
-        self.display_map = Some(DisplayMap {
+        self.display_map = Some(V2DisplayMap {
             display_handle: new_display_handle,
             mapping: display_map,
             fb,
@@ -178,13 +162,11 @@ impl FbbootlogScheme {
         }
     }
 
-    fn handle_resize(map: &mut DisplayMap, text_screen: &mut TextScreen) {
-        let (width, height) = match map
-            .display_handle
-            .first_display()
-            .and_then(|handle| map.display_handle.display_size(handle))
-        {
-            Ok((width, height)) => (width, height),
+    fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
+        let (width, height) = match map.display_handle.first_display().and_then(|handle| {
+            Ok(map.display_handle.get_connector(handle, true)?.modes()[0].size())
+        }) {
+            Ok((width, height)) => (width.into(), height.into()),
             Err(err) => {
                 eprintln!("fbbootlogd: failed to get display size: {}", err);
                 map.fb.size()
@@ -192,9 +174,12 @@ impl FbbootlogScheme {
         };
 
         if (width, height) != map.fb.size() {
-            match map.display_handle.create_dumb_framebuffer(width, height) {
+            match map
+                .display_handle
+                .create_dumb_buffer((width, height), DrmFourcc::Argb8888, 32)
+            {
                 Ok(mut fb) => {
-                    let mut new_map = match map.display_handle.map_dumb_framebuffer(&mut fb) {
+                    let mut new_map = match map.display_handle.map_dumb_buffer(&mut fb) {
                         Ok(new_map) => unsafe {
                             mem::transmute::<DumbMapping<'_>, DumbMapping<'static>>(new_map)
                         },
@@ -221,7 +206,7 @@ impl FbbootlogScheme {
                     let old_fb = mem::replace(&mut map.fb, fb);
                     map.mapping = new_map;
 
-                    let _ = map.display_handle.destroy_dumb_framebuffer(old_fb);
+                    let _ = map.display_handle.destroy_dumb_buffer(old_fb);
 
                     eprintln!("fbbootlogd: mapped display");
                 }
