@@ -5,7 +5,7 @@ authors = ["Alex Lyon <arcterus@mail.com>"]
 edition = "2021"
 
 [dependencies]
-redox_syscall = "0.5"
-redox-scheme = "0.8.2"
+redox_syscall = "0.6"
+redox-scheme = "0.8.3"
 daemon = { path = "../daemon" }
 libredox = "0.1.3"

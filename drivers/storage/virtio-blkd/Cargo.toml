@@ -13,7 +13,7 @@ futures = { version = "0.3.28", features = ["executor"] }
 spin = "*"
 
 redox_event = "0.4"
-redox_syscall = { version = "0.5", features = ["std"] }
+redox_syscall = { version = "0.6", features = ["std"] }
 
 common = { path = "../../common" }
 daemon = { path = "../../../daemon" }

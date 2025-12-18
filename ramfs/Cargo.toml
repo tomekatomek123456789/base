@@ -10,8 +10,8 @@ description = "In-memory filesystem for Redox, which is useful for early logging
 
 [dependencies]
 daemon = { path = "../daemon" }
-redox_syscall = "0.5.10"
-redox-scheme = "0.8.2"
-libredox = "0.1.3"
+redox_syscall = "0.6.0"
+redox-scheme = "0.8.3"
+libredox = { version = "0.1.11", features = ["call"] }
 indexmap = "2.5.0"
 slab = "0.4.9"

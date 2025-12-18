@@ -6,8 +6,24 @@ use std::{
 };
 use syscall::{
     data::Stat, error::*, schemev2::NewFdFlags, Error, Map, MapFlags, Result, MAP_PRIVATE,
-    MAP_SHARED, PAGE_SIZE, PROT_READ, PROT_WRITE,
+    PAGE_SIZE, PROT_READ, PROT_WRITE,
 };
+
+enum Handle {
+    Shm(Rc<str>),
+    SchemeRoot,
+}
+impl Handle {
+    fn as_shm(&self) -> Option<&Rc<str>> {
+        match self {
+            Self::Shm(path) => Some(path),
+            Self::SchemeRoot => None,
+        }
+    }
+}
+
+// TODO: Move to relibc
+const AT_REMOVEDIR: usize = 0x200;
 
 #[derive(Default)]
 pub struct ShmHandle {
@@ -17,7 +33,7 @@ pub struct ShmHandle {
 }
 pub struct ShmScheme {
     maps: HashMap<Rc<str>, ShmHandle>,
-    handles: HashMap<usize, Rc<str>>,
+    handles: HashMap<usize, Handle>,
     next_id: usize,
 }
 impl ShmScheme {
@@ -33,6 +49,17 @@ impl ShmScheme {
 impl SchemeSync for ShmScheme {
     //FIXME: Handle O_RDONLY/O_WRONLY/O_RDWR
     fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+        if path.is_empty() {
+            let id = self.next_id;
+            self.next_id += 1;
+
+            self.handles.insert(id, Handle::SchemeRoot);
+
+            return Ok(OpenResult::ThisScheme {
+                number: id,
+                flags: NewFdFlags::empty(),
+            });
+        }
         let path = Rc::from(path);
         let entry = match self.maps.entry(Rc::clone(&path)) {
             Entry::Occupied(e) => {
@@ -49,7 +76,7 @@ impl SchemeSync for ShmScheme {
             }
         };
         entry.refs += 1;
-        self.handles.insert(self.next_id, path);
+        self.handles.insert(self.next_id, Handle::Shm(path));
 
         let id = self.next_id;
         self.next_id += 1;
@@ -68,14 +95,20 @@ impl SchemeSync for ShmScheme {
         }
 
         // Write path
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = self
+            .handles
+            .get(&id)
+            .and_then(Handle::as_shm)
+            .ok_or(Error::new(EBADF))?;
         let len = cmp::min(path.len(), buf.len() - PREFIX.len());
         buf[PREFIX.len()..][..len].copy_from_slice(&path.as_bytes()[..len]);
 
         Ok(PREFIX.len() + len)
     }
     fn on_close(&mut self, id: usize) {
-        let path = self.handles.remove(&id).unwrap();
+        let Handle::Shm(path) = self.handles.remove(&id).unwrap() else {
+            return;
+        };
         let mut entry = match self.maps.entry(path) {
             Entry::Occupied(entry) => entry,
             Entry::Vacant(_) => panic!("handle pointing to nothing"),
@@ -86,7 +119,14 @@ impl SchemeSync for ShmScheme {
             entry.remove_entry();
         }
     }
-    fn unlink(&mut self, path: &str, ctx: &CallerCtx) -> Result<()> {
+    fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<()> {
+        let handle = self.handles.get(&dirfd).ok_or(Error::new(EBADF))?;
+        if !matches!(handle, Handle::SchemeRoot) {
+            return Err(Error::new(EACCES));
+        }
+        if flags & AT_REMOVEDIR == AT_REMOVEDIR {
+            return Err(Error::new(ENOTDIR));
+        }
         let path = Rc::from(path);
         let mut entry = match self.maps.entry(Rc::clone(&path)) {
             Entry::Occupied(e) => e,
@@ -101,7 +141,11 @@ impl SchemeSync for ShmScheme {
         Ok(())
     }
     fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = self
+            .handles
+            .get(&id)
+            .and_then(Handle::as_shm)
+            .ok_or(Error::new(EBADF))?;
         let size = match self
             .maps
             .get(path)
@@ -122,7 +166,11 @@ impl SchemeSync for ShmScheme {
         Ok(())
     }
     fn ftruncate(&mut self, id: usize, len: u64, _ctx: &CallerCtx) -> Result<()> {
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = self
+            .handles
+            .get(&id)
+            .and_then(Handle::as_shm)
+            .ok_or(Error::new(EBADF))?;
         match self
             .maps
             .get_mut(path)
@@ -135,7 +183,7 @@ impl SchemeSync for ShmScheme {
                 Err(Error::new(EIO))
             }
             ref mut buf @ None => {
-                *buf = Some(MmapGuard::alloc((len as usize))?);
+                *buf = Some(MmapGuard::alloc(len as usize)?);
                 Ok(())
             }
         }
@@ -148,7 +196,11 @@ impl SchemeSync for ShmScheme {
         _flags: MapFlags,
         _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = self
+            .handles
+            .get(&id)
+            .and_then(Handle::as_shm)
+            .ok_or(Error::new(EBADF))?;
         let total_size = offset as usize + size;
         match self
             .maps
@@ -174,10 +226,14 @@ impl SchemeSync for ShmScheme {
         id: usize,
         buf: &mut [u8],
         offset: u64,
-        fcntl_flags: u32,
-        ctx: &CallerCtx,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = self
+            .handles
+            .get(&id)
+            .and_then(Handle::as_shm)
+            .ok_or(Error::new(EBADF))?;
         match self
             .maps
             .get_mut(path)
@@ -193,10 +249,14 @@ impl SchemeSync for ShmScheme {
         id: usize,
         buf: &[u8],
         offset: u64,
-        fcntl_flags: u32,
-        ctx: &CallerCtx,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
     ) -> Result<usize> {
-        let path = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let path = self
+            .handles
+            .get(&id)
+            .and_then(Handle::as_shm)
+            .ok_or(Error::new(EBADF))?;
         match self
             .maps
             .get_mut(path)

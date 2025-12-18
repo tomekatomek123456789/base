@@ -6,12 +6,13 @@ use core::str;
 use alloc::string::String;
 
 use hashbrown::HashMap;
-use redox_initfs::{types::Timespec, InitFs, Inode, InodeDir, InodeKind, InodeStruct};
+use redox_initfs::{InitFs, Inode, InodeDir, InodeKind, InodeStruct, types::Timespec};
 
 use redox_path::canonicalize_to_standard;
-use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, RequestKind};
+use redox_scheme::{CallerCtx, OpenResult, RequestKind, scheme::SchemeSync};
 
 use redox_scheme::{SignalBehavior, Socket};
+use syscall::PAGE_SIZE;
 use syscall::data::Stat;
 use syscall::dirent::DirEntry;
 use syscall::dirent::DirentBuf;
@@ -19,7 +20,6 @@ use syscall::dirent::DirentKind;
 use syscall::error::*;
 use syscall::flag::*;
 use syscall::schemev2::NewFdFlags;
-use syscall::PAGE_SIZE;
 
 struct Handle {
     inode: Inode,
@@ -396,4 +396,32 @@ pub unsafe extern "C" fn redox_open_v1(ptr: *const u8, len: usize, flags: usize)
 #[unsafe(no_mangle)]
 pub extern "C" fn redox_close_v1(fd: usize) -> isize {
     Error::mux(syscall::close(fd)) as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn redox_sys_call_v0(
+    fd: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    flags: usize,
+    metadata: *const u64,
+    metadata_len: usize,
+) -> isize {
+    let flags = CallFlags::from_bits_retain(flags);
+
+    let metadata = unsafe { core::slice::from_raw_parts(metadata, metadata_len) };
+
+    let result = if flags.contains(CallFlags::READ) {
+        let payload = unsafe { core::slice::from_raw_parts_mut(payload, payload_len) };
+        if flags.contains(CallFlags::WRITE) {
+            syscall::call_rw(fd, payload, flags, metadata)
+        } else {
+            syscall::call_ro(fd, payload, flags, metadata)
+        }
+    } else {
+        let payload = unsafe { core::slice::from_raw_parts(payload, payload_len) };
+        syscall::call_wo(fd, payload, flags, metadata)
+    };
+
+    Error::mux(result) as isize
 }
