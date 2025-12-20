@@ -1,0 +1,153 @@
+use std::collections::HashMap;
+
+use drm_sys::drm_mode_modeinfo;
+use syscall::{Error, Result, EINVAL};
+
+use crate::GraphicsAdapter;
+
+pub struct DrmObjects<T: GraphicsAdapter> {
+    next_id: DrmObjectId,
+    objects: HashMap<DrmObjectId, DrmObject<T>>,
+}
+
+impl<T: GraphicsAdapter> DrmObjects<T> {
+    pub(crate) fn new() -> Self {
+        DrmObjects {
+            next_id: DrmObjectId(1),
+            objects: HashMap::new(),
+        }
+    }
+
+    pub fn add_connector(&mut self, connector: DrmConnector<T>) -> DrmObjectId {
+        let connector_id = self.next_id;
+        self.objects.insert(
+            connector_id,
+            DrmObject {
+                kind: DrmObjectKind::Connector(connector),
+            },
+        );
+        self.next_id.0 += 1;
+
+        let encoder_id = self.next_id;
+        self.objects.insert(
+            encoder_id,
+            DrmObject {
+                kind: DrmObjectKind::Encoder(DrmEncoder {
+                    crtc_id: DrmObjectId::INVALID,
+                    possible_crtcs: 0,
+                    possible_clones: 0,
+                }),
+            },
+        );
+        self.next_id.0 += 1;
+
+        // Attach encoder to connector
+        self.get_connector_mut(connector_id).unwrap().encoder_id = encoder_id;
+
+        connector_id
+    }
+
+    pub fn connectors(&self) -> impl Iterator<Item = DrmObjectId> + use<'_, T> {
+        self.objects
+            .iter()
+            .filter_map(|(&id, object)| match object.kind {
+                DrmObjectKind::Connector(_) => Some(id),
+                _ => None,
+            })
+    }
+
+    pub fn get_connector(&self, id: DrmObjectId) -> Result<&DrmConnector<T>> {
+        let object = self.objects.get(&id).ok_or(Error::new(EINVAL))?;
+        match &object.kind {
+            DrmObjectKind::Connector(drm_connector) => Ok(drm_connector),
+            _ => Err(Error::new(EINVAL)),
+        }
+    }
+
+    pub fn get_connector_mut(&mut self, id: DrmObjectId) -> Result<&mut DrmConnector<T>> {
+        let object = self.objects.get_mut(&id).ok_or(Error::new(EINVAL))?;
+        match &mut object.kind {
+            DrmObjectKind::Connector(drm_connector) => Ok(drm_connector),
+            _ => Err(Error::new(EINVAL)),
+        }
+    }
+
+    pub fn encoders(&self) -> impl Iterator<Item = DrmObjectId> + use<'_, T> {
+        self.objects
+            .iter()
+            .filter_map(|(&id, object)| match object.kind {
+                DrmObjectKind::Encoder(_) => Some(id),
+                _ => None,
+            })
+    }
+
+    pub fn get_encoder(&self, id: DrmObjectId) -> Result<&DrmEncoder> {
+        let object = self.objects.get(&id).ok_or(Error::new(EINVAL))?;
+        match &object.kind {
+            DrmObjectKind::Encoder(drm_encoder) => Ok(drm_encoder),
+            _ => Err(Error::new(EINVAL)),
+        }
+    }
+
+    pub fn get_encoder_mut(&mut self, id: DrmObjectId) -> Result<&mut DrmEncoder> {
+        let object = self.objects.get_mut(&id).ok_or(Error::new(EINVAL))?;
+        match &mut object.kind {
+            DrmObjectKind::Encoder(drm_encoder) => Ok(drm_encoder),
+            _ => Err(Error::new(EINVAL)),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub struct DrmObjectId(pub(crate) u32);
+
+impl DrmObjectId {
+    pub const INVALID: DrmObjectId = DrmObjectId(0);
+}
+
+struct DrmObject<T: GraphicsAdapter> {
+    kind: DrmObjectKind<T>,
+}
+
+enum DrmObjectKind<T: GraphicsAdapter> {
+    Connector(DrmConnector<T>),
+    Encoder(DrmEncoder),
+}
+
+pub struct DrmConnector<T: GraphicsAdapter> {
+    pub modes: Vec<drm_mode_modeinfo>,
+    pub encoder_id: DrmObjectId,
+    pub connector_type: u32,
+    pub connector_type_id: u32,
+    pub connection: DrmConnectorStatus,
+    pub mm_width: u32,
+    pub mm_height: u32,
+    pub subpixel: DrmSubpixelOrder,
+    pub driver_data: T::Connector,
+}
+
+#[derive(Copy, Clone)]
+#[repr(u32)]
+pub enum DrmConnectorStatus {
+    Disconnected = 0,
+    Connected = 1,
+    Unknown = 2,
+}
+
+#[derive(Copy, Clone)]
+#[repr(u32)]
+pub enum DrmSubpixelOrder {
+    Unknown = 0,
+    HorizontalRGB,
+    HorizontalBGR,
+    VerticalRGB,
+    VerticalBGR,
+    None,
+}
+
+// FIXME can we represent connector and encoder using a single struct?
+pub struct DrmEncoder {
+    pub crtc_id: DrmObjectId,
+    pub possible_crtcs: u32,
+    pub possible_clones: u32,
+}

@@ -2,7 +2,12 @@ use std::alloc::{self, Layout};
 use std::convert::TryInto;
 use std::ptr::{self, NonNull};
 
-use driver_graphics::{CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter};
+use driver_graphics::objects::{
+    DrmConnector, DrmConnectorStatus, DrmObjectId, DrmObjects, DrmSubpixelOrder,
+};
+use driver_graphics::{
+    modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
+};
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use syscall::{EINVAL, PAGE_SIZE};
@@ -16,6 +21,8 @@ pub enum VesadCursor {}
 impl CursorFramebuffer for VesadCursor {}
 
 impl GraphicsAdapter for FbAdapter {
+    type Connector = ();
+
     type Framebuffer = GraphicScreen;
     type Cursor = VesadCursor;
 
@@ -25,6 +32,25 @@ impl GraphicsAdapter for FbAdapter {
 
     fn desc(&self) -> &'static [u8] {
         b"VESA"
+    }
+
+    fn init(&mut self, objects: &mut DrmObjects<Self>) {
+        for framebuffer in &self.framebuffers {
+            objects.add_connector(DrmConnector {
+                modes: vec![modeinfo_for_size(
+                    framebuffer.width as u32,
+                    framebuffer.height as u32,
+                )],
+                encoder_id: DrmObjectId::INVALID,
+                connector_type: 0,
+                connector_type_id: 0,
+                connection: DrmConnectorStatus::Connected,
+                mm_width: 0,
+                mm_height: 0,
+                subpixel: DrmSubpixelOrder::Unknown,
+                driver_data: (),
+            });
+        }
     }
 
     fn get_cap(&self, cap: u32) -> syscall::Result<u64> {

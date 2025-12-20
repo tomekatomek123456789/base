@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use common::{dma::Dma, sgl};
+use driver_graphics::objects::{
+    DrmConnector, DrmConnectorStatus, DrmObjectId, DrmObjects, DrmSubpixelOrder,
+};
 use driver_graphics::{
-    CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter, GraphicsScheme,
+    modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter, GraphicsScheme,
 };
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
@@ -24,6 +27,10 @@ impl Into<GpuRect> for Damage {
             height: self.height,
         }
     }
+}
+
+pub struct VirtGpuConnector {
+    display_id: u32,
 }
 
 pub struct VirtGpuFramebuffer<'a> {
@@ -75,6 +82,7 @@ pub struct Display {
 }
 
 pub struct VirtGpuAdapter<'a> {
+    pub config: &'a mut GpuConfig,
     control_queue: Arc<Queue<'a>>,
     cursor_queue: Arc<Queue<'a>>,
     transport: Arc<dyn Transport>,
@@ -82,9 +90,9 @@ pub struct VirtGpuAdapter<'a> {
 }
 
 impl VirtGpuAdapter<'_> {
-    pub async fn update_displays(&mut self, config: &mut GpuConfig) -> Result<(), Error> {
-        let mut display_info = self.get_display_info().await?;
-        let raw_displays = &mut display_info.display_info[..config.num_scanouts() as usize];
+    pub async fn update_displays(&mut self, objects: &mut DrmObjects<Self>) -> Result<(), Error> {
+        let display_info = self.get_display_info().await?;
+        let raw_displays = &display_info.display_info[..self.config.num_scanouts() as usize];
 
         self.displays.resize(
             raw_displays.len(),
@@ -111,6 +119,19 @@ impl VirtGpuAdapter<'_> {
                 self.displays[i].width = info.rect.width;
                 self.displays[i].height = info.rect.height;
             }
+        }
+
+        for connector in objects.connectors().collect::<Vec<_>>() {
+            let connector = objects.get_connector_mut(connector).unwrap();
+            let display = &self.displays[connector.driver_data.display_id as usize];
+
+            connector.modes = vec![modeinfo_for_size(display.width, display.height)];
+            connector.connection =
+                if raw_displays[connector.driver_data.display_id as usize].enabled != 0 {
+                    DrmConnectorStatus::Connected
+                } else {
+                    DrmConnectorStatus::Disconnected
+                };
         }
 
         Ok(())
@@ -198,6 +219,8 @@ impl VirtGpuAdapter<'_> {
 }
 
 impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
+    type Connector = VirtGpuConnector;
+
     type Framebuffer = VirtGpuFramebuffer<'a>;
     type Cursor = VirtGpuCursor;
 
@@ -207,6 +230,26 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
 
     fn desc(&self) -> &'static [u8] {
         b"VirtIO GPU"
+    }
+
+    fn init(&mut self, objects: &mut DrmObjects<Self>) {
+        for display_id in 0..self.config.num_scanouts.get() {
+            objects.add_connector(DrmConnector {
+                modes: vec![],
+                encoder_id: DrmObjectId::INVALID,
+                connector_type: 0,
+                connector_type_id: 0,
+                connection: DrmConnectorStatus::Disconnected,
+                mm_width: 0,
+                mm_height: 0,
+                subpixel: DrmSubpixelOrder::Unknown,
+                driver_data: VirtGpuConnector { display_id },
+            });
+        }
+
+        futures::executor::block_on(async {
+            self.update_displays(objects).await.unwrap();
+        });
     }
 
     fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
@@ -425,20 +468,19 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
 pub struct GpuScheme {}
 
 impl<'a> GpuScheme {
-    pub async fn new(
-        config: &mut GpuConfig,
+    pub fn new(
+        config: &'a mut GpuConfig,
         control_queue: Arc<Queue<'a>>,
         cursor_queue: Arc<Queue<'a>>,
         transport: Arc<dyn Transport>,
     ) -> Result<(GraphicsScheme<VirtGpuAdapter<'a>>, DisplayHandle), Error> {
-        let mut adapter = VirtGpuAdapter {
+        let adapter = VirtGpuAdapter {
+            config,
             control_queue,
             cursor_queue,
             transport,
             displays: vec![],
         };
-
-        adapter.update_displays(config).await?;
 
         let scheme = GraphicsScheme::new(adapter, "display.virtio-gpu".to_owned());
         let handle = DisplayHandle::new("virtio-gpu").unwrap();
