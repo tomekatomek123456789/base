@@ -2,12 +2,14 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_char;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem;
 use std::mem::transmute;
 use std::sync::Arc;
 
+use drm_sys::drm_mode_modeinfo;
 use graphics_ipc::v1::CursorDamage;
 use graphics_ipc::v2::Damage;
 use inputd::{VtEvent, VtEventKind};
@@ -17,15 +19,25 @@ use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, MapFlags, Result, EAGAIN, EBADF, EINVAL, ENOENT, EOPNOTSUPP};
 
-pub trait GraphicsAdapter {
+use crate::objects::{DrmConnector, DrmObjectId, DrmObjects};
+
+pub mod objects;
+
+pub trait GraphicsAdapter: Sized + Debug {
+    type Connector: Debug;
+
     type Framebuffer: Framebuffer;
     type Cursor: CursorFramebuffer;
 
     fn name(&self) -> &'static [u8];
     fn desc(&self) -> &'static [u8];
 
+    fn init(&mut self, objects: &mut DrmObjects<Self>);
+
     fn get_cap(&self, cap: u32) -> Result<u64>;
     fn set_client_cap(&self, cap: u32, value: u64) -> Result<()>;
+
+    fn probe_connector(&mut self, connector: &mut DrmConnector<Self>);
 
     /// The maximum amount of displays that could be attached.
     ///
@@ -65,6 +77,7 @@ pub struct GraphicsScheme<T: GraphicsAdapter> {
     scheme_name: String,
     disable_graphical_debug: Option<File>,
     socket: Socket,
+    objects: DrmObjects<T>,
     next_id: usize,
     handles: BTreeMap<usize, Handle<T>>,
 
@@ -90,7 +103,7 @@ enum Handle<T: GraphicsAdapter> {
 }
 
 impl<T: GraphicsAdapter> GraphicsScheme<T> {
-    pub fn new(adapter: T, scheme_name: String) -> Self {
+    pub fn new(mut adapter: T, scheme_name: String) -> Self {
         assert!(scheme_name.starts_with("display"));
         let socket = Socket::nonblock(&scheme_name).expect("failed to create graphics scheme");
 
@@ -99,11 +112,16 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
                 .expect("vesad: Failed to open /scheme/debug/disable-graphical-debug"),
         );
 
+        let mut objects = DrmObjects::new();
+        adapter.init(&mut objects);
+        objects.for_each_connector_mut(|connector| adapter.probe_connector(connector));
+
         GraphicsScheme {
             adapter,
             scheme_name,
             disable_graphical_debug,
             socket,
+            objects,
             next_id: 0,
             handles: BTreeMap::new(),
             active_vt: 0,
@@ -121,6 +139,18 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
 
     pub fn adapter_mut(&mut self) -> &mut T {
         &mut self.adapter
+    }
+
+    pub fn objects(&self) -> &DrmObjects<T> {
+        &self.objects
+    }
+
+    pub fn objects_mut(&mut self) -> &mut DrmObjects<T> {
+        &mut self.objects
+    }
+
+    pub fn adapter_and_objects_mut(&mut self) -> (&mut T, &mut DrmObjects<T>) {
+        (&mut self.adapter, &mut self.objects)
     }
 
     pub fn handle_vt_event(&mut self, vt_event: VtEvent) {
@@ -440,16 +470,8 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
             id & 0xFF
         }
 
-        fn conn_id(i: u32) -> u32 {
-            id_index(i) | (1 << 8)
-        }
-
         fn crtc_id(i: u32) -> u32 {
             id_index(i) | (1 << 9)
-        }
-
-        fn enc_id(i: u32) -> u32 {
-            id_index(i) | (1 << 10)
         }
 
         fn fb_id(i: u32) -> u32 {
@@ -466,40 +488,6 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
 
         fn dumb_buffer_id(i: u32) -> u32 {
             id_index(i) | (1 << 14)
-        }
-
-        fn modeinfo_for_size(width: u32, height: u32) -> drm_sys::drm_mode_modeinfo {
-            let mut modeinfo = drm_sys::drm_mode_modeinfo {
-                // The actual visible display size
-                hdisplay: width as u16,
-                vdisplay: height as u16,
-
-                // These are used to calculate the refresh rate
-                clock: 60 * width * height / 1000,
-                htotal: width as u16,
-                vtotal: height as u16,
-                vscan: 0,
-                vrefresh: 60,
-
-                type_: drm_sys::DRM_MODE_TYPE_PREFERRED | drm_sys::DRM_MODE_TYPE_DRIVER,
-                name: [0; 32],
-
-                // These only matter when modesetting physical display adapters. For
-                // those we should be able to parse the EDID blob.
-                hsync_start: width as u16,
-                hsync_end: width as u16,
-                hskew: 0,
-                vsync_start: height as u16,
-                vsync_end: height as u16,
-                flags: 0,
-            };
-
-            let name = format!("{width}x{height}").into_bytes();
-            for (to, from) in modeinfo.name.iter_mut().zip(name) {
-                *to = from as c_char;
-            }
-
-            modeinfo
         }
 
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
@@ -539,14 +527,22 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 }),
                 ipc::MODE_CARD_RES => ipc::DrmModeCardRes::with(payload, |mut data| {
                     let count = self.adapter.display_count();
-                    let mut conn_ids = Vec::with_capacity(count);
+                    let conn_ids = self
+                        .objects
+                        .connector_ids()
+                        .iter()
+                        .map(|id| id.0)
+                        .collect::<Vec<_>>();
                     let mut crtc_ids = Vec::with_capacity(count);
-                    let mut enc_ids = Vec::with_capacity(count);
+                    let enc_ids = self
+                        .objects
+                        .encoder_ids()
+                        .iter()
+                        .map(|id| id.0)
+                        .collect::<Vec<_>>();
                     let mut fb_ids = Vec::with_capacity(count);
                     for i in 0..(count as u32) {
-                        conn_ids.push(conn_id(i));
                         crtc_ids.push(crtc_id(i));
-                        enc_ids.push(enc_id(i));
                         fb_ids.push(fb_id(i));
                     }
                     data.set_fb_id_ptr(&fb_ids);
@@ -561,7 +557,6 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 }),
                 ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {
                     let i = id_index(data.crtc_id());
-                    let (width, height) = self.adapter.display_size(i as usize);
                     //TOOD: connectors
                     data.set_fb_id(fb_id(i));
                     data.set_x(0);
@@ -573,21 +568,27 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     Ok(0)
                 }),
                 ipc::MODE_GET_ENCODER => ipc::DrmModeGetEncoder::with(payload, |mut data| {
-                    let i = id_index(data.encoder_id());
-                    let (width, height) = self.adapter.display_size(i as usize);
-                    data.set_crtc_id(crtc_id(i));
-                    data.set_possible_crtcs(1 << i);
-                    data.set_possible_clones(1 << i);
+                    let encoder = self.objects.get_encoder(DrmObjectId(data.encoder_id()))?;
+                    data.set_crtc_id(encoder.crtc_id.0);
+                    data.set_possible_crtcs(encoder.possible_crtcs);
+                    data.set_possible_clones(encoder.possible_clones);
                     Ok(0)
                 }),
                 ipc::MODE_GET_CONNECTOR => ipc::DrmModeGetConnector::with(payload, |mut data| {
-                    let i = id_index(data.connector_id());
-                    let (width, height) = self.adapter.display_size(i as usize);
-                    data.set_connection(1 /* connected */);
-                    data.set_modes_ptr(&[modeinfo_for_size(width, height)]);
+                    let connector = self
+                        .objects
+                        .get_connector_mut(DrmObjectId(data.connector_id()))?;
+                    if data.count_modes() == 0 {
+                        self.adapter.probe_connector(connector);
+                    }
+                    data.set_connection(connector.connection as u32);
+                    data.set_modes_ptr(&connector.modes);
+                    data.set_mm_width(connector.mm_width);
+                    data.set_mm_height(connector.mm_width);
+                    data.set_subpixel(connector.subpixel as u32);
                     data.set_props_ptr(&[]);
                     data.set_prop_values_ptr(&[]);
-                    data.set_encoders_ptr(&[enc_id(i)]);
+                    data.set_encoders_ptr(&[connector.encoder_id.0]);
                     Ok(0)
                 }),
                 ipc::MODE_GET_FB => ipc::DrmModeFbCmd::with(payload, |mut data| {
@@ -656,7 +657,6 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 }),
                 ipc::MODE_GET_PLANE => ipc::DrmModeGetPlane::with(payload, |mut data| {
                     let i = id_index(data.plane_id());
-                    let (width, height) = self.adapter.display_size(i as usize);
                     data.set_crtc_id(crtc_id(i));
                     data.set_fb_id(fb_id(i));
                     data.set_possible_crtcs(1 << i);
@@ -747,4 +747,38 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     fn on_close(&mut self, id: usize) {
         self.handles.remove(&id);
     }
+}
+
+pub fn modeinfo_for_size(width: u32, height: u32) -> drm_mode_modeinfo {
+    let mut modeinfo = drm_mode_modeinfo {
+        // The actual visible display size
+        hdisplay: width as u16,
+        vdisplay: height as u16,
+
+        // These are used to calculate the refresh rate
+        clock: 60 * width * height / 1000,
+        htotal: width as u16,
+        vtotal: height as u16,
+        vscan: 0,
+        vrefresh: 60,
+
+        type_: drm_sys::DRM_MODE_TYPE_PREFERRED | drm_sys::DRM_MODE_TYPE_DRIVER,
+        name: [0; 32],
+
+        // These only matter when modesetting physical display adapters. For
+        // those we should be able to parse the EDID blob.
+        hsync_start: width as u16,
+        hsync_end: width as u16,
+        hskew: 0,
+        vsync_start: height as u16,
+        vsync_end: height as u16,
+        flags: 0,
+    };
+
+    let name = format!("{width}x{height}").into_bytes();
+    for (to, from) in modeinfo.name.iter_mut().zip(name) {
+        *to = from as c_char;
+    }
+
+    modeinfo
 }

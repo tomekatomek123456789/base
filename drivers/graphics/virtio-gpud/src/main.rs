@@ -23,6 +23,7 @@
 use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use driver_graphics::GraphicsAdapter;
 use event::{user_data, EventQueue};
 use pcid_interface::PciFunctionHandle;
 
@@ -477,12 +478,12 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
     device.transport.run_device();
     deamon.ready();
 
-    let (mut scheme, mut inputd_handle) = futures::executor::block_on(scheme::GpuScheme::new(
+    let (mut scheme, mut inputd_handle) = scheme::GpuScheme::new(
         config,
         control_queue.clone(),
         cursor_queue.clone(),
         device.transport.clone(),
-    ))?;
+    )?;
 
     user_data! {
         enum Source {
@@ -538,13 +539,18 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
             Source::Interrupt => loop {
                 let before_gen = device.transport.config_generation();
 
-                let events = config.events_read.get();
+                let events = scheme.adapter().config.events_read.get();
 
                 if events & VIRTIO_GPU_EVENT_DISPLAY != 0 {
-                    futures::executor::block_on(scheme.adapter_mut().update_displays(config))
-                        .unwrap();
+                    let (adapter, objects) = scheme.adapter_and_objects_mut();
+                    futures::executor::block_on(async { adapter.update_displays().await.unwrap() });
+                    objects.for_each_connector_mut(|connector| adapter.probe_connector(connector));
                     scheme.notify_displays_changed();
-                    config.events_clear.set(VIRTIO_GPU_EVENT_DISPLAY);
+                    scheme
+                        .adapter_mut()
+                        .config
+                        .events_clear
+                        .set(VIRTIO_GPU_EVENT_DISPLAY);
                 }
 
                 let after_gen = device.transport.config_generation();

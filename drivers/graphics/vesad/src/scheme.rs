@@ -2,13 +2,23 @@ use std::alloc::{self, Layout};
 use std::convert::TryInto;
 use std::ptr::{self, NonNull};
 
-use driver_graphics::{CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter};
+use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
+use driver_graphics::{
+    modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
+};
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use syscall::{EINVAL, PAGE_SIZE};
 
+#[derive(Debug)]
 pub struct FbAdapter {
     pub framebuffers: Vec<FrameBuffer>,
+}
+
+#[derive(Debug)]
+pub struct Connector {
+    width: u32,
+    height: u32,
 }
 
 pub enum VesadCursor {}
@@ -16,6 +26,8 @@ pub enum VesadCursor {}
 impl CursorFramebuffer for VesadCursor {}
 
 impl GraphicsAdapter for FbAdapter {
+    type Connector = Connector;
+
     type Framebuffer = GraphicScreen;
     type Cursor = VesadCursor;
 
@@ -25,6 +37,15 @@ impl GraphicsAdapter for FbAdapter {
 
     fn desc(&self) -> &'static [u8] {
         b"VESA"
+    }
+
+    fn init(&mut self, objects: &mut DrmObjects<Self>) {
+        for framebuffer in &self.framebuffers {
+            objects.add_connector(Connector {
+                width: framebuffer.width as u32,
+                height: framebuffer.height as u32,
+            });
+        }
     }
 
     fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
@@ -39,6 +60,14 @@ impl GraphicsAdapter for FbAdapter {
             DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => Ok(()),
             _ => Err(syscall::Error::new(EINVAL)),
         }
+    }
+
+    fn probe_connector(&mut self, connector: &mut DrmConnector<Self>) {
+        connector.modes = vec![modeinfo_for_size(
+            connector.driver_data.width,
+            connector.driver_data.height,
+        )];
+        connector.connection = DrmConnectorStatus::Connected;
     }
 
     fn display_count(&self) -> usize {
@@ -81,6 +110,7 @@ impl GraphicsAdapter for FbAdapter {
     }
 }
 
+#[derive(Debug)]
 pub struct FrameBuffer {
     pub onscreen: *mut [u32],
     pub phys: usize,

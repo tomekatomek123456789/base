@@ -4,12 +4,20 @@ use std::alloc::{self, Layout};
 use std::convert::TryInto;
 use std::ptr::{self, NonNull};
 
-use driver_graphics::{CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter};
+use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
+use driver_graphics::{
+    modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
+};
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use syscall::{error::EINVAL, PAGE_SIZE};
 
 use super::Device;
+
+#[derive(Debug)]
+pub struct Connector {
+    framebuffer_id: usize,
+}
 
 //TODO: use hardware cursor
 pub enum Cursor {}
@@ -17,6 +25,8 @@ pub enum Cursor {}
 impl CursorFramebuffer for Cursor {}
 
 impl GraphicsAdapter for Device {
+    type Connector = Connector;
+
     type Framebuffer = DumbFb;
     type Cursor = Cursor;
 
@@ -26,6 +36,13 @@ impl GraphicsAdapter for Device {
 
     fn desc(&self) -> &'static [u8] {
         b"Intel HD Graphics"
+    }
+
+    fn init(&mut self, objects: &mut DrmObjects<Self>) {
+        // FIXME enumerate actual connectors
+        for (framebuffer_id, _) in self.framebuffers.iter().enumerate() {
+            objects.add_connector(Connector { framebuffer_id });
+        }
     }
 
     fn get_cap(&self, cap: u32) -> syscall::Result<u64> {
@@ -41,6 +58,15 @@ impl GraphicsAdapter for Device {
             DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT => Ok(()),
             _ => Err(syscall::Error::new(EINVAL)),
         }
+    }
+
+    fn probe_connector(&mut self, connector: &mut DrmConnector<Self>) {
+        let framebuffer = &self.framebuffers[connector.driver_data.framebuffer_id];
+        connector.connection = DrmConnectorStatus::Connected;
+        connector.modes = vec![modeinfo_for_size(
+            framebuffer.width as u32,
+            framebuffer.height as u32,
+        )];
     }
 
     fn display_count(&self) -> usize {

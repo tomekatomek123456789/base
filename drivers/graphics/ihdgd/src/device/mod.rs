@@ -5,7 +5,7 @@ use common::{
 use embedded_hal::prelude::*;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
-use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
+use std::{collections::VecDeque, fmt, mem, sync::Arc, time::Duration};
 use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
 
 mod aux;
@@ -170,6 +170,19 @@ pub struct Device {
     power_wells: PowerWells,
     ref_freq: u64,
     transcoders: Vec<Transcoder>,
+}
+
+impl fmt::Debug for Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Device")
+            .field("kind", &self.kind)
+            .field("alloc_buffers", &self.alloc_buffers)
+            .field("alloc_surfaces", &self.alloc_surfaces)
+            .field("gttmm", &self.gttmm)
+            .field("gm", &self.gm)
+            .field("ref_freq", &self.ref_freq)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Device {
