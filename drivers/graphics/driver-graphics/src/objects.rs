@@ -18,17 +18,26 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
         }
     }
 
-    pub fn add_connector(&mut self, connector: DrmConnector<T>) -> DrmObjectId {
+    pub fn add_connector(&mut self, driver_data: T::Connector) -> DrmObjectId {
         let connector_id = self.next_id;
+        let encoder_id = DrmObjectId(self.next_id.0 + 1);
         self.objects.insert(
             connector_id,
             DrmObject {
-                kind: DrmObjectKind::Connector(connector),
+                kind: DrmObjectKind::Connector(DrmConnector {
+                    modes: vec![],
+                    encoder_id,
+                    connector_type: 0,
+                    connector_type_id: 0,
+                    connection: DrmConnectorStatus::Unknown,
+                    mm_width: 0,
+                    mm_height: 0,
+                    subpixel: DrmSubpixelOrder::Unknown,
+                    driver_data,
+                }),
             },
         );
-        self.next_id.0 += 1;
 
-        let encoder_id = self.next_id;
         self.objects.insert(
             encoder_id,
             DrmObject {
@@ -39,10 +48,7 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
                 }),
             },
         );
-        self.next_id.0 += 1;
-
-        // Attach encoder to connector
-        self.get_connector_mut(connector_id).unwrap().encoder_id = encoder_id;
+        self.next_id.0 += 2;
 
         connector_id
     }

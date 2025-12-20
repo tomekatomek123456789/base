@@ -2,9 +2,7 @@ use std::alloc::{self, Layout};
 use std::convert::TryInto;
 use std::ptr::{self, NonNull};
 
-use driver_graphics::objects::{
-    DrmConnector, DrmConnectorStatus, DrmObjectId, DrmObjects, DrmSubpixelOrder,
-};
+use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
 use driver_graphics::{
     modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
 };
@@ -16,12 +14,17 @@ pub struct FbAdapter {
     pub framebuffers: Vec<FrameBuffer>,
 }
 
+pub struct Connector {
+    width: u32,
+    height: u32,
+}
+
 pub enum VesadCursor {}
 
 impl CursorFramebuffer for VesadCursor {}
 
 impl GraphicsAdapter for FbAdapter {
-    type Connector = ();
+    type Connector = Connector;
 
     type Framebuffer = GraphicScreen;
     type Cursor = VesadCursor;
@@ -36,19 +39,9 @@ impl GraphicsAdapter for FbAdapter {
 
     fn init(&mut self, objects: &mut DrmObjects<Self>) {
         for framebuffer in &self.framebuffers {
-            objects.add_connector(DrmConnector {
-                modes: vec![modeinfo_for_size(
-                    framebuffer.width as u32,
-                    framebuffer.height as u32,
-                )],
-                encoder_id: DrmObjectId::INVALID,
-                connector_type: 0,
-                connector_type_id: 0,
-                connection: DrmConnectorStatus::Connected,
-                mm_width: 0,
-                mm_height: 0,
-                subpixel: DrmSubpixelOrder::Unknown,
-                driver_data: (),
+            objects.add_connector(Connector {
+                width: framebuffer.width as u32,
+                height: framebuffer.height as u32,
             });
         }
     }
@@ -67,7 +60,13 @@ impl GraphicsAdapter for FbAdapter {
         }
     }
 
-    fn probe_connector(&mut self, _connector: &mut DrmConnector<Self>) {}
+    fn probe_connector(&mut self, connector: &mut DrmConnector<Self>) {
+        connector.modes = vec![modeinfo_for_size(
+            connector.driver_data.width,
+            connector.driver_data.height,
+        )];
+        connector.connection = DrmConnectorStatus::Connected;
+    }
 
     fn display_count(&self) -> usize {
         self.framebuffers.len()

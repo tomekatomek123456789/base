@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use common::{dma::Dma, sgl};
-use driver_graphics::objects::{
-    DrmConnector, DrmConnectorStatus, DrmObjectId, DrmObjects, DrmSubpixelOrder,
-};
+use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
 use driver_graphics::{
     modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter, GraphicsScheme,
 };
@@ -229,17 +227,7 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         });
 
         for display_id in 0..self.config.num_scanouts.get() {
-            objects.add_connector(DrmConnector {
-                modes: vec![],
-                encoder_id: DrmObjectId::INVALID,
-                connector_type: 0,
-                connector_type_id: 0,
-                connection: DrmConnectorStatus::Disconnected,
-                mm_width: 0,
-                mm_height: 0,
-                subpixel: DrmSubpixelOrder::Unknown,
-                driver_data: VirtGpuConnector { display_id },
-            });
+            objects.add_connector(VirtGpuConnector { display_id });
         }
     }
 

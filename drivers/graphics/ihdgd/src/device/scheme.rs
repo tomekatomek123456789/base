@@ -4,9 +4,7 @@ use std::alloc::{self, Layout};
 use std::convert::TryInto;
 use std::ptr::{self, NonNull};
 
-use driver_graphics::objects::{
-    DrmConnector, DrmConnectorStatus, DrmObjectId, DrmObjects, DrmSubpixelOrder,
-};
+use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
 use driver_graphics::{
     modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
 };
@@ -42,17 +40,7 @@ impl GraphicsAdapter for Device {
     fn init(&mut self, objects: &mut DrmObjects<Self>) {
         // FIXME enumerate actual connectors
         for (framebuffer_id, _) in self.framebuffers.iter().enumerate() {
-            objects.add_connector(DrmConnector {
-                modes: vec![],
-                encoder_id: DrmObjectId::INVALID,
-                connector_type: 0,
-                connector_type_id: 0,
-                connection: DrmConnectorStatus::Connected,
-                mm_width: 0,
-                mm_height: 0,
-                subpixel: DrmSubpixelOrder::Unknown,
-                driver_data: Connector { framebuffer_id },
-            });
+            objects.add_connector(Connector { framebuffer_id });
         }
     }
 
@@ -73,6 +61,7 @@ impl GraphicsAdapter for Device {
 
     fn probe_connector(&mut self, connector: &mut DrmConnector<Self>) {
         let framebuffer = &self.framebuffers[connector.driver_data.framebuffer_id];
+        connector.connection = DrmConnectorStatus::Connected;
         connector.modes = vec![modeinfo_for_size(
             framebuffer.width as u32,
             framebuffer.height as u32,
