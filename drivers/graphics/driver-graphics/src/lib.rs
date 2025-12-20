@@ -114,9 +114,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
 
         let mut objects = DrmObjects::new();
         adapter.init(&mut objects);
-        for connector in objects.connectors_mut() {
-            adapter.probe_connector(connector);
-        }
+        objects.for_each_connector_mut(|connector| adapter.probe_connector(connector));
 
         GraphicsScheme {
             adapter,
@@ -532,12 +530,14 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     let conn_ids = self
                         .objects
                         .connector_ids()
+                        .iter()
                         .map(|id| id.0)
                         .collect::<Vec<_>>();
                     let mut crtc_ids = Vec::with_capacity(count);
                     let enc_ids = self
                         .objects
                         .encoder_ids()
+                        .iter()
                         .map(|id| id.0)
                         .collect::<Vec<_>>();
                     let mut fb_ids = Vec::with_capacity(count);

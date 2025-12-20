@@ -8,6 +8,8 @@ use crate::GraphicsAdapter;
 #[derive(Debug)]
 pub struct DrmObjects<T: GraphicsAdapter> {
     next_id: DrmObjectId,
+    connectors: Vec<DrmObjectId>,
+    encoders: Vec<DrmObjectId>,
     objects: HashMap<DrmObjectId, DrmObject<T>>,
 }
 
@@ -15,6 +17,8 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
     pub(crate) fn new() -> Self {
         DrmObjects {
             next_id: DrmObjectId(1),
+            connectors: vec![],
+            encoders: vec![],
             objects: HashMap::new(),
         }
     }
@@ -38,6 +42,7 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
                 }),
             },
         );
+        self.connectors.push(connector_id);
 
         self.objects.insert(
             encoder_id,
@@ -49,36 +54,32 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
                 }),
             },
         );
+        self.encoders.push(encoder_id);
         self.next_id.0 += 2;
 
         connector_id
     }
 
-    pub fn connector_ids(&self) -> impl Iterator<Item = DrmObjectId> + use<'_, T> {
-        self.objects
-            .iter()
-            .filter_map(|(&id, object)| match object.kind {
-                DrmObjectKind::Connector(_) => Some(id),
-                _ => None,
-            })
+    pub fn connector_ids(&self) -> &[DrmObjectId] {
+        &self.connectors
     }
 
     pub fn connectors(&self) -> impl Iterator<Item = &DrmConnector<T>> + use<'_, T> {
-        self.objects
-            .values()
-            .filter_map(|object| match &object.kind {
-                DrmObjectKind::Connector(connector) => Some(connector),
-                _ => None,
+        self.connectors
+            .iter()
+            .map(|&id| match &self.objects[&id].kind {
+                DrmObjectKind::Connector(connector) => connector,
+                _ => unreachable!(),
             })
     }
 
-    pub fn connectors_mut(&mut self) -> impl Iterator<Item = &mut DrmConnector<T>> + use<'_, T> {
-        self.objects
-            .values_mut()
-            .filter_map(|object| match &mut object.kind {
-                DrmObjectKind::Connector(connector) => Some(connector),
-                _ => None,
-            })
+    pub fn for_each_connector_mut<'a>(&mut self, mut f: impl FnMut(&mut DrmConnector<T>)) {
+        for id in &self.connectors {
+            match &mut self.objects.get_mut(&id).unwrap().kind {
+                DrmObjectKind::Connector(connector) => f(connector),
+                _ => unreachable!(),
+            }
+        }
     }
 
     pub fn get_connector(&self, id: DrmObjectId) -> Result<&DrmConnector<T>> {
@@ -97,13 +98,8 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
         }
     }
 
-    pub fn encoder_ids(&self) -> impl Iterator<Item = DrmObjectId> + use<'_, T> {
-        self.objects
-            .iter()
-            .filter_map(|(&id, object)| match object.kind {
-                DrmObjectKind::Encoder(_) => Some(id),
-                _ => None,
-            })
+    pub fn encoder_ids(&self) -> &[DrmObjectId] {
+        &self.encoders
     }
 
     pub fn get_encoder(&self, id: DrmObjectId) -> Result<&DrmEncoder> {
