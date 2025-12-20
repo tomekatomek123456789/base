@@ -14,6 +14,7 @@ use syscall::{error::EINVAL, PAGE_SIZE};
 
 use super::Device;
 
+#[derive(Debug)]
 pub struct Connector {
     framebuffer_id: usize,
 }

@@ -5,6 +5,7 @@ use syscall::{Error, Result, EINVAL};
 
 use crate::GraphicsAdapter;
 
+#[derive(Debug)]
 pub struct DrmObjects<T: GraphicsAdapter> {
     next_id: DrmObjectId,
     objects: HashMap<DrmObjectId, DrmObject<T>>,
@@ -122,22 +123,25 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct DrmObjectId(pub(crate) u32);
 
 impl DrmObjectId {
     pub const INVALID: DrmObjectId = DrmObjectId(0);
 }
 
+#[derive(Debug)]
 struct DrmObject<T: GraphicsAdapter> {
     kind: DrmObjectKind<T>,
 }
 
+#[derive(Debug)]
 enum DrmObjectKind<T: GraphicsAdapter> {
     Connector(DrmConnector<T>),
     Encoder(DrmEncoder),
 }
 
+#[derive(Debug)]
 pub struct DrmConnector<T: GraphicsAdapter> {
     pub modes: Vec<drm_mode_modeinfo>,
     pub encoder_id: DrmObjectId,
@@ -150,7 +154,7 @@ pub struct DrmConnector<T: GraphicsAdapter> {
     pub driver_data: T::Connector,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(u32)]
 pub enum DrmConnectorStatus {
     Disconnected = 0,
@@ -158,7 +162,7 @@ pub enum DrmConnectorStatus {
     Unknown = 2,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 #[repr(u32)]
 pub enum DrmSubpixelOrder {
     Unknown = 0,
@@ -170,6 +174,7 @@ pub enum DrmSubpixelOrder {
 }
 
 // FIXME can we represent connector and encoder using a single struct?
+#[derive(Debug)]
 pub struct DrmEncoder {
     pub crtc_id: DrmObjectId,
     pub possible_crtcs: u32,

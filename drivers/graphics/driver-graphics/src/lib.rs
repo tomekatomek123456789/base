@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_char;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem;
@@ -22,8 +23,8 @@ use crate::objects::{DrmConnector, DrmObjectId, DrmObjects};
 
 pub mod objects;
 
-pub trait GraphicsAdapter: Sized {
-    type Connector;
+pub trait GraphicsAdapter: Sized + Debug {
+    type Connector: Debug;
 
     type Framebuffer: Framebuffer;
     type Cursor: CursorFramebuffer;

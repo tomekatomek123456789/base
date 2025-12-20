@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 
 use common::{dma::Dma, sgl};
@@ -27,6 +28,7 @@ impl Into<GpuRect> for Damage {
     }
 }
 
+#[derive(Debug)]
 pub struct VirtGpuConnector {
     display_id: u32,
 }
@@ -86,6 +88,14 @@ pub struct VirtGpuAdapter<'a> {
     cursor_queue: Arc<Queue<'a>>,
     transport: Arc<dyn Transport>,
     displays: Vec<Display>,
+}
+
+impl<'a> fmt::Debug for VirtGpuAdapter<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VirtGpuAdapter")
+            .field("displays", &self.displays)
+            .finish_non_exhaustive()
+    }
 }
 
 impl VirtGpuAdapter<'_> {

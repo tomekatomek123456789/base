@@ -10,10 +10,12 @@ use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use syscall::{EINVAL, PAGE_SIZE};
 
+#[derive(Debug)]
 pub struct FbAdapter {
     pub framebuffers: Vec<FrameBuffer>,
 }
 
+#[derive(Debug)]
 pub struct Connector {
     width: u32,
     height: u32,
@@ -108,6 +110,7 @@ impl GraphicsAdapter for FbAdapter {
     }
 }
 
+#[derive(Debug)]
 pub struct FrameBuffer {
     pub onscreen: *mut [u32],
     pub phys: usize,
