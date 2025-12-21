@@ -9,7 +9,12 @@ use std::mem;
 use std::mem::transmute;
 use std::sync::Arc;
 
-use drm_sys::drm_mode_modeinfo;
+use drm_sys::{
+    drm_mode_modeinfo, drm_mode_property_enum, DRM_MODE_DPMS_OFF, DRM_MODE_DPMS_ON,
+    DRM_MODE_DPMS_STANDBY, DRM_MODE_DPMS_SUSPEND, DRM_MODE_PROP_ATOMIC, DRM_MODE_PROP_BITMASK,
+    DRM_MODE_PROP_BLOB, DRM_MODE_PROP_ENUM, DRM_MODE_PROP_IMMUTABLE, DRM_MODE_PROP_OBJECT,
+    DRM_MODE_PROP_RANGE, DRM_MODE_PROP_SIGNED_RANGE, DRM_PROP_NAME_LEN,
+};
 use graphics_ipc::v1::CursorDamage;
 use graphics_ipc::v2::Damage;
 use inputd::{VtEvent, VtEventKind};
@@ -19,9 +24,14 @@ use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, MapFlags, Result, EAGAIN, EBADF, EINVAL, ENOENT, EOPNOTSUPP};
 
-use crate::objects::{DrmConnector, DrmObjectId, DrmObjects};
+use crate::objects::{DrmConnector, DrmObjectId, DrmObjects, DrmPropertyKind};
 
 pub mod objects;
+
+#[derive(Debug, Copy, Clone)]
+pub struct StandardProperties {
+    pub dpms: DrmObjectId,
+}
 
 pub trait GraphicsAdapter: Sized + Debug {
     type Connector: Debug;
@@ -32,7 +42,7 @@ pub trait GraphicsAdapter: Sized + Debug {
     fn name(&self) -> &'static [u8];
     fn desc(&self) -> &'static [u8];
 
-    fn init(&mut self, objects: &mut DrmObjects<Self>);
+    fn init(&mut self, objects: &mut DrmObjects<Self>, standard_properties: &StandardProperties);
 
     fn get_cap(&self, cap: u32) -> Result<u64>;
     fn set_client_cap(&self, cap: u32, value: u64) -> Result<()>;
@@ -78,6 +88,7 @@ pub struct GraphicsScheme<T: GraphicsAdapter> {
     disable_graphical_debug: Option<File>,
     socket: Socket,
     objects: DrmObjects<T>,
+    standard_properties: StandardProperties,
     next_id: usize,
     handles: BTreeMap<usize, Handle<T>>,
 
@@ -113,7 +124,21 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
         );
 
         let mut objects = DrmObjects::new();
-        adapter.init(&mut objects);
+
+        let dpms = objects.add_property(
+            "DPMS",
+            false,
+            false,
+            DrmPropertyKind::Enum(vec![
+                ("On", DRM_MODE_DPMS_ON.into()),
+                ("Standby", DRM_MODE_DPMS_STANDBY.into()),
+                ("Suspend", DRM_MODE_DPMS_SUSPEND.into()),
+                ("Off", DRM_MODE_DPMS_OFF.into()),
+            ]),
+        );
+        let standard_properties = StandardProperties { dpms };
+
+        adapter.init(&mut objects, &standard_properties);
         objects.for_each_connector_mut(|connector| adapter.probe_connector(connector));
 
         GraphicsScheme {
@@ -122,6 +147,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
             disable_graphical_debug,
             socket,
             objects,
+            standard_properties,
             next_id: 0,
             handles: BTreeMap::new(),
             active_vt: 0,
@@ -471,7 +497,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
         }
 
         fn crtc_id(i: u32) -> u32 {
-            id_index(i) | (1 << 9)
+            id_index(i) | (1 << 10)
         }
 
         fn fb_id(i: u32) -> u32 {
@@ -586,9 +612,97 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     data.set_mm_width(connector.mm_width);
                     data.set_mm_height(connector.mm_width);
                     data.set_subpixel(connector.subpixel as u32);
-                    data.set_props_ptr(&[]);
-                    data.set_prop_values_ptr(&[]);
                     data.set_encoders_ptr(&[connector.encoder_id.0]);
+                    let props = self
+                        .objects
+                        .get_object_properties(DrmObjectId(data.connector_id()))?;
+                    data.set_props_ptr(&props.iter().map(|&(id, _)| id.0).collect::<Vec<_>>());
+                    data.set_prop_values_ptr(
+                        &props.iter().map(|&(_, value)| value).collect::<Vec<_>>(),
+                    );
+                    Ok(0)
+                }),
+                ipc::MODE_GET_PROPERTY => ipc::DrmModeGetProperty::with(payload, |mut data| {
+                    let property = self.objects.get_property(DrmObjectId(data.prop_id()))?;
+                    data.set_name(property.name);
+                    let mut flags = 0;
+                    if property.immutable {
+                        flags |= DRM_MODE_PROP_IMMUTABLE;
+                    }
+                    if property.atomic {
+                        flags |= DRM_MODE_PROP_ATOMIC;
+                    }
+                    match &property.kind {
+                        &DrmPropertyKind::Range(start, end) => {
+                            data.set_flags(flags | DRM_MODE_PROP_RANGE);
+                            data.set_values_ptr(&[start, end]);
+                            data.set_enum_blob_ptr(&[]);
+                        }
+                        DrmPropertyKind::Enum(variants) => {
+                            data.set_flags(flags | DRM_MODE_PROP_ENUM);
+                            data.set_values_ptr(
+                                &variants.iter().map(|&(_, value)| value).collect::<Vec<_>>(),
+                            );
+                            data.set_enum_blob_ptr(
+                                &variants
+                                    .iter()
+                                    .map(|&(name, value)| {
+                                        let mut name_bytes = [0; DRM_PROP_NAME_LEN as usize];
+                                        for (to, &from) in
+                                            name_bytes.iter_mut().zip(name.as_bytes())
+                                        {
+                                            *to = from as c_char;
+                                        }
+                                        drm_mode_property_enum {
+                                            name: name_bytes,
+                                            value,
+                                        }
+                                    })
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
+                        DrmPropertyKind::Blob => {
+                            data.set_flags(flags | DRM_MODE_PROP_BLOB);
+                            data.set_values_ptr(&[]);
+                            data.set_enum_blob_ptr(&[]);
+                        }
+                        DrmPropertyKind::Bitmask(bitmask_flags) => {
+                            data.set_flags(flags | DRM_MODE_PROP_BITMASK);
+                            data.set_values_ptr(
+                                &bitmask_flags
+                                    .iter()
+                                    .map(|&(_, value)| value)
+                                    .collect::<Vec<_>>(),
+                            );
+                            data.set_enum_blob_ptr(
+                                &bitmask_flags
+                                    .iter()
+                                    .map(|&(name, value)| {
+                                        let mut name_bytes = [0; DRM_PROP_NAME_LEN as usize];
+                                        for (to, &from) in
+                                            name_bytes.iter_mut().zip(name.as_bytes())
+                                        {
+                                            *to = from as c_char;
+                                        }
+                                        drm_mode_property_enum {
+                                            name: name_bytes,
+                                            value,
+                                        }
+                                    })
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
+                        DrmPropertyKind::Object => {
+                            data.set_flags(flags | DRM_MODE_PROP_OBJECT);
+                            data.set_values_ptr(&[]);
+                            data.set_enum_blob_ptr(&[]);
+                        }
+                        &DrmPropertyKind::SignedRange(start, end) => {
+                            data.set_flags(flags | DRM_MODE_PROP_SIGNED_RANGE);
+                            data.set_values_ptr(&[start as u64, end as u64]);
+                            data.set_enum_blob_ptr(&[]);
+                        }
+                    }
                     Ok(0)
                 }),
                 ipc::MODE_GET_FB => ipc::DrmModeFbCmd::with(payload, |mut data| {
@@ -665,9 +779,21 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 }),
                 ipc::MODE_OBJ_GET_PROPERTIES => {
                     ipc::DrmModeObjGetProperties::with(payload, |mut data| {
-                        // TODO
-                        data.set_props_ptr(&[]);
-                        data.set_prop_values_ptr(&[]);
+                        // FIXME remove once all drm objects are materialized in self.objects
+                        if data.obj_id() >= 1 << 10 {
+                            data.set_props_ptr(&[]);
+                            data.set_prop_values_ptr(&[]);
+                            return Ok(0);
+                        }
+
+                        let props = self
+                            .objects
+                            .get_object_properties(DrmObjectId(data.obj_id()))?;
+                        data.set_props_ptr(&props.iter().map(|&(id, _)| id.0).collect::<Vec<_>>());
+                        data.set_prop_values_ptr(
+                            &props.iter().map(|&(_, value)| value).collect::<Vec<_>>(),
+                        );
+                        data.set_obj_type(self.objects.object_type(DrmObjectId(data.obj_id()))?);
                         Ok(0)
                     })
                 }

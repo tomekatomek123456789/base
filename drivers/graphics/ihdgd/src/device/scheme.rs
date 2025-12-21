@@ -7,7 +7,9 @@ use std::ptr::{self, NonNull};
 use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
 use driver_graphics::{
     modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
+    StandardProperties,
 };
+use drm_sys::DRM_MODE_DPMS_ON;
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use syscall::{error::EINVAL, PAGE_SIZE};
@@ -38,10 +40,15 @@ impl GraphicsAdapter for Device {
         b"Intel HD Graphics"
     }
 
-    fn init(&mut self, objects: &mut DrmObjects<Self>) {
+    fn init(&mut self, objects: &mut DrmObjects<Self>, standard_properties: &StandardProperties) {
         // FIXME enumerate actual connectors
         for (framebuffer_id, _) in self.framebuffers.iter().enumerate() {
-            objects.add_connector(Connector { framebuffer_id });
+            let connector = objects.add_connector(Connector { framebuffer_id });
+            objects.add_object_property(
+                connector,
+                standard_properties.dpms,
+                DRM_MODE_DPMS_ON.into(),
+            );
         }
     }
 

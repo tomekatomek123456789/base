@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+drm-sys = "0.8.0"
 orbclient = "0.3.27"
 ransid = "0.4"
 redox_syscall = "0.6"

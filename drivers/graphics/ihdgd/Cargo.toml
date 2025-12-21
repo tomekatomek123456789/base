@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 bitbang-hal = "0.3"
+drm-sys = "0.8.0"
 #TODO: edid is abandoned, fork it an maintain?
 edid = "0.3.0"
 #TODO: waiting for bitbang-hal to update to embedded-hal 1.0

@@ -4,8 +4,10 @@ use std::sync::Arc;
 use common::{dma::Dma, sgl};
 use driver_graphics::objects::{DrmConnector, DrmConnectorStatus, DrmObjects};
 use driver_graphics::{
-    modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter, GraphicsScheme,
+    modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
+    GraphicsScheme, StandardProperties,
 };
+use drm_sys::DRM_MODE_DPMS_ON;
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use inputd::DisplayHandle;
@@ -231,13 +233,18 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
         b"VirtIO GPU"
     }
 
-    fn init(&mut self, objects: &mut DrmObjects<Self>) {
+    fn init(&mut self, objects: &mut DrmObjects<Self>, standard_properties: &StandardProperties) {
         futures::executor::block_on(async {
             self.update_displays().await.unwrap();
         });
 
         for display_id in 0..self.config.num_scanouts.get() {
-            objects.add_connector(VirtGpuConnector { display_id });
+            let connector = objects.add_connector(VirtGpuConnector { display_id });
+            objects.add_object_property(
+                connector,
+                standard_properties.dpms,
+                DRM_MODE_DPMS_ON.into(),
+            );
         }
     }
 
