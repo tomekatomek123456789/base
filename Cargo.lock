@@ -903,7 +903,7 @@ dependencies = [
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#16decee904d8d6d92f27794beab8d3f5b1915358"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#99e8cd93e0d125010130d8e3aee7d343735d8b5c"
 
 [[package]]
 name = "getrandom"
@@ -1777,7 +1777,7 @@ dependencies = [
 [[package]]
 name = "redox-ioctl"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#16decee904d8d6d92f27794beab8d3f5b1915358"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#99e8cd93e0d125010130d8e3aee7d343735d8b5c"
 dependencies = [
  "drm-sys",
  "redox_syscall 0.6.0",
@@ -1804,7 +1804,7 @@ checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#16decee904d8d6d92f27794beab8d3f5b1915358"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#99e8cd93e0d125010130d8e3aee7d343735d8b5c"
 dependencies = [
  "bitflags 2.10.0",
  "generic-rt",
