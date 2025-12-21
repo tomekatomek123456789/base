@@ -29,6 +29,7 @@ pub const LEFT_BUTTON: u32 = 0x20;
 pub const RIGHT_BUTTON: u32 = 0x10;
 pub const MIDDLE_BUTTON: u32 = 0x08;
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub unsafe fn cmd(cmd: u32, arg: u32) -> (u32, u32, u32, u32) {
     let a: u32;
     let b: u32;
@@ -60,6 +61,11 @@ pub unsafe fn cmd(cmd: u32, arg: u32) -> (u32, u32, u32, u32) {
     );
 
     (a, b, c, d)
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub unsafe fn cmd(cmd: u32, arg: u32) -> (u32, u32, u32, u32) {
+    unimplemented!()
 }
 
 pub fn enable(relative: bool) -> bool {

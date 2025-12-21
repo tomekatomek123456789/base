@@ -40,7 +40,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#099c35f3caa1d8c289d14423607c494c59ad8a51"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#a88ce5116a57cef347a87dbc1a4dd2949867110c"
 
 [[package]]
 name = "goblin"
@@ -70,9 +70,9 @@ checksum = "2874a2af47a2325c2001a6e6fad9b16a53b802102b528163885171cf92b15976"
 
 [[package]]
 name = "libredox"
-version = "0.1.10"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "416f7e718bdb06000964960ffa43b4335ad4012ae8b99060261aa4a8088d5ccb"
+checksum = "df15f6eac291ed1cf25865b1ee60399f57e7c227e7f51bdbd4c5270396a9ed50"
 dependencies = [
  "bitflags",
  "libc",
@@ -143,20 +143,21 @@ checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#099c35f3caa1d8c289d14423607c494c59ad8a51"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#a88ce5116a57cef347a87dbc1a4dd2949867110c"
 dependencies = [
  "bitflags",
  "generic-rt",
  "goblin",
  "plain",
+ "redox-path",
  "redox_syscall",
 ]
 
 [[package]]
 name = "redox-scheme"
-version = "0.6.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c00025a04f76fdcf72c15f10c7a12d9f2fdde93e539be9a57d5d632c4158a9e"
+checksum = "2cea2668a5932f878a4298a1d7f8950249bbbb77120fb263da252c589152f5ea"
 dependencies = [
  "libredox",
  "redox_syscall",
@@ -164,8 +165,9 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.5.18"
-source = "git+https://gitlab.redox-os.org/redox-os/syscall.git?branch=master#15aa8e32ef0f3328dd9d48cc8ca02e148a362069"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec96166dafa0886eb81fe1c0a388bece180fbef2135f97c1e2cf8302e74b43b5"
 dependencies = [
  "bitflags",
 ]

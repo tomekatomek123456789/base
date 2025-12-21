@@ -13,6 +13,35 @@ pub struct Damage {
 }
 
 impl Damage {
+    pub const NONE: Self = Damage {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    };
+
+    pub fn merge(self, other: Self) -> Self {
+        if self.width == 0 || self.height == 0 {
+            return other;
+        }
+
+        if other.width == 0 || other.height == 0 {
+            return self;
+        }
+
+        let x = cmp::min(self.x, other.x);
+        let y = cmp::min(self.y, other.y);
+        let x2 = cmp::max(self.x + self.width, other.x + other.width);
+        let y2 = cmp::max(self.y + self.height, other.y + other.height);
+
+        Damage {
+            x,
+            y,
+            width: x2 - x,
+            height: y2 - y,
+        }
+    }
+
     #[must_use]
     pub fn clip(mut self, width: u32, height: u32) -> Self {
         // Clip damage
@@ -28,48 +57,5 @@ impl Damage {
             self.height = height - self.y;
         }
         self
-    }
-}
-
-pub struct DisplayMap {
-    offscreen: *mut [u32],
-    width: usize,
-    height: usize,
-}
-
-impl DisplayMap {
-    pub(crate) unsafe fn new(offscreen: *mut [u32], width: usize, height: usize) -> Self {
-        DisplayMap {
-            offscreen,
-            width,
-            height,
-        }
-    }
-
-    pub fn ptr(&self) -> *const [u32] {
-        self.offscreen
-    }
-
-    pub fn ptr_mut(&mut self) -> *mut [u32] {
-        self.offscreen
-    }
-
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    pub fn height(&self) -> usize {
-        self.height
-    }
-}
-
-unsafe impl Send for DisplayMap {}
-unsafe impl Sync for DisplayMap {}
-
-impl Drop for DisplayMap {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = libredox::call::munmap(self.offscreen as *mut (), self.offscreen.len());
-        }
     }
 }

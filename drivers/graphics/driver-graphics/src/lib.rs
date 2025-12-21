@@ -1,12 +1,17 @@
 #![feature(slice_as_array)]
 
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::c_char;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io::{self, Write};
+use std::mem;
 use std::mem::transmute;
 use std::sync::Arc;
 
-use graphics_ipc::v1::{CursorDamage, Damage};
+use drm_sys::drm_mode_modeinfo;
+use graphics_ipc::v1::CursorDamage;
+use graphics_ipc::v2::Damage;
 use inputd::{VtEvent, VtEventKind};
 use libredox::Fd;
 use redox_scheme::scheme::SchemeSync;
@@ -14,9 +19,25 @@ use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, MapFlags, Result, EAGAIN, EBADF, EINVAL, ENOENT, EOPNOTSUPP};
 
-pub trait GraphicsAdapter {
+use crate::objects::{DrmConnector, DrmObjectId, DrmObjects};
+
+pub mod objects;
+
+pub trait GraphicsAdapter: Sized + Debug {
+    type Connector: Debug;
+
     type Framebuffer: Framebuffer;
     type Cursor: CursorFramebuffer;
+
+    fn name(&self) -> &'static [u8];
+    fn desc(&self) -> &'static [u8];
+
+    fn init(&mut self, objects: &mut DrmObjects<Self>);
+
+    fn get_cap(&self, cap: u32) -> Result<u64>;
+    fn set_client_cap(&self, cap: u32, value: u64) -> Result<()>;
+
+    fn probe_connector(&mut self, connector: &mut DrmConnector<Self>);
 
     /// The maximum amount of displays that could be attached.
     ///
@@ -56,6 +77,7 @@ pub struct GraphicsScheme<T: GraphicsAdapter> {
     scheme_name: String,
     disable_graphical_debug: Option<File>,
     socket: Socket,
+    objects: DrmObjects<T>,
     next_id: usize,
     handles: BTreeMap<usize, Handle<T>>,
 
@@ -75,13 +97,13 @@ enum Handle<T: GraphicsAdapter> {
     },
     V2 {
         vt: usize,
-        next_id: usize,
-        fbs: HashMap<usize, Arc<T::Framebuffer>>,
+        next_id: u32,
+        fbs: HashMap<u32, Arc<T::Framebuffer>>,
     },
 }
 
 impl<T: GraphicsAdapter> GraphicsScheme<T> {
-    pub fn new(adapter: T, scheme_name: String) -> Self {
+    pub fn new(mut adapter: T, scheme_name: String) -> Self {
         assert!(scheme_name.starts_with("display"));
         let socket = Socket::nonblock(&scheme_name).expect("failed to create graphics scheme");
 
@@ -90,11 +112,16 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
                 .expect("vesad: Failed to open /scheme/debug/disable-graphical-debug"),
         );
 
+        let mut objects = DrmObjects::new();
+        adapter.init(&mut objects);
+        objects.for_each_connector_mut(|connector| adapter.probe_connector(connector));
+
         GraphicsScheme {
             adapter,
             scheme_name,
             disable_graphical_debug,
             socket,
+            objects,
             next_id: 0,
             handles: BTreeMap::new(),
             active_vt: 0,
@@ -112,6 +139,18 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
 
     pub fn adapter_mut(&mut self) -> &mut T {
         &mut self.adapter
+    }
+
+    pub fn objects(&self) -> &DrmObjects<T> {
+        &self.objects
+    }
+
+    pub fn objects_mut(&mut self) -> &mut DrmObjects<T> {
+        &mut self.objects
+    }
+
+    pub fn adapter_and_objects_mut(&mut self) -> (&mut T, &mut DrmObjects<T>) {
+        (&mut self.adapter, &mut self.objects)
     }
 
     pub fn handle_vt_event(&mut self, vt_event: VtEvent) {
@@ -416,76 +455,175 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
         }
     }
 
-    fn call(&mut self, id: usize, payload: &mut [u8], metadata: &[u64]) -> Result<usize> {
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         use graphics_ipc::v2::ipc;
+
+        const DRM_FORMAT_ARGB8888: u32 = 0x34325241; // 'AR24' fourcc code, for ARGB8888
+
+        fn id_index(id: u32) -> u32 {
+            id & 0xFF
+        }
+
+        fn crtc_id(i: u32) -> u32 {
+            id_index(i) | (1 << 9)
+        }
+
+        fn fb_id(i: u32) -> u32 {
+            id_index(i) | (1 << 11)
+        }
+
+        fn fb_handle_id(i: u32) -> u32 {
+            id_index(i) | (1 << 12)
+        }
+
+        fn plane_id(i: u32) -> u32 {
+            id_index(i) | (1 << 13)
+        }
+
+        fn dumb_buffer_id(i: u32) -> u32 {
+            id_index(i) | (1 << 14)
+        }
 
         match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
             Handle::V1Screen { .. } => {
                 return Err(Error::new(EOPNOTSUPP));
             }
             Handle::V2 { vt, next_id, fbs } => match metadata[0] {
-                ipc::DISPLAY_COUNT => {
-                    if payload.len() < size_of::<ipc::DisplayCount>() {
+                ipc::VERSION => ipc::DrmVersion::with(payload, |mut data| {
+                    data.set_version_major(1);
+                    data.set_version_minor(4);
+                    data.set_version_patchlevel(0);
+
+                    data.set_name(unsafe { mem::transmute(self.adapter.name()) });
+                    data.set_date(unsafe { mem::transmute(&b"0"[..]) });
+                    data.set_desc(unsafe { mem::transmute(self.adapter.desc()) });
+
+                    Ok(0)
+                }),
+                ipc::GET_CAP => ipc::DrmGetCap::with(payload, |mut data| {
+                    data.set_value(
+                        self.adapter.get_cap(
+                            data.capability()
+                                .try_into()
+                                .map_err(|_| syscall::Error::new(EINVAL))?,
+                        )?,
+                    );
+                    Ok(0)
+                }),
+                ipc::SET_CLIENT_CAP => ipc::DrmSetClientCap::with(payload, |data| {
+                    self.adapter.set_client_cap(
+                        data.capability()
+                            .try_into()
+                            .map_err(|_| syscall::Error::new(EINVAL))?,
+                        data.value(),
+                    )?;
+                    Ok(0)
+                }),
+                ipc::MODE_CARD_RES => ipc::DrmModeCardRes::with(payload, |mut data| {
+                    let count = self.adapter.display_count();
+                    let conn_ids = self
+                        .objects
+                        .connector_ids()
+                        .iter()
+                        .map(|id| id.0)
+                        .collect::<Vec<_>>();
+                    let mut crtc_ids = Vec::with_capacity(count);
+                    let enc_ids = self
+                        .objects
+                        .encoder_ids()
+                        .iter()
+                        .map(|id| id.0)
+                        .collect::<Vec<_>>();
+                    let mut fb_ids = Vec::with_capacity(count);
+                    for i in 0..(count as u32) {
+                        crtc_ids.push(crtc_id(i));
+                        fb_ids.push(fb_id(i));
+                    }
+                    data.set_fb_id_ptr(&fb_ids);
+                    data.set_crtc_id_ptr(&crtc_ids);
+                    data.set_connector_id_ptr(&conn_ids);
+                    data.set_encoder_id_ptr(&enc_ids);
+                    data.set_min_width(0);
+                    data.set_max_width(16384);
+                    data.set_min_height(0);
+                    data.set_max_height(16384);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_CRTC => ipc::DrmModeCrtc::with(payload, |mut data| {
+                    let i = id_index(data.crtc_id());
+                    //TOOD: connectors
+                    data.set_fb_id(fb_id(i));
+                    data.set_x(0);
+                    data.set_y(0);
+                    data.set_gamma_size(0);
+                    data.set_mode_valid(0);
+                    //TODO: mode
+                    data.set_mode(Default::default());
+                    Ok(0)
+                }),
+                ipc::MODE_GET_ENCODER => ipc::DrmModeGetEncoder::with(payload, |mut data| {
+                    let encoder = self.objects.get_encoder(DrmObjectId(data.encoder_id()))?;
+                    data.set_crtc_id(encoder.crtc_id.0);
+                    data.set_possible_crtcs(encoder.possible_crtcs);
+                    data.set_possible_clones(encoder.possible_clones);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_CONNECTOR => ipc::DrmModeGetConnector::with(payload, |mut data| {
+                    let connector = self
+                        .objects
+                        .get_connector_mut(DrmObjectId(data.connector_id()))?;
+                    if data.count_modes() == 0 {
+                        self.adapter.probe_connector(connector);
+                    }
+                    data.set_connection(connector.connection as u32);
+                    data.set_modes_ptr(&connector.modes);
+                    data.set_mm_width(connector.mm_width);
+                    data.set_mm_height(connector.mm_width);
+                    data.set_subpixel(connector.subpixel as u32);
+                    data.set_props_ptr(&[]);
+                    data.set_prop_values_ptr(&[]);
+                    data.set_encoders_ptr(&[connector.encoder_id.0]);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_FB => ipc::DrmModeFbCmd::with(payload, |mut data| {
+                    let i = id_index(data.fb_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_width(width);
+                    data.set_height(height);
+                    data.set_pitch(width * 4); //TODO: stride
+                    data.set_bpp(32);
+                    data.set_depth(24);
+                    data.set_handle(fb_handle_id(i));
+                    Ok(0)
+                }),
+                ipc::MODE_CREATE_DUMB => ipc::DrmModeCreateDumb::with(payload, |mut data| {
+                    if data.bpp() != 32 {
                         return Err(Error::new(EINVAL));
                     }
-                    let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::DisplayCount>()], &mut ipc::DisplayCount>(
-                            payload.as_mut_array().unwrap(),
-                        )
-                    };
-                    payload.count = self.adapter.display_count();
-                    Ok(size_of::<ipc::DisplayCount>())
-                }
-                ipc::DISPLAY_SIZE => {
-                    if payload.len() < size_of::<ipc::DisplaySize>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<&mut [u8; size_of::<ipc::DisplaySize>()], &mut ipc::DisplaySize>(
-                            payload.as_mut_array().unwrap(),
-                        )
-                    };
-                    let display_id = payload.display_id;
-                    if display_id >= self.adapter.display_count() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let (width, height) = self.adapter.display_size(display_id);
-                    payload.width = width;
-                    payload.height = height;
-                    Ok(size_of::<ipc::DisplaySize>())
-                }
-                ipc::CREATE_DUMB_FRAMEBUFFER => {
-                    if payload.len() < size_of::<ipc::CreateDumbFramebuffer>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<
-                            &mut [u8; size_of::<ipc::CreateDumbFramebuffer>()],
-                            &mut ipc::CreateDumbFramebuffer,
-                        >(payload.as_mut_array().unwrap())
-                    };
 
                     let fb = self
                         .adapter
-                        .create_dumb_framebuffer(payload.width, payload.height);
+                        .create_dumb_framebuffer(data.width(), data.height());
 
                     *next_id += 1;
                     fbs.insert(*next_id, Arc::new(fb));
-                    payload.fb_id = *next_id;
-                    Ok(size_of::<ipc::CreateDumbFramebuffer>())
-                }
-                ipc::DUMB_FRAMEBUFFER_MAP_OFFSET => {
-                    if payload.len() < size_of::<ipc::DumbFramebufferMapOffset>() {
+                    data.set_handle(dumb_buffer_id(*next_id as u32));
+                    data.set_pitch(data.width() * 4);
+                    data.set_size(u64::from(data.width()) * u64::from(data.height()) * 4);
+                    Ok(0)
+                }),
+                ipc::MODE_MAP_DUMB => ipc::DrmModeMapDumb::with(payload, |mut data| {
+                    if data.offset() != 0 {
                         return Err(Error::new(EINVAL));
                     }
-                    let payload = unsafe {
-                        transmute::<
-                            &mut [u8; size_of::<ipc::DumbFramebufferMapOffset>()],
-                            &mut ipc::DumbFramebufferMapOffset,
-                        >(payload.as_mut_array().unwrap())
-                    };
 
-                    let fb_id = payload.fb_id;
+                    let fb_id = id_index(data.handle());
 
                     if !fbs.contains_key(&fb_id) {
                         return Err(Error::new(EINVAL));
@@ -497,27 +635,54 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                             < MAP_FAKE_OFFSET_MULTIPLIER
                     );
 
-                    payload.offset = fb_id * MAP_FAKE_OFFSET_MULTIPLIER;
+                    data.set_offset((fb_id as usize * MAP_FAKE_OFFSET_MULTIPLIER) as u64);
 
-                    Ok(size_of::<ipc::DumbFramebufferMapOffset>())
-                }
-                ipc::DESTROY_DUMB_FRAMEBUFFER => {
-                    if payload.len() < size_of::<ipc::DestroyDumbFramebuffer>() {
-                        return Err(Error::new(EINVAL));
-                    }
-                    let payload = unsafe {
-                        transmute::<
-                            &mut [u8; size_of::<ipc::DestroyDumbFramebuffer>()],
-                            &mut ipc::DestroyDumbFramebuffer,
-                        >(payload.as_mut_array().unwrap())
-                    };
-
-                    if fbs.remove(&{ payload.fb_id }).is_none() {
+                    Ok(0)
+                }),
+                ipc::MODE_DESTROY_DUMB => ipc::DrmModeDestroyDumb::with(payload, |data| {
+                    let fb_id = id_index(data.handle());
+                    if fbs.remove(&fb_id).is_none() {
                         return Err(Error::new(ENOENT));
                     }
-
-                    Ok(size_of::<ipc::DestroyDumbFramebuffer>())
+                    Ok(0)
+                }),
+                ipc::MODE_GET_PLANE_RES => ipc::DrmModeGetPlaneRes::with(payload, |mut data| {
+                    let count = self.adapter.display_count();
+                    let mut ids = Vec::with_capacity(count);
+                    for i in 0..(count as u32) {
+                        ids.push(plane_id(i));
+                    }
+                    data.set_plane_id_ptr(&ids);
+                    Ok(0)
+                }),
+                ipc::MODE_GET_PLANE => ipc::DrmModeGetPlane::with(payload, |mut data| {
+                    let i = id_index(data.plane_id());
+                    data.set_crtc_id(crtc_id(i));
+                    data.set_fb_id(fb_id(i));
+                    data.set_possible_crtcs(1 << i);
+                    data.set_format_type_ptr(&[DRM_FORMAT_ARGB8888]);
+                    Ok(0)
+                }),
+                ipc::MODE_OBJ_GET_PROPERTIES => {
+                    ipc::DrmModeObjGetProperties::with(payload, |mut data| {
+                        // TODO
+                        data.set_props_ptr(&[]);
+                        data.set_prop_values_ptr(&[]);
+                        Ok(0)
+                    })
                 }
+                ipc::MODE_GET_FB2 => ipc::DrmModeFbCmd2::with(payload, |mut data| {
+                    let i = id_index(data.fb_id());
+                    let (width, height) = self.adapter.display_size(i as usize);
+                    data.set_width(width);
+                    data.set_height(height);
+                    data.set_pixel_format(DRM_FORMAT_ARGB8888);
+                    data.set_handles([fb_handle_id(i), 0, 0, 0]);
+                    data.set_pitches([width * 4, 0, 0, 0]);
+                    data.set_offsets([0; 4]);
+                    data.set_modifier([0; 4]);
+                    Ok(0)
+                }),
                 ipc::UPDATE_PLANE => {
                     if payload.len() < size_of::<ipc::UpdatePlane>() {
                         return Err(Error::new(EINVAL));
@@ -533,7 +698,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                         return Err(Error::new(EINVAL));
                     }
 
-                    let Some(framebuffer) = fbs.get(&{ payload.fb_id }) else {
+                    let Some(framebuffer) = fbs.get(&id_index(payload.fb_id)) else {
                         return Err(Error::new(EINVAL));
                     };
 
@@ -567,7 +732,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 next_id: _,
                 fbs,
             } => (
-                fbs.get(&(offset as usize / MAP_FAKE_OFFSET_MULTIPLIER))
+                fbs.get(&((offset as usize / MAP_FAKE_OFFSET_MULTIPLIER) as u32))
                     .ok_or(Error::new(EINVAL))
                     .unwrap(),
                 offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1),
@@ -582,4 +747,38 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
     fn on_close(&mut self, id: usize) {
         self.handles.remove(&id);
     }
+}
+
+pub fn modeinfo_for_size(width: u32, height: u32) -> drm_mode_modeinfo {
+    let mut modeinfo = drm_mode_modeinfo {
+        // The actual visible display size
+        hdisplay: width as u16,
+        vdisplay: height as u16,
+
+        // These are used to calculate the refresh rate
+        clock: 60 * width * height / 1000,
+        htotal: width as u16,
+        vtotal: height as u16,
+        vscan: 0,
+        vrefresh: 60,
+
+        type_: drm_sys::DRM_MODE_TYPE_PREFERRED | drm_sys::DRM_MODE_TYPE_DRIVER,
+        name: [0; 32],
+
+        // These only matter when modesetting physical display adapters. For
+        // those we should be able to parse the EDID blob.
+        hsync_start: width as u16,
+        hsync_end: width as u16,
+        hskew: 0,
+        vsync_start: height as u16,
+        vsync_end: height as u16,
+        flags: 0,
+    };
+
+    let name = format!("{width}x{height}").into_bytes();
+    for (to, from) in modeinfo.name.iter_mut().zip(name) {
+        *to = from as c_char;
+    }
+
+    modeinfo
 }

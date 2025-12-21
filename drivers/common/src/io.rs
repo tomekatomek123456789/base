@@ -4,10 +4,12 @@ use core::{
 };
 
 mod mmio;
+mod mmio_ptr;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod pio;
 
 pub use mmio::*;
+pub use mmio_ptr::*;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use pio::*;
 
@@ -89,9 +91,5 @@ impl<I: Io> WriteOnly<I> {
         self.inner.write(value)
     }
 
-    #[inline(always)]
-    /// Calls [Io::writef]
-    pub fn writef(&mut self, flags: I::Value, value: bool) {
-        self.inner.writef(flags, value)
-    }
+    // writef requires read which is not valid when write-only
 }

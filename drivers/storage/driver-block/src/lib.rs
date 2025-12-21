@@ -370,6 +370,7 @@ impl<T: Disk> DiskScheme<T> {
                     self.on_close(id);
                     continue;
                 }
+                RequestKind::RecvFd(_) => continue,
             };
             self.socket
                 .write_response(response, SignalBehavior::Restart)?;

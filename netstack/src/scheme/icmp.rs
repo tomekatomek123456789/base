@@ -9,12 +9,12 @@ use std::str;
 use syscall;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 
-use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{Smolnetd, SocketSet};
+use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
+use super::{SchemeWrapper, Smolnetd, SocketSet};
 use crate::port_set::PortSet;
 use crate::router::Router;
 
-pub type IcmpScheme = SocketScheme<IcmpSocket<'static>>;
+pub type IcmpScheme = SchemeWrapper<IcmpSocket<'static>>;
 
 enum IcmpSocketType {
     Echo,
@@ -170,7 +170,7 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
-    ) -> SyscallResult<Option<usize>> {
+    ) -> SyscallResult<usize> {
         if self.can_send() {
             match file.data.socket_type {
                 IcmpSocketType::Echo => {
@@ -191,14 +191,14 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
                     let mut icmp_packet = Icmpv4Packet::new_unchecked(icmp_payload);
                     //TODO: replace Default with actual caps
                     icmp_repr.emit(&mut icmp_packet, &Default::default());
-                    Ok(Some(buf.len()))
+                    Ok(buf.len())
                 }
                 IcmpSocketType::Udp => Err(SyscallError::new(syscall::EINVAL)),
             }
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Ok(None) // internally scheduled to re-read
+            Err(SyscallError::new(syscall::EWOULDBLOCK)) // internally scheduled to re-read
         }
     }
 
@@ -206,7 +206,7 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
-    ) -> SyscallResult<Option<usize>> {
+    ) -> SyscallResult<usize> {
         while self.can_recv() {
             let (payload, _) = self.recv().expect("Can't recv icmp packet");
             let icmp_packet = Icmpv4Packet::new_unchecked(&payload);
@@ -223,14 +223,14 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
                     buf[mem::size_of::<u16>() + i] = data[i];
                 }
 
-                return Ok(Some(mem::size_of::<u16>() + data.len()));
+                return Ok(mem::size_of::<u16>() + data.len());
             }
         }
 
         if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Ok(None) // internally scheduled to re-read
+            Err(SyscallError::new(syscall::EWOULDBLOCK)) // internally scheduled to re-read
         }
     }
 

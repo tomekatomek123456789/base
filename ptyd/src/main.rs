@@ -1,11 +1,11 @@
+use std::cell::RefCell;
+
 use event::{user_data, EventFlags, EventQueue};
-use libredox::errno::{EAGAIN, EBADF, EWOULDBLOCK};
-use libredox::error::Error;
 use libredox::{flag, Fd};
 
-use redox_scheme::{CallRequest, RequestKind, Response, SignalBehavior, Socket};
+use redox_scheme::wrappers::ReadinessBased;
+use redox_scheme::{Response, SignalBehavior, Socket};
 use syscall::data::TimeSpec;
-use syscall::EINTR;
 
 mod controlterm;
 mod pgrp;
@@ -37,6 +37,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         Fd::open(&time_path, flag::O_NONBLOCK, 0).expect("pty: failed to open time:");
 
     let socket = redox_scheme::Socket::nonblock("pty").expect("pty: failed to create pty scheme");
+    let mut handler = ReadinessBased::new(&socket, 16);
 
     libredox::call::setrens(0, 0).expect("ptyd: failed to enter null namespace");
 
@@ -52,20 +53,18 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     //TODO: do not set timeout if not necessary
     timeout(&mut time_file).expect("pty: failed to set timeout");
 
-    let mut scheme = PtyScheme::new();
-    let mut todo = Vec::new();
+    let scheme = RefCell::new(PtyScheme::new());
     let mut timeout_count = 0u64;
 
-    scan_requests(&socket, &mut scheme, &mut todo).expect("pty: could not scan requests");
-    do_todos(&socket, &mut scheme, &mut todo);
-    issue_events(&socket, &mut scheme);
+    scan_requests(&mut handler, &scheme).expect("pty: could not scan requests");
+    issue_events(&socket, &mut *scheme.borrow_mut());
 
     for event_res in event_queue {
         let event = event_res.expect("pty: failed to read from event queue");
 
         match event.user_data {
             EventSource::Socket => {
-                if scan_requests(&socket, &mut scheme, &mut todo).is_err() {
+                if scan_requests(&mut handler, &scheme).is_err() {
                     break;
                 }
             }
@@ -74,84 +73,56 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
                 timeout_count = timeout_count.wrapping_add(1);
 
-                for (_id, handle) in scheme.handles.iter_mut() {
+                for (_id, handle) in scheme.borrow_mut().handles.iter_mut() {
                     handle.timeout(timeout_count);
                 }
+
+                handler
+                    .poll_all_requests(|| scheme.borrow_mut())
+                    .expect("ihdad: failed to poll requests");
             }
         }
 
-        do_todos(&socket, &mut scheme, &mut todo);
-        issue_events(&socket, &mut scheme);
+        issue_events(&socket, &mut *scheme.borrow_mut());
     }
 
     std::process::exit(0);
 }
 
-struct Todo {
-    request: CallRequest,
-    cancelling: bool,
-}
-
 fn scan_requests(
-    socket: &Socket,
-    scheme: &mut PtyScheme,
-    todo: &mut Vec<Todo>,
+    handler: &mut ReadinessBased<'_>,
+    scheme: &RefCell<PtyScheme>,
 ) -> libredox::error::Result<()> {
-    loop {
-        let request = match socket.next_request(SignalBehavior::Restart) {
-            Ok(Some(req)) => req,
-            Ok(None) => return Err(Error::new(EBADF)),
-            Err(error) if error.errno == EWOULDBLOCK || error.errno == EAGAIN => break,
-            Err(other) => panic!("pty: failed to read from socket: {other}"),
-        };
+    // 1. Read requests
+    match handler
+        .read_requests()
+        .expect("pty: failed to read from socket")
+    {
+        true => {} // Read requests success
+        false => {
+            panic!("pty: channel EOF")
+        }
+    }
 
-        match request.kind() {
-            RequestKind::Cancellation(req) => {
-                if let Some(idx) = todo
-                    .iter()
-                    .position(|t| t.request.request().request_id() == req.id)
-                {
-                    todo[idx].cancelling = true;
-                }
-            }
-            RequestKind::Call(request) => {
-                if let Some(response) = request.handle_scheme_block(scheme) {
-                    let _ = socket
-                        .write_response(response, SignalBehavior::Restart)
-                        .expect("pty: failed to write responses to pty scheme");
-                } else {
-                    todo.push(Todo {
-                        request,
-                        cancelling: false,
-                    });
-                }
-            }
-            _ => (),
+    // 2. Process requests
+    handler.process_requests(|| scheme.borrow_mut());
+
+    // 3. Poll all blocking requests
+    handler
+        .poll_all_requests(|| scheme.borrow_mut())
+        .expect("pty: error occured in poll_all_requests");
+
+    // 4. Write responses
+    match handler
+        .write_responses()
+        .expect("pty: failed to write to socket")
+    {
+        true => {} // Write requests success
+        false => {
+            panic!("pty: channel EOF")
         }
     }
     Ok(())
-}
-
-fn do_todos(socket: &Socket, scheme: &mut PtyScheme, todo: &mut Vec<Todo>) {
-    let mut i = 0;
-    while i < todo.len() {
-        if let Some(response) = todo[i].request.handle_scheme_block(scheme) {
-            todo.remove(i);
-            socket
-                .write_response(response, SignalBehavior::Restart)
-                .expect("pty: failed to write responses to pty scheme");
-        } else if todo[i].cancelling {
-            socket
-                .write_response(
-                    Response::new(&todo[i].request, Err(Error::new(EINTR).into())),
-                    SignalBehavior::Restart,
-                )
-                .expect("pty: failed to write responses to pty scheme");
-            todo.remove(i);
-        } else {
-            i += 1;
-        }
-    }
 }
 
 fn issue_events(socket: &Socket, scheme: &mut PtyScheme) {
@@ -159,7 +130,10 @@ fn issue_events(socket: &Socket, scheme: &mut PtyScheme) {
         let events = handle.events();
         if events != syscall::EventFlags::empty() {
             socket
-                .post_fevent(*id, events.bits())
+                .write_response(
+                    Response::post_fevent(*id, events.bits()),
+                    SignalBehavior::Restart,
+                )
                 .expect("pty: failed to send scheme event");
         }
     }

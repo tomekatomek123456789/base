@@ -6,13 +6,12 @@ use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::{iter, mem};
 
-use common::io::{Io, Mmio, Pio};
+use common::io::{Io, Mmio};
 use pcid_interface::PciFunctionHandle;
 
 use common::dma::Dma;
 
-use crate::bga::Bga;
-
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod bga;
 
 const VBOX_REQUEST_HEADER_VERSION: u32 = 0x10001;
@@ -236,9 +235,11 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
 
     let mut irq_file = irq.irq_handle("vboxd");
 
-    let mut port = Pio::<u32>::new(bar0 as u16);
     let address = unsafe { pcid_handle.map_bar(1) }.ptr.as_ptr();
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
+        let mut port = common::io::Pio::<u32>::new(bar0 as u16);
+
         let vmmdev = unsafe { &mut *(address as *mut VboxVmmDev) };
 
         let mut guest_info = VboxGuestInfo::new().expect("vboxd: failed to map GuestInfo");
@@ -278,7 +279,7 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
 
         libredox::call::setrens(0, 0).expect("vboxd: failed to enter null namespace");
 
-        let mut bga = Bga::new();
+        let mut bga = crate::bga::Bga::new();
         let get_mouse = VboxGetMouse::new().expect("vboxd: failed to map GetMouse");
         let display_change = VboxDisplayChange::new().expect("vboxd: failed to map DisplayChange");
         let ack_events = VboxAckEvents::new().expect("vboxd: failed to map AckEvents");

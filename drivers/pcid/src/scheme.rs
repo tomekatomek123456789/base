@@ -203,7 +203,13 @@ impl SchemeSync for PciScheme {
         }
     }
 
-    fn call(&mut self, id: usize, payload: &mut [u8], metadata: &[u64]) -> Result<usize> {
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
 
         if handle.stat {

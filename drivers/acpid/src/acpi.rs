@@ -1,4 +1,5 @@
 use acpi::aml::object::{Object, WrappedObject};
+use acpi::aml::op_region::{RegionHandler, RegionSpace};
 use rustc_hash::FxHashMap;
 use std::convert::{TryFrom, TryInto};
 use std::error::Error;
@@ -243,14 +244,16 @@ pub struct AmlSymbols {
     // k = name, v = description
     symbol_cache: FxHashMap<String, String>,
     page_cache: Arc<Mutex<AmlPageCache>>,
+    aml_region_handlers: Vec<(RegionSpace, Box<dyn RegionHandler>)>,
 }
 
 impl AmlSymbols {
-    pub fn new() -> Self {
+    pub fn new(aml_region_handlers: Vec<(RegionSpace, Box<dyn RegionHandler>)>) -> Self {
         Self {
             aml_context: None,
             symbol_cache: FxHashMap::default(),
             page_cache: Arc::new(Mutex::new(AmlPageCache::default())),
+            aml_region_handlers,
         }
     }
 
@@ -266,6 +269,9 @@ impl AmlSymbols {
             unsafe { AcpiTables::from_rsdp(handler.clone(), rsdp_address).map_err(format_err)? };
         let platform = AcpiPlatform::new(tables, handler).map_err(format_err)?;
         let interpreter = Interpreter::new_from_platform(&platform).map_err(format_err)?;
+        for (region, handler) in self.aml_region_handlers.drain(..) {
+            interpreter.install_region_handler(region, handler);
+        }
         self.aml_context = Some(interpreter);
         Ok(())
     }
@@ -412,7 +418,10 @@ impl AcpiContext {
             .flatten()
     }
 
-    pub fn init(rxsdt_physaddrs: impl Iterator<Item = u64>) -> Self {
+    pub fn init(
+        rxsdt_physaddrs: impl Iterator<Item = u64>,
+        ec: Vec<(RegionSpace, Box<dyn RegionHandler>)>,
+    ) -> Self {
         let tables = rxsdt_physaddrs
             .map(|physaddr| {
                 let physaddr: usize = physaddr
@@ -431,7 +440,7 @@ impl AcpiContext {
             fadt: None,
 
             // Temporary values
-            aml_symbols: RwLock::new(AmlSymbols::new()),
+            aml_symbols: RwLock::new(AmlSymbols::new(ec)),
 
             next_ctx: RwLock::new(0),
 

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use redox_initfs::{InitFs, InodeKind, InodeStruct};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +83,8 @@ fn archive_and_read() -> Result<()> {
     archive_common::archive(&args).context("failed to archive")?;
 
     let data = std::fs::read(args.destination_path).context("failed to read new archive")?;
-    let filesystem = redox_initfs::InitFs::new(&data).context("failed to parse archive header")?;
+    let filesystem =
+        redox_initfs::InitFs::new(&data, None).context("failed to parse archive header")?;
     let inode = filesystem
         .get_inode(redox_initfs::InitFs::ROOT_INODE)
         .ok_or_else(|| anyhow!("Failed to get root inode"))?;

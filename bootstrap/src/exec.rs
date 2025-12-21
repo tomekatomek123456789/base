@@ -38,23 +38,25 @@ pub fn main() -> ! {
     log::set_max_level(log::LevelFilter::Warn);
     let _ = log::set_logger(&Logger);
 
+    let mut env_bytes = [0_u8; 4096];
     let envs = {
-        let mut env = [0_u8; 4096];
+        let fd = FdGuard::open("/scheme/sys/env", O_RDONLY | O_CLOEXEC)
+            .expect("bootstrap: failed to open env");
+        let bytes_read = fd
+            .read(&mut env_bytes)
+            .expect("bootstrap: failed to read env");
 
-        let fd = FdGuard::open("/scheme/sys/env", O_RDONLY).expect("bootstrap: failed to open env");
-        let bytes_read = fd.read(&mut env).expect("bootstrap: failed to read env");
-
-        if bytes_read >= env.len() {
+        if bytes_read >= env_bytes.len() {
             // TODO: Handle this, we can allocate as much as we want in theory.
             panic!("env is too large");
         }
-        let env = &mut env[..bytes_read];
+        let env_bytes = &mut env_bytes[..bytes_read];
 
-        let raw_iter = || env.split(|c| *c == b'\n').filter(|var| !var.is_empty());
-
-        let iter = || raw_iter().filter(|var| !var.starts_with(b"INITFS_"));
-
-        iter().map(|var| var.to_owned()).collect::<Vec<_>>()
+        env_bytes
+            .split(|&c| c == b'\n')
+            .filter(|var| !var.is_empty())
+            .filter(|var| !var.starts_with(b"INITFS_"))
+            .collect::<Vec<_>>()
     };
 
     unsafe extern "C" {
@@ -90,10 +92,8 @@ pub fn main() -> ! {
     // from this point, this_thr_fd is no longer valid
 
     const CWD: &[u8] = b"/scheme/initfs";
-    const DEFAULT_SCHEME: &[u8] = b"file";
     let extrainfo = ExtraInfo {
         cwd: Some(CWD),
-        default_scheme: Some(DEFAULT_SCHEME),
         sigprocmask: 0,
         sigignmask: 0,
         umask: redox_rt::sys::get_umask(),
@@ -102,21 +102,9 @@ pub fn main() -> ! {
     };
 
     let path = "/scheme/initfs/bin/init";
-    let total_args_envs_auxvpointee_size = path.len()
-        + 1
-        + envs.len()
-        + envs.iter().map(|v| v.len()).sum::<usize>()
-        + CWD.len()
-        + 1
-        + DEFAULT_SCHEME.len()
-        + 1;
 
-    let image_file = FdGuard::open(path, O_RDONLY)
+    let image_file = FdGuard::open(path, O_RDONLY | O_CLOEXEC)
         .expect("failed to open init")
-        .to_upper()
-        .unwrap();
-    let memory = FdGuard::open("/scheme/memory", 0)
-        .expect("failed to open memory")
         .to_upper()
         .unwrap();
 
@@ -124,11 +112,9 @@ pub fn main() -> ! {
         image_file,
         init_thr_fd,
         init_proc_fd,
-        &memory,
         path.as_bytes(),
-        [path],
-        envs.iter(),
-        total_args_envs_auxvpointee_size,
+        &[path.as_bytes()],
+        &envs,
         &extrainfo,
         None,
     )

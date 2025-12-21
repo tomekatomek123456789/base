@@ -182,7 +182,7 @@ impl<'initfs> InodeStruct<'initfs> {
 }
 
 impl<'initfs> InitFs<'initfs> {
-    pub fn new(base: &'initfs [u8]) -> Result<Self> {
+    pub fn new(base: &'initfs [u8], required_page_size: Option<u16>) -> Result<Self> {
         let this = Self { base };
 
         if base.len() < core::mem::size_of::<Header>() {
@@ -211,6 +211,12 @@ impl<'initfs> InitFs<'initfs> {
             .ok_or(Error)?;
 
         if inode_table_end > this.base_len_32() {
+            return Err(Error);
+        }
+
+        if let Some(required_page_size) = required_page_size
+            && header.page_size.get() != required_page_size
+        {
             return Err(Error);
         }
 

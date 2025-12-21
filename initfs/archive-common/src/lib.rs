@@ -19,6 +19,9 @@ pub const DEFAULT_MAX_SIZE: u64 = 128 * MEBIBYTE;
 #[cfg(not(debug_assertions))]
 pub const DEFAULT_MAX_SIZE: u64 = 64 * MEBIBYTE;
 
+// FIXME make this configurable to handle systems with 16k and 64k pages.
+const PAGE_SIZE: u16 = 4096;
+
 enum EntryKind {
     File(File),
     Dir(Dir),
@@ -153,9 +156,10 @@ fn read_directory(state: &mut State, path: &Path, root_path: &Path) -> Result<Di
 }
 
 fn bump_alloc(state: &mut State, size: u64, why: &str) -> Result<u64> {
-    if state.offset + size <= state.max_size {
+    let end = (state.offset + size).next_multiple_of(PAGE_SIZE.into());
+    if end <= state.max_size {
         let offset = state.offset;
-        state.offset += size;
+        state.offset = end;
         log::debug!("Allocating range {}..{} in {}", offset, state.offset, why);
         Ok(offset)
     } else {
@@ -559,6 +563,7 @@ pub fn archive(
                 .context("failed to get initfs size")?
                 .len()
                 .into(),
+            page_size: PAGE_SIZE.into(),
         };
         write_all_at(&state.file, &header_bytes, header_offset, "writing header")
             .context("failed to write header")?;

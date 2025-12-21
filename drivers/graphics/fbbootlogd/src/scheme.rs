@@ -1,8 +1,10 @@
+use std::cmp;
 use std::collections::VecDeque;
-use std::{cmp, ptr};
 
-use console_draw::TextScreen;
-use graphics_ipc::v2::V2GraphicsHandle;
+use console_draw::{TextScreen, V2DisplayMap};
+use drm::buffer::Buffer;
+use drm::control::Device;
+use graphics_ipc::v2::{Damage, V2GraphicsHandle};
 use inputd::ConsumerHandle;
 use orbclient::{Event, EventOption};
 use redox_scheme::scheme::SchemeSync;
@@ -10,15 +12,9 @@ use redox_scheme::{CallerCtx, OpenResult};
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, Result, EINVAL, ENOENT};
 
-pub struct DisplayMap {
-    display_handle: V2GraphicsHandle,
-    fb: usize,
-    inner: graphics_ipc::v1::DisplayMap,
-}
-
 pub struct FbbootlogScheme {
     pub input_handle: ConsumerHandle,
-    display_map: Option<DisplayMap>,
+    display_map: Option<V2DisplayMap>,
     text_screen: console_draw::TextScreen,
     text_buffer: console_draw::TextBuffer,
     is_scrollback: bool,
@@ -52,25 +48,21 @@ impl FbbootlogScheme {
             }
         };
 
-        let (width, height) = new_display_handle.display_size(0).unwrap();
-        let fb = new_display_handle
-            .create_dumb_framebuffer(width, height)
-            .unwrap();
+        let (width, height) = new_display_handle
+            .get_connector(new_display_handle.first_display().unwrap(), true)
+            .unwrap()
+            .modes()[0]
+            .size();
 
-        match new_display_handle.map_dumb_framebuffer(fb, width, height) {
-            Ok(display_map) => {
-                self.display_map = Some(DisplayMap {
-                    display_handle: new_display_handle,
-                    fb,
-                    inner: display_map,
-                });
-
-                eprintln!("fbbootlogd: mapped display");
-            }
+        match V2DisplayMap::new(new_display_handle, width.into(), height.into()) {
+            Ok(display_map) => self.display_map = Some(display_map),
             Err(err) => {
                 eprintln!("fbbootlogd: failed to open display: {}", err);
+                return;
             }
-        }
+        };
+
+        eprintln!("fbbootlogd: mapped display");
     }
 
     pub fn handle_input(&mut self, ev: &Event) {
@@ -125,83 +117,56 @@ impl FbbootlogScheme {
             return;
         };
         let buffer_len = self.text_buffer.lines.len();
-        let dmap = &mut console_draw::DisplayMap {
-            offscreen: map.inner.ptr_mut(),
-            width: map.inner.width(),
-            height: map.inner.height(),
-        };
         // for both extra space on wrapping text and a scrollback indicator
         let spare_lines = 3;
         self.is_scrollback = true;
         self.scrollback_offset = cmp::min(
             self.scrollback_offset,
-            buffer_len - dmap.height / 16 + spare_lines,
+            buffer_len - map.fb.size().1 as usize / 16 + spare_lines,
         );
         let mut i = self.scrollback_offset;
         self.text_screen
-            .write(dmap, b"\x1B[1;1H\x1B[2J", &mut VecDeque::new());
+            .write(map, b"\x1B[1;1H\x1B[2J", &mut VecDeque::new());
+
+        let mut total_damage = Damage::NONE;
         while i < buffer_len {
             let mut damage =
                 self.text_screen
-                    .write(dmap, &self.text_buffer.lines[i][..], &mut VecDeque::new());
+                    .write(map, &self.text_buffer.lines[i][..], &mut VecDeque::new());
             i += 1;
             let yd = (damage.y + damage.height) as usize;
-            if i == buffer_len || yd + spare_lines * 16 > dmap.height {
+            if i == buffer_len || yd + spare_lines * 16 > map.fb.size().1 as usize {
                 // render until end of screen
-                damage.height = (dmap.height as u32) - damage.y;
-                map.display_handle.update_plane(0, map.fb, damage).unwrap();
+                damage.height = map.fb.size().1 - damage.y;
+                total_damage = total_damage.merge(damage);
                 self.is_scrollback = i < buffer_len;
                 break;
             } else {
-                map.display_handle.update_plane(0, map.fb, damage).unwrap();
+                total_damage = total_damage.merge(damage);
             }
         }
+        map.display_handle
+            .update_plane(0, u32::from(map.fb.handle()), total_damage)
+            .unwrap();
     }
 
-    fn handle_resize(map: &mut DisplayMap, text_screen: &mut TextScreen) {
-        let (width, height) = match map.display_handle.display_size(0) {
-            Ok((width, height)) => (width, height),
+    fn handle_resize(map: &mut V2DisplayMap, text_screen: &mut TextScreen) {
+        let (width, height) = match map.display_handle.first_display().and_then(|handle| {
+            Ok(map.display_handle.get_connector(handle, true)?.modes()[0].size())
+        }) {
+            Ok((width, height)) => (width.into(), height.into()),
             Err(err) => {
                 eprintln!("fbbootlogd: failed to get display size: {}", err);
-                (map.inner.width() as u32, map.inner.height() as u32)
+                map.fb.size()
             }
         };
 
-        if width as usize != map.inner.width() || height as usize != map.inner.height() {
-            match map.display_handle.create_dumb_framebuffer(width, height) {
-                Ok(fb) => match map.display_handle.map_dumb_framebuffer(fb, width, height) {
-                    Ok(mut new_map) => {
-                        let count = new_map.ptr().len();
-                        unsafe {
-                            ptr::write_bytes(new_map.ptr_mut() as *mut u32, 0, count);
-                        }
-
-                        text_screen.resize(
-                            &mut console_draw::DisplayMap {
-                                offscreen: map.inner.ptr_mut(),
-                                width: map.inner.width(),
-                                height: map.inner.height(),
-                            },
-                            &mut console_draw::DisplayMap {
-                                offscreen: new_map.ptr_mut(),
-                                width: new_map.width(),
-                                height: new_map.height(),
-                            },
-                        );
-
-                        let _ = map.display_handle.destroy_dumb_framebuffer(map.fb);
-
-                        map.fb = fb;
-                        map.inner = new_map;
-
-                        eprintln!("fbbootlogd: mapped display");
-                    }
-                    Err(err) => {
-                        eprintln!("fbbootlogd: failed to open display: {}", err);
-                    }
-                },
+        if (width, height) != map.fb.size() {
+            match text_screen.resize(map, width, height) {
+                Ok(()) => eprintln!("fbbootlogd: mapped display"),
                 Err(err) => {
-                    eprintln!("fbbootlogd: failed to create framebuffer: {}", err);
+                    eprintln!("fbbootlogd: failed to create or map framebuffer: {}", err);
+                    return;
                 }
             }
         }
@@ -260,18 +225,12 @@ impl SchemeSync for FbbootlogScheme {
             self.text_buffer.write(buf);
 
             if !self.is_scrollback {
-                let damage = self.text_screen.write(
-                    &mut console_draw::DisplayMap {
-                        offscreen: map.inner.ptr_mut(),
-                        width: map.inner.width(),
-                        height: map.inner.height(),
-                    },
-                    buf,
-                    &mut VecDeque::new(),
-                );
+                let damage = self.text_screen.write(map, buf, &mut VecDeque::new());
 
                 if let Some(map) = &self.display_map {
-                    map.display_handle.update_plane(0, map.fb, damage).unwrap();
+                    map.display_handle
+                        .update_plane(0, u32::from(map.fb.handle()), damage)
+                        .unwrap();
                 }
             }
         }

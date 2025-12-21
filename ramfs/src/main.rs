@@ -35,7 +35,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
                 let response = call.handle_sync(&mut scheme);
 
                 socket
-                    .write_responses(&[response], SignalBehavior::Restart)
+                    .write_response(response, SignalBehavior::Restart)
                     .expect("ramfs: failed to write next scheme response");
             }
             RequestKind::OnClose { id } => {

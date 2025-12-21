@@ -12,6 +12,7 @@ use redox_path::canonicalize_to_standard;
 use redox_scheme::{CallerCtx, OpenResult, RequestKind, scheme::SchemeSync};
 
 use redox_scheme::{SignalBehavior, Socket};
+use syscall::PAGE_SIZE;
 use syscall::data::Stat;
 use syscall::dirent::DirEntry;
 use syscall::dirent::DirentBuf;
@@ -37,7 +38,8 @@ impl InitFsScheme {
         Self {
             handles: HashMap::default(),
             next_id: 0,
-            fs: InitFs::new(bytes).expect("failed to parse initfs"),
+            fs: InitFs::new(bytes, Some(PAGE_SIZE.try_into().unwrap()))
+                .expect("failed to parse initfs"),
         }
     }
 
@@ -303,6 +305,38 @@ impl SchemeSync for InitFsScheme {
 
         Ok(())
     }
+
+    fn mmap_prep(
+        &mut self,
+        id: usize,
+        offset: u64,
+        size: usize,
+        flags: MapFlags,
+        _ctx: &CallerCtx,
+    ) -> syscall::Result<usize> {
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+
+        let data = match Self::get_inode(&self.fs, handle.inode)?.kind() {
+            InodeKind::File(file) => file.data().map_err(|_| Error::new(EIO))?,
+            InodeKind::Dir(_) => return Err(Error::new(EISDIR)),
+            InodeKind::Link(link) => return Err(Error::new(ELOOP)),
+            InodeKind::Unknown => return Err(Error::new(EIO)),
+        };
+
+        if flags.contains(MapFlags::PROT_WRITE) {
+            return Err(Error::new(EPERM));
+        }
+
+        let Some(last_addr) = offset.checked_add(size as u64) else {
+            return Err(Error::new(EINVAL));
+        };
+
+        if last_addr > data.len().next_multiple_of(PAGE_SIZE) as u64 {
+            return Err(Error::new(EINVAL));
+        }
+
+        Ok(data.as_ptr() as usize)
+    }
 }
 
 pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
@@ -362,4 +396,32 @@ pub unsafe extern "C" fn redox_open_v1(ptr: *const u8, len: usize, flags: usize)
 #[unsafe(no_mangle)]
 pub extern "C" fn redox_close_v1(fd: usize) -> isize {
     Error::mux(syscall::close(fd)) as isize
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn redox_sys_call_v0(
+    fd: usize,
+    payload: *mut u8,
+    payload_len: usize,
+    flags: usize,
+    metadata: *const u64,
+    metadata_len: usize,
+) -> isize {
+    let flags = CallFlags::from_bits_retain(flags);
+
+    let metadata = unsafe { core::slice::from_raw_parts(metadata, metadata_len) };
+
+    let result = if flags.contains(CallFlags::READ) {
+        let payload = unsafe { core::slice::from_raw_parts_mut(payload, payload_len) };
+        if flags.contains(CallFlags::WRITE) {
+            syscall::call_rw(fd, payload, flags, metadata)
+        } else {
+            syscall::call_ro(fd, payload, flags, metadata)
+        }
+    } else {
+        let payload = unsafe { core::slice::from_raw_parts(payload, payload_len) };
+        syscall::call_wo(fd, payload, flags, metadata)
+    };
+
+    Error::mux(result) as isize
 }

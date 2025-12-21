@@ -1,7 +1,14 @@
 use common::{
-    io::{Io, Pio, ReadOnly, WriteOnly},
+    io::{Io, ReadOnly, WriteOnly},
     timeout::Timeout,
 };
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use common::io::Pio;
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+use common::io::Mmio;
+
 use log::{debug, error, trace};
 
 use std::fmt;
@@ -102,19 +109,33 @@ const DEFAULT_TIMEOUT: u64 = 50_000;
 // Reset timeout in microseconds
 const RESET_TIMEOUT: u64 = 500_000;
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub struct Ps2 {
     data: Pio<u8>,
     status: ReadOnly<Pio<u8>>,
     command: WriteOnly<Pio<u8>>,
 }
 
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub struct Ps2 {
+    data: Mmio<u8>,
+    status: ReadOnly<Mmio<u8>>,
+    command: WriteOnly<Mmio<u8>>,
+}
+
 impl Ps2 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub fn new() -> Self {
         Ps2 {
             data: Pio::new(0x60),
             status: ReadOnly::new(Pio::new(0x64)),
             command: WriteOnly::new(Pio::new(0x64)),
         }
+    }
+
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    pub fn new() -> Self {
+        unimplemented!()
     }
 
     fn status(&mut self) -> StatusFlags {

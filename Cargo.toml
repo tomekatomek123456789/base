@@ -37,6 +37,7 @@ members = [
     "drivers/graphics/driver-graphics",
     "drivers/graphics/fbcond",
     "drivers/graphics/graphics-ipc",
+    "drivers/graphics/ihdgd",
     "drivers/graphics/vesad",
     "drivers/graphics/virtio-gpud",
 
@@ -50,6 +51,8 @@ members = [
     "drivers/net/rtl8139d",
     "drivers/net/rtl8168d",
     "drivers/net/virtio-netd",
+
+    "drivers/redoxerd",
 
     "drivers/storage/ahcid",
     "drivers/storage/bcm2835-sdhcid",
@@ -73,3 +76,12 @@ exclude = ["bootstrap"]
 # Needs libc 0.2 backport of https://github.com/rust-lang/libc/pull/4825
 libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-0.2" }
 orbclient = { git = "https://gitlab.redox-os.org/redox-os/orbclient.git", version = "0.3.44" }
+
+# Rustix doesn't support ioctls on Redox OS
+rustix = { git = "https://github.com/jackpot51/rustix.git", branch = "redox-ioctl" }
+drm = { git = "https://github.com/Smithay/drm-rs.git" }
+drm-sys = { git = "https://github.com/Smithay/drm-rs.git" }
+
+[patch."https://gitlab.redox-os.org/redox-os/relibc.git"]
+#redox-rt = { path = "../../relibc/source/redox-rt" }
+#redox-ioctl = { path = "../../relibc/source/redox-ioctl" }

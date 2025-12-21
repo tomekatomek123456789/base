@@ -27,7 +27,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
         let response = request.handle_sync(&mut scheme);
         socket
-            .write_responses(&[response], SignalBehavior::Restart)
+            .write_response(response, SignalBehavior::Restart)
             .expect("logd: failed to write responses to log scheme");
     }
     process::exit(0);

@@ -1,5 +1,3 @@
-#![feature(int_roundings, let_chains)]
-
 use event::{EventFlags, EventQueue};
 use redox_scheme::{wrappers::ReadinessBased, Socket};
 use std::sync::Mutex;

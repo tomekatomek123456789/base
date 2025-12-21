@@ -229,12 +229,12 @@ impl Disk for AtaDisk {
 
             if self.lba_48 {
                 // Set high sector count and LBA
-                chan.control.writef(0x80, true);
+                chan.control.write(0x80);
                 chan.sector_count.write((sectors >> 8) as u8);
                 chan.lba_0.write((block >> 24) as u8);
                 chan.lba_1.write((block >> 32) as u8);
                 chan.lba_2.write((block >> 40) as u8);
-                chan.control.writef(0x80, false);
+                chan.control.write(0x00);
             }
 
             // Set low sector count and LBA
@@ -373,12 +373,12 @@ impl Disk for AtaDisk {
 
             if self.lba_48 {
                 // Set high sector count and LBA
-                chan.control.writef(0x80, true);
+                chan.control.write(0x80);
                 chan.sector_count.write((sectors >> 8) as u8);
                 chan.lba_0.write((block >> 24) as u8);
                 chan.lba_1.write((block >> 32) as u8);
                 chan.lba_2.write((block >> 40) as u8);
-                chan.control.writef(0x80, false);
+                chan.control.write(0x00);
             }
 
             // Set low sector count and LBA

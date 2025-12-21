@@ -89,6 +89,13 @@ impl From<PciAddressDef> for PciAddress {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct PciRom {
+    pub addr: u32,
+    pub size: u32,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct PciFunction {
     /// Address of the PCI function.
     #[serde(with = "PciAddressDef")]
@@ -96,6 +103,9 @@ pub struct PciFunction {
 
     /// PCI Base Address Registers
     pub bars: [PciBar; 6],
+
+    /// PCI Option ROM
+    pub rom: Option<PciRom>,
 
     /// Legacy IRQ line: It's the responsibility of pcid to make sure that it be mapped in either
     /// the I/O APIC or the 8259 PIC, so that the subdriver can map the interrupt vector directly.

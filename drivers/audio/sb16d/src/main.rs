@@ -8,12 +8,14 @@ use std::{env, usize};
 
 use event::{user_data, EventQueue};
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod device;
 
 fn main() {
     daemon::Daemon::new(daemon);
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn daemon(daemon: daemon::Daemon) -> ! {
     let mut args = env::args().skip(1);
 
@@ -112,4 +114,9 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     }
 
     std::process::exit(0);
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn daemon(daemon: daemon::Daemon) -> ! {
+    unimplemented!()
 }

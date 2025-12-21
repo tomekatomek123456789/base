@@ -373,7 +373,13 @@ impl SchemeSync for AcpiScheme<'_> {
         Err(Error::new(EBADF))
     }
 
-    fn call(&mut self, id: usize, payload: &mut [u8], _metadata: &[u64]) -> Result<usize> {
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        _metadata: &[u64],
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
         if !handle.allowed_to_eval {
             return Err(Error::new(EPERM));

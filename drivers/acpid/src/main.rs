@@ -4,12 +4,15 @@ use std::mem;
 use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 
+use ::acpi::aml::op_region::{RegionHandler, RegionSpace};
 use event::{EventFlags, RawEventQueue};
 use redox_scheme::{RequestKind, SignalBehavior, Socket};
 use syscall::{EAGAIN, EWOULDBLOCK};
 
 mod acpi;
 mod aml_physmem;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod ec;
 
 mod scheme;
 
@@ -61,7 +64,11 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         _ => panic!("acpid: expected [RX]SDT from kernel to be either of those"),
     };
 
-    let acpi_context = self::acpi::AcpiContext::init(physaddrs_iter);
+    let region_handlers: Vec<(RegionSpace, Box<dyn RegionHandler + 'static>)> = vec![
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        (RegionSpace::EmbeddedControl, Box::new(ec::Ec::new())),
+    ];
+    let acpi_context = self::acpi::AcpiContext::init(physaddrs_iter, region_handlers);
 
     // TODO: I/O permission bitmap?
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

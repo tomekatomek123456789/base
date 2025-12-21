@@ -13,14 +13,17 @@ use std::{
     time::Duration,
 };
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use crate::ide::{AtaCommand, AtaDisk, Channel};
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub mod ide;
 
 fn main() {
     pcid_interface::pci_daemon(daemon);
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
     let pci_config = pcid_handle.config();
 
@@ -293,4 +296,9 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
     }
 
     std::process::exit(0);
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
+    unimplemented!()
 }

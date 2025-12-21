@@ -13,12 +13,14 @@ pub const MODE_READ: u16 = 0o4;
 #[cfg(target_arch = "x86_64")]
 use raw_cpuid::CpuId;
 
-use redox_scheme::{RequestKind, SchemeMut, SignalBehavior, Socket, V2};
+use redox_scheme::scheme::SchemeSync;
+use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
 use syscall::data::Stat;
 use syscall::flag::EventFlags;
+use syscall::schemev2::NewFdFlags;
 use syscall::{
-    Error, Result, EBADF, EBADFD, EEXIST, ENOENT, EPERM, MODE_CHR, O_CREAT, O_EXCL, O_RDONLY,
-    O_RDWR, O_WRONLY,
+    Error, Result, EBADF, EEXIST, ENOENT, EPERM, MODE_CHR, O_CREAT, O_EXCL, O_RDONLY, O_RDWR,
+    O_WRONLY,
 };
 
 // Create an RNG Seed to create initial seed from the rdrand intel instruction
@@ -166,65 +168,104 @@ impl RandScheme {
 fn test_scheme_perms() {
     use syscall::{O_CLOEXEC, O_STAT};
 
+    let mut ctx = CallerCtx {
+        pid: 0,
+        uid: 1,
+        gid: 1,
+        id: unsafe { std::mem::zeroed() }, // Id doesn't have a public constructor
+    };
+
     let mut scheme = RandScheme::new();
     scheme.prng_stat.st_mode = MODE_CHR | 0o200;
     scheme.prng_stat.st_uid = 1;
     scheme.prng_stat.st_gid = 1;
-    assert!(scheme.open("/", O_RDWR, 1, 1).is_err());
-    assert!(scheme.open("/", O_RDONLY, 1, 1).is_err());
+    assert!(scheme.open("/", O_RDWR, &ctx).is_err());
+    assert!(scheme.open("/", O_RDONLY, &ctx).is_err());
 
     scheme.prng_stat.st_mode = MODE_CHR | 0o400;
-    let mut fd = scheme.open("", O_RDONLY, 1, 1).unwrap();
+    let mut fd = match scheme.open("", O_RDONLY, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
 
-    assert!(scheme.open("", O_WRONLY, 1, 1).is_err());
-    assert!(scheme.open("", O_RDWR, 1, 1).is_err());
+    assert!(scheme.open("", O_WRONLY, &ctx).is_err());
+    assert!(scheme.open("", O_RDWR, &ctx).is_err());
 
     scheme.prng_stat.st_mode = MODE_CHR | 0o600;
-    fd = scheme.open("", O_RDWR, 1, 1).unwrap();
+    fd = match scheme.open("", O_RDWR, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
 
-    fd = scheme.open("", O_STAT, 2, 2).unwrap();
+    ctx.uid = 2;
+    ctx.gid = 2;
+    fd = match scheme.open("", O_STAT, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_err());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    assert!(scheme.close(fd).is_ok());
-    fd = scheme.open("", O_STAT | O_CLOEXEC, 2, 2).unwrap();
+    scheme.on_close(fd);
+    fd = match scheme.open("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_err());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
 
     // Try another user in group (no group perms)
-    fd = scheme.open("", O_STAT | O_CLOEXEC, 2, 1).unwrap();
+    ctx.uid = 2;
+    ctx.gid = 1;
+    fd = match scheme.open("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_err());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_err());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
     scheme.prng_stat.st_mode = MODE_CHR | 0o660;
-    fd = scheme.open("", O_STAT | O_CLOEXEC, 2, 1).unwrap();
+    fd = match scheme.open("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
 
     // Check root can do anything
     scheme.prng_stat.st_mode = MODE_CHR | 0o000;
-    fd = scheme.open("", O_STAT | O_CLOEXEC, 0, 0).unwrap();
+    ctx.uid = 0;
+    ctx.gid = 0;
+    fd = match scheme.open("", O_STAT | O_CLOEXEC, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
 
     // Check the rand:/urandom URL (Equivalent to rand:/)
     scheme.prng_stat.st_mode = MODE_CHR | 0o660;
-    fd = scheme.open("/urandom", O_STAT | O_CLOEXEC, 2, 1).unwrap();
+    ctx.uid = 2;
+    ctx.gid = 1;
+    fd = match scheme.open("/urandom", O_STAT | O_CLOEXEC, &ctx).unwrap() {
+        OpenResult::ThisScheme { number, .. } => number,
+        _ => panic!(),
+    };
     assert!(scheme.can_perform_op_on_fd(fd, MODE_READ).is_ok());
     assert!(scheme.can_perform_op_on_fd(fd, MODE_WRITE).is_ok());
-    assert!(scheme.close(fd).is_ok());
+    scheme.on_close(fd);
 }
 
-impl SchemeMut for RandScheme {
-    fn open(&mut self, path: &str, flags: usize, uid: u32, gid: u32) -> Result<usize> {
+impl SchemeSync for RandScheme {
+    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         // We are only allowing
         // reads/writes from rand:/ and rand:/urandom - the root directory on its own is passed as an empty slice
         if path != "" && path != "/urandom" {
@@ -238,8 +279,8 @@ impl SchemeMut for RandScheme {
         let open_file_info = OpenFileInfo {
             o_flags: flags,
             file_stat: self.prng_stat,
-            uid,
-            gid,
+            uid: ctx.uid,
+            gid: ctx.gid,
         };
 
         if (open_file_info.o_flag_set(O_RDONLY) || open_file_info.o_flag_set(O_RDWR))
@@ -263,11 +304,21 @@ impl SchemeMut for RandScheme {
                 self.next_fd += Wrapping(1);
             }
         }
-        Ok(fd.0)
+        Ok(OpenResult::ThisScheme {
+            number: fd.0,
+            flags: NewFdFlags::empty(),
+        })
     }
 
     /* Resource operations */
-    fn read(&mut self, file: usize, buf: &mut [u8], _offset: u64, _flags: u32) -> Result<usize> {
+    fn read(
+        &mut self,
+        file: usize,
+        buf: &mut [u8],
+        _offset: u64,
+        _flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         // Check fd and permissions
         self.can_perform_op_on_fd(file, MODE_READ)?;
 
@@ -279,7 +330,14 @@ impl SchemeMut for RandScheme {
         Ok(buf.len())
     }
 
-    fn write(&mut self, file: usize, buf: &[u8], _offset: u64, _flags: u32) -> Result<usize> {
+    fn write(
+        &mut self,
+        file: usize,
+        buf: &[u8],
+        _offset: u64,
+        _flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<usize> {
         // Check fd and permissions
         self.can_perform_op_on_fd(file, MODE_WRITE)?;
 
@@ -299,7 +357,7 @@ impl SchemeMut for RandScheme {
         Ok(buf.len())
     }
 
-    fn fchmod(&mut self, file: usize, mode: u16) -> Result<usize> {
+    fn fchmod(&mut self, file: usize, mode: u16, _ctx: &CallerCtx) -> Result<()> {
         // Check fd and permissions
         let file_info = self.get_fd(file)?;
         // only root and owner can chmod
@@ -308,10 +366,10 @@ impl SchemeMut for RandScheme {
         }
 
         self.prng_stat.st_mode = MODE_CHR | mode;
-        Ok(0)
+        Ok(())
     }
 
-    fn fchown(&mut self, file: usize, uid: u32, gid: u32) -> Result<usize> {
+    fn fchown(&mut self, file: usize, uid: u32, gid: u32, _ctx: &CallerCtx) -> Result<()> {
         // Check fd and permissions
         let file_info = self.get_fd(file)?;
         // only root and owner can chmod
@@ -321,18 +379,18 @@ impl SchemeMut for RandScheme {
 
         self.prng_stat.st_uid = uid;
         self.prng_stat.st_gid = gid;
-        Ok(0)
+        Ok(())
     }
 
-    fn fcntl(&mut self, _id: usize, _cmd: usize, _arg: usize) -> Result<usize> {
+    fn fcntl(&mut self, _id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
         // Just ignore this.
         Ok(0)
     }
 
-    fn fevent(&mut self, _id: usize, _flags: EventFlags) -> Result<EventFlags> {
+    fn fevent(&mut self, _id: usize, _flags: EventFlags, _ctx: &CallerCtx) -> Result<EventFlags> {
         Ok(EventFlags::EVENT_READ)
     }
-    fn fpath(&mut self, _file: usize, buf: &mut [u8]) -> Result<usize> {
+    fn fpath(&mut self, _file: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
         let mut i = 0;
         let scheme_path = b"rand";
         while i < buf.len() && i < scheme_path.len() {
@@ -342,26 +400,23 @@ impl SchemeMut for RandScheme {
         Ok(i)
     }
 
-    fn fstat(&mut self, file: usize, stat: &mut Stat) -> Result<usize> {
+    fn fstat(&mut self, file: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
         // Check fd and permissions
         self.can_perform_op_on_fd(file, MODE_READ)?;
 
         *stat = self.prng_stat.clone();
 
-        Ok(0)
+        Ok(())
     }
 
-    fn close(&mut self, file: usize) -> Result<usize> {
+    fn on_close(&mut self, file: usize) {
         // just remove the file descriptor from the open descriptors
-        match self.open_descriptors.remove(&file) {
-            Some(_) => Ok(0),
-            None => Err(Error::new(EBADFD)),
-        }
+        self.open_descriptors.remove(&file);
     }
 }
 
 fn daemon(daemon: daemon::Daemon) -> ! {
-    let socket = Socket::<V2>::create("rand").expect("randd: failed to create rand scheme");
+    let socket = Socket::create("rand").expect("randd: failed to create rand scheme");
 
     let mut scheme = RandScheme::new();
 
@@ -373,13 +428,16 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         .next_request(SignalBehavior::Restart)
         .expect("error reading packet")
     {
-        let RequestKind::Call(call) = request.kind() else {
-            continue;
-        };
-        let response = call.handle_scheme_mut(&mut scheme);
-        socket
-            .write_responses(&[response], SignalBehavior::Restart)
-            .expect("error writing packet");
+        match request.kind() {
+            RequestKind::Call(call) => {
+                let response = call.handle_sync(&mut scheme);
+                socket
+                    .write_response(response, SignalBehavior::Restart)
+                    .expect("error writing packet");
+            }
+            RequestKind::OnClose { id } => scheme.on_close(id),
+            _ => {}
+        }
     }
 
     process::exit(0);

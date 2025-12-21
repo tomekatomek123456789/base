@@ -2,9 +2,12 @@ use event::EventQueue;
 use inputd::ConsumerHandleEvent;
 use libredox::errno::{EAGAIN, EINTR};
 use orbclient::Event;
-use redox_scheme::{CallRequest, RequestKind, Response, SignalBehavior, Socket};
+use redox_scheme::{
+    scheme::{Op, SchemeResponse, SchemeSync},
+    CallerCtx, RequestKind, Response, SignalBehavior, Socket,
+};
 use std::env;
-use syscall::EVENT_READ;
+use syscall::{EOPNOTSUPP, EVENT_READ};
 
 use crate::scheme::{FbconScheme, VtIndex};
 
@@ -28,7 +31,6 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         common::output_level(),
         common::file_level(),
     );
-
     let mut event_queue = EventQueue::new().expect("fbcond: failed to create event queue");
 
     // FIXME listen for resize events from inputd and handle them
@@ -46,7 +48,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     // This is not possible for now as fbcond needs to open new displays at runtime for graphics
     // driver handoff. In the future inputd may directly pass a handle to the display instead.
-    //libredox::call::setrens(0, 0).expect("fbcond: failed to enter null namespace");
+    // libredox::call::setrens(0, 0).expect("fbcond: failed to enter null namespace");
 
     daemon.ready();
 
@@ -74,51 +76,78 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 fn handle_event(
     socket: &mut Socket,
     scheme: &mut FbconScheme,
-    blocked: &mut Vec<CallRequest>,
+    blocked: &mut Vec<(Op, CallerCtx)>,
     event: VtIndex,
 ) {
     match event {
-        VtIndex::SCHEMA_SENTINEL => {
-            loop {
-                let request = match socket.next_request(SignalBehavior::Restart) {
-                    Ok(Some(request)) => request,
-                    Ok(None) => {
-                        // Scheme likely got unmounted
-                        std::process::exit(0);
-                    }
-                    Err(err) if err.errno == EAGAIN => break,
-                    Err(err) => panic!("vesad: failed to read display scheme: {err}"),
-                };
-
-                match request.kind() {
-                    RequestKind::Call(call_request) => {
-                        if let Some(resp) = call_request.handle_scheme_block(scheme) {
-                            socket
-                                .write_response(resp, SignalBehavior::Restart)
-                                .expect("fbcond: failed to write display scheme");
-                        } else {
-                            blocked.push(call_request);
-                        }
-                    }
-                    RequestKind::OnClose { id } => {
-                        scheme.on_close(id);
-                    }
-                    RequestKind::Cancellation(cancellation_request) => {
-                        if let Some(i) = blocked
-                            .iter()
-                            .position(|req| req.request().request_id() == cancellation_request.id)
-                        {
-                            let blocked_req = blocked.remove(i);
-                            let resp = Response::new(&blocked_req, Err(syscall::Error::new(EINTR)));
-                            socket
-                                .write_response(resp, SignalBehavior::Restart)
-                                .expect("vesad: failed to write display scheme");
-                        }
-                    }
-                    _ => {}
+        VtIndex::SCHEMA_SENTINEL => loop {
+            let request = match socket.next_request(SignalBehavior::Restart) {
+                Ok(Some(request)) => request,
+                Ok(None) => {
+                    // Scheme likely got unmounted
+                    std::process::exit(0);
                 }
+                Err(err) if err.errno == EAGAIN => {
+                    break;
+                }
+                Err(err) => panic!("fbcond: failed to read display scheme: {err}"),
+            };
+
+            match request.kind() {
+                RequestKind::Call(req) => {
+                    let caller = req.caller();
+                    let mut op = match req.op() {
+                        Ok(op) => op,
+                        Err(req) => {
+                            let _ = socket
+                                .write_response(
+                                    Response::err(EOPNOTSUPP, req),
+                                    SignalBehavior::Restart,
+                                )
+                                .expect("fbcond: failed to write responses to fbcon scheme");
+                            continue;
+                        }
+                    };
+                    match op.handle_sync_dont_consume(&caller, scheme) {
+                        SchemeResponse::Opened(Err(e)) | SchemeResponse::Regular(Err(e))
+                            if libredox::error::Error::from(e).is_wouldblock()
+                                && !op.is_explicitly_nonblock() =>
+                        {
+                            blocked.push((op, caller));
+                        }
+                        SchemeResponse::Regular(r) => {
+                            let _ = socket
+                                .write_response(Response::new(r, op), SignalBehavior::Restart)
+                                .expect("fbcond: failed to write responses to fbcon scheme");
+                        }
+                        SchemeResponse::Opened(o) => {
+                            let _ = socket
+                                .write_response(
+                                    Response::open_dup_like(o, op),
+                                    SignalBehavior::Restart,
+                                )
+                                .expect("fbcond: failed to write responses to fbcon scheme");
+                        }
+                    };
+                }
+                RequestKind::OnClose { id } => {
+                    scheme.on_close(id);
+                }
+                RequestKind::Cancellation(cancellation_request) => {
+                    if let Some(i) = blocked
+                        .iter()
+                        .position(|(op, caller)| caller.id == cancellation_request.id)
+                    {
+                        let (blocked_req, _) = blocked.remove(i);
+                        let resp = Response::err(EINTR, blocked_req);
+                        socket
+                            .write_response(resp, SignalBehavior::Restart)
+                            .expect("vesad: failed to write display scheme");
+                    }
+                }
+                _ => {}
             }
-        }
+        },
         vt_i => {
             let vt = scheme.vts.get_mut(&vt_i).unwrap();
 
@@ -131,6 +160,7 @@ fn handle_event(
                     .expect("fbcond: Error while reading events")
                 {
                     ConsumerHandleEvent::Events(&[]) => break,
+
                     ConsumerHandleEvent::Events(events) => {
                         for event in events {
                             vt.input(event)
@@ -146,18 +176,37 @@ fn handle_event(
     {
         let mut i = 0;
         while i < blocked.len() {
-            if let Some(resp) = blocked[i].handle_scheme_block(scheme) {
-                socket
-                    .write_response(resp, SignalBehavior::Restart)
-                    .expect("vesad: failed to write display scheme");
-                blocked.remove(i);
-            } else {
-                i += 1;
-            }
+            let (op, caller) = blocked
+                .get_mut(i)
+                .expect("vesad: Failed to get blocked request");
+            let resp = match op.handle_sync_dont_consume(&caller, scheme) {
+                SchemeResponse::Opened(Err(e)) | SchemeResponse::Regular(Err(e))
+                    if libredox::error::Error::from(e).is_wouldblock()
+                        && !op.is_explicitly_nonblock() =>
+                {
+                    i += 1;
+                    continue;
+                }
+                SchemeResponse::Regular(r) => {
+                    let (op, _) = blocked.remove(i);
+                    Response::new(r, op)
+                }
+                SchemeResponse::Opened(o) => {
+                    let (op, _) = blocked.remove(i);
+                    Response::open_dup_like(o, op)
+                }
+            };
+            let _ = socket
+                .write_response(resp, SignalBehavior::Restart)
+                .expect("vesad: failed to write display scheme");
         }
     }
 
     for (handle_id, handle) in scheme.handles.iter_mut() {
+        let handle = match handle {
+            handle => handle,
+        };
+
         if !handle.events.contains(EVENT_READ) {
             continue;
         }
@@ -170,8 +219,9 @@ fn handle_event(
         if can_read {
             if !handle.notified_read {
                 handle.notified_read = true;
+                let response = Response::post_fevent(*handle_id, EVENT_READ.bits());
                 socket
-                    .post_fevent(*handle_id, EVENT_READ.bits())
+                    .write_response(response, SignalBehavior::Restart)
                     .expect("fbcond: failed to write display event");
             }
         } else {

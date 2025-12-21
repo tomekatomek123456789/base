@@ -4,9 +4,10 @@ use std::process;
 
 use anyhow::{anyhow, bail, Context, Result};
 use event::{EventFlags, EventQueue};
-use libredox::flag::{O_CREAT, O_NONBLOCK, O_RDWR};
+use libredox::flag::{O_NONBLOCK, O_RDWR};
 use libredox::Fd;
 
+use redox_scheme::Socket;
 use scheme::Smolnetd;
 use smoltcp::wire::EthernetAddress;
 
@@ -61,24 +62,25 @@ fn run(daemon: daemon::Daemon) -> Result<()> {
         .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
         .context("failed to get mac address from network adapter")?;
 
-    trace!("opening :ip");
-    let ip_fd = Fd::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK, 0).context("failed to open :ip")?;
+    trace!("opening ip scheme socket");
+    let ip_fd = Socket::nonblock("ip")
+        .map_err(|e| anyhow!("failed to open create ip scheme socket: {}", e))?;
 
-    trace!("opening :udp");
+    trace!("opening udp scheme socket");
     let udp_fd =
-        Fd::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK, 0).context("failed to open :udp")?;
+        Socket::nonblock("udp").map_err(|e| anyhow!("failed to open udp scheme socket: {}", e))?;
 
-    trace!("opening :tcp");
+    trace!("opening tcp scheme socket");
     let tcp_fd =
-        Fd::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK, 0).context("failed to open :tcp")?;
+        Socket::nonblock("tcp").map_err(|e| anyhow!("failed to open tcp scheme socket: {}", e))?;
 
-    trace!("opening :icmp");
-    let icmp_fd =
-        Fd::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK, 0).context("failed to open :icmp")?;
+    trace!("opening icmp scheme socket");
+    let icmp_fd = Socket::nonblock("icmp")
+        .map_err(|e| anyhow!("failed to open icmp scheme socket: {}", e))?;
 
-    trace!("opening :netcfg");
-    let netcfg_fd =
-        Fd::open(":netcfg", O_RDWR | O_CREAT | O_NONBLOCK, 0).context("failed to open :netcfg")?;
+    trace!("opening netcfg scheme socket");
+    let netcfg_fd = Socket::nonblock("netcfg")
+        .map_err(|e| anyhow!("failed to open netcfg scheme socket {}", e))?;
 
     let time_path = format!("/scheme/time/{}", syscall::CLOCK_MONOTONIC);
     let time_fd = Fd::open(&time_path, O_RDWR, 0).context("failed to open /scheme/time")?;
@@ -108,23 +110,39 @@ fn run(daemon: daemon::Daemon) -> Result<()> {
         .context("failed to listen to timer events")?;
 
     event_queue
-        .subscribe(ip_fd.raw(), EventSource::IpScheme, EventFlags::READ)
+        .subscribe(ip_fd.inner().raw(), EventSource::IpScheme, EventFlags::READ)
         .context("failed to listen to ip scheme events")?;
 
     event_queue
-        .subscribe(udp_fd.raw(), EventSource::UdpScheme, EventFlags::READ)
+        .subscribe(
+            udp_fd.inner().raw(),
+            EventSource::UdpScheme,
+            EventFlags::READ,
+        )
         .context("failed to listen to udp scheme events")?;
 
     event_queue
-        .subscribe(tcp_fd.raw(), EventSource::TcpScheme, EventFlags::READ)
+        .subscribe(
+            tcp_fd.inner().raw(),
+            EventSource::TcpScheme,
+            EventFlags::READ,
+        )
         .context("failed to listen to tcp scheme events")?;
 
     event_queue
-        .subscribe(icmp_fd.raw(), EventSource::IcmpScheme, EventFlags::READ)
+        .subscribe(
+            icmp_fd.inner().raw(),
+            EventSource::IcmpScheme,
+            EventFlags::READ,
+        )
         .context("failed to listen to icmp scheme events")?;
 
     event_queue
-        .subscribe(netcfg_fd.raw(), EventSource::NetcfgScheme, EventFlags::READ)
+        .subscribe(
+            netcfg_fd.inner().raw(),
+            EventSource::NetcfgScheme,
+            EventFlags::READ,
+        )
         .context("failed to listen to netcfg scheme events")?;
 
     let mut smolnetd = Smolnetd::new(
