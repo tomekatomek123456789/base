@@ -6,6 +6,8 @@ authors = ["Anhad Singh <andypython@protonmail.com>"]
 
 [dependencies]
 drm-sys = "0.8.0"
+#TODO: edid is abandoned, fork it an maintain?
+edid = "0.3.0"
 log = "0.4"
 static_assertions = "1.1.0"
 futures = { version = "0.3.28", features = ["executor"] }
