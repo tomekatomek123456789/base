@@ -1,13 +1,9 @@
 use std::any::Any;
 use std::collections::HashMap;
-use std::ffi::c_char;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-use drm_sys::{
-    drm_mode_modeinfo, DRM_MODE_OBJECT_BLOB, DRM_MODE_OBJECT_CONNECTOR, DRM_MODE_OBJECT_ENCODER,
-    DRM_MODE_OBJECT_PROPERTY, DRM_PROP_NAME_LEN,
-};
+use drm_sys::{drm_mode_modeinfo, DRM_MODE_OBJECT_CONNECTOR, DRM_MODE_OBJECT_ENCODER};
 use syscall::{Error, Result, EINVAL};
 
 use crate::GraphicsAdapter;
@@ -17,7 +13,7 @@ pub struct DrmObjects<T: GraphicsAdapter> {
     next_id: DrmObjectId,
     connectors: Vec<DrmObjectId>,
     encoders: Vec<DrmObjectId>,
-    objects: HashMap<DrmObjectId, DrmObjectData>,
+    pub(crate) objects: HashMap<DrmObjectId, DrmObjectData>,
     _marker: PhantomData<T>,
 }
 
@@ -32,7 +28,7 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
         }
     }
 
-    fn add<U: DrmObject>(&mut self, data: U) -> DrmObjectId {
+    pub(crate) fn add<U: DrmObject>(&mut self, data: U) -> DrmObjectId {
         let id = self.next_id;
         self.objects.insert(
             id,
@@ -46,7 +42,7 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
         id
     }
 
-    fn get<U: DrmObject>(&self, id: DrmObjectId) -> Result<&U> {
+    pub(crate) fn get<U: DrmObject>(&self, id: DrmObjectId) -> Result<&U> {
         let object = self.objects.get(&id).ok_or(Error::new(EINVAL))?;
         if let Some(object) = (&*object.kind as &dyn Any).downcast_ref::<U>() {
             Ok(object)
@@ -55,7 +51,7 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
         }
     }
 
-    fn get_mut<U: DrmObject>(&mut self, id: DrmObjectId) -> Result<&mut U> {
+    pub(crate) fn get_mut<U: DrmObject>(&mut self, id: DrmObjectId) -> Result<&mut U> {
         let object = self.objects.get_mut(&id).ok_or(Error::new(EINVAL))?;
         if let Some(object) = (&mut *object.kind as &mut dyn Any).downcast_mut::<U>() {
             Ok(object)
@@ -67,86 +63,6 @@ impl<T: GraphicsAdapter> DrmObjects<T> {
     pub fn object_type(&self, id: DrmObjectId) -> Result<u32> {
         let object = self.objects.get(&id).ok_or(Error::new(EINVAL))?;
         Ok(object.kind.object_type())
-    }
-
-    pub fn add_property(
-        &mut self,
-        name: &str,
-        immutable: bool,
-        atomic: bool,
-        kind: DrmPropertyKind,
-    ) -> DrmObjectId {
-        if name.len() > DRM_PROP_NAME_LEN as usize {
-            panic!("Property name {name} is too long");
-        }
-
-        match &kind {
-            DrmPropertyKind::Range(start, end) => assert!(start < end),
-            DrmPropertyKind::Enum(variants) => {
-                // FIXME check duplicate variant numbers
-                for (variant_name, _) in variants {
-                    if variant_name.len() > DRM_PROP_NAME_LEN as usize {
-                        panic!("Property variant name {variant_name} is too long");
-                    }
-                }
-            }
-            DrmPropertyKind::Blob => {}
-            DrmPropertyKind::Bitmask(bitmask_flags) => {
-                // FIXME check overlapping flag numbers
-                for (flag_name, _) in bitmask_flags {
-                    if flag_name.len() > DRM_PROP_NAME_LEN as usize {
-                        panic!("Property bitflag name {flag_name} is too long");
-                    }
-                }
-            }
-            DrmPropertyKind::Object => {}
-            DrmPropertyKind::SignedRange(start, end) => assert!(start < end),
-        }
-
-        let mut name_bytes = [0; DRM_PROP_NAME_LEN as usize];
-        for (to, &from) in name_bytes.iter_mut().zip(name.as_bytes()) {
-            *to = from as c_char;
-        }
-
-        self.add(DrmProperty {
-            name: name_bytes,
-            immutable,
-            atomic,
-            kind,
-        })
-    }
-
-    pub fn get_property(&self, id: DrmObjectId) -> Result<&DrmProperty> {
-        self.get(id)
-    }
-
-    pub fn add_object_property(&mut self, object: DrmObjectId, property: DrmObjectId, value: u64) {
-        let object = self.objects.get_mut(&object).unwrap();
-        // FIXME validate property uniqueness and value
-        object.properties.push((property, value));
-    }
-
-    pub fn set_object_property(&mut self, object: DrmObjectId, property: DrmObjectId, value: u64) {
-        let object = self.objects.get_mut(&object).unwrap();
-        // FIXME validate property existence and value
-        for (prop, val) in object.properties.iter_mut() {
-            if *prop == property {
-                *val = value;
-            }
-        }
-    }
-
-    pub fn get_object_properties(&self, id: DrmObjectId) -> Result<&[(DrmObjectId, u64)]> {
-        let object = self.objects.get(&id).ok_or(Error::new(EINVAL))?;
-        Ok(&object.properties)
-    }
-
-    pub fn add_blob(&mut self, data: Vec<u8>) -> DrmObjectId {
-        self.add(DrmBlob { data })
-    }
-
-    pub fn get_blob(&self, id: DrmObjectId) -> Result<&[u8]> {
-        Ok(&self.get::<DrmBlob>(id)?.data)
     }
 
     pub fn add_connector(&mut self, driver_data: T::Connector) -> DrmObjectId {
@@ -225,48 +141,13 @@ impl From<DrmObjectId> for u64 {
 }
 
 #[derive(Debug)]
-struct DrmObjectData {
+pub(crate) struct DrmObjectData {
     kind: Box<dyn DrmObject + 'static>,
-    properties: Vec<(DrmObjectId, u64)>,
+    pub(crate) properties: Vec<(DrmObjectId, u64)>,
 }
 
 pub trait DrmObject: Any + Debug {
     fn object_type(&self) -> u32;
-}
-
-#[derive(Debug)]
-pub struct DrmProperty {
-    pub name: [c_char; DRM_PROP_NAME_LEN as usize],
-    pub immutable: bool,
-    pub atomic: bool,
-    pub kind: DrmPropertyKind,
-}
-
-#[derive(Debug)]
-pub enum DrmPropertyKind {
-    Range(u64, u64),
-    Enum(Vec<(&'static str, u64)>),
-    Blob,
-    Bitmask(Vec<(&'static str, u64)>),
-    Object,
-    SignedRange(i64, i64),
-}
-
-impl DrmObject for DrmProperty {
-    fn object_type(&self) -> u32 {
-        DRM_MODE_OBJECT_PROPERTY
-    }
-}
-
-#[derive(Debug)]
-pub struct DrmBlob {
-    data: Vec<u8>,
-}
-
-impl DrmObject for DrmBlob {
-    fn object_type(&self) -> u32 {
-        DRM_MODE_OBJECT_BLOB
-    }
 }
 
 #[derive(Debug)]
