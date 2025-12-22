@@ -32,6 +32,12 @@ use virtio_core::MSIX_PRIMARY_VECTOR;
 
 mod scheme;
 
+//const VIRTIO_GPU_F_VIRGL: u32 = 0;
+const VIRTIO_GPU_F_EDID: u32 = 1;
+//const VIRTIO_GPU_F_RESOURCE_UUID: u32 = 2;
+//const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
+//const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
+
 const VIRTIO_GPU_EVENT_DISPLAY: u32 = 1 << 0;
 const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
 
@@ -364,6 +370,44 @@ impl XferToHost2d {
 
 #[derive(Debug)]
 #[repr(C)]
+pub struct GetEdid {
+    pub header: ControlHeader,
+    pub scanout: u32,
+    pub padding: u32,
+}
+
+impl GetEdid {
+    pub fn new(scanout_id: u32) -> Self {
+        Self {
+            header: ControlHeader::with_ty(CommandTy::GetEdid),
+            scanout: scanout_id,
+            padding: 0,
+        }
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub struct GetEdidResp {
+    pub header: ControlHeader,
+    pub size: u32,
+    pub padding: u32,
+    pub edid: [u8; 1024],
+}
+
+impl GetEdidResp {
+    pub fn new() -> Self {
+        Self {
+            header: ControlHeader::with_ty(CommandTy::GetEdid),
+            size: 0,
+            padding: 0,
+            edid: [0; 1024],
+        }
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)]
 pub struct CursorPos {
     pub scanout_id: u32,
     pub x: i32,
@@ -461,6 +505,10 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
     let config = unsafe { &mut *(device.device_space as *mut GpuConfig) };
 
     // Negotiate features.
+    let has_edid = device.transport.check_device_feature(VIRTIO_GPU_F_EDID);
+    if has_edid {
+        device.transport.ack_driver_feature(VIRTIO_GPU_F_EDID);
+    }
     device.transport.finalize_features();
 
     // Queue for sending control commands.
@@ -483,6 +531,7 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
         control_queue.clone(),
         cursor_queue.clone(),
         device.transport.clone(),
+        has_edid,
     )?;
 
     user_data! {
@@ -542,9 +591,12 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
                 let events = scheme.adapter().config.events_read.get();
 
                 if events & VIRTIO_GPU_EVENT_DISPLAY != 0 {
+                    let standard_properties = scheme.standard_properties();
                     let (adapter, objects) = scheme.adapter_and_objects_mut();
                     futures::executor::block_on(async { adapter.update_displays().await.unwrap() });
-                    objects.for_each_connector_mut(|connector| adapter.probe_connector(connector));
+                    for connector_id in objects.connector_ids().to_vec() {
+                        adapter.probe_connector(objects, &standard_properties, connector_id);
+                    }
                     scheme.notify_displays_changed();
                     scheme
                         .adapter_mut()
