@@ -2,14 +2,12 @@ use common::{
     io::{Io, MmioPtr},
     timeout::Timeout,
 };
-use embedded_hal::prelude::*;
 use pcid_interface::{PciFunction, PciFunctionHandle};
 use range_alloc::RangeAllocator;
-use std::{collections::VecDeque, fmt, mem, sync::Arc, time::Duration};
+use std::{collections::VecDeque, fmt, mem, sync::Arc};
 use syscall::error::{Error, Result, EIO, ENODEV, ERANGE};
 
 mod aux;
-use self::aux::*;
 mod bios;
 use self::bios::*;
 mod ddi;
@@ -552,102 +550,10 @@ impl Device {
         // Enable DDI power well
         self.power_wells.enable_well_by_ddi(ddi.name)?;
 
-        //TODO: init port if needed
-        if let Some(port_comp_dw0) = ddi.port_comp(PortCompReg::Dw0) {
-            log::debug!("PORT_COMP_DW0_{}: {:08X}", ddi.name, port_comp_dw0.read());
-        }
-
-        let mut aux_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
-            //TODO: BLOCK TCCOLD?
-
-            //TODO: the request can be shared by multiple DDIs
-            let pwr_well_ctl_aux_request = ddi.pwr_well_ctl_aux_request;
-            let pwr_well_ctl_aux_state = ddi.pwr_well_ctl_aux_state;
-            let mut pwr_well_ctl_aux =
-                unsafe { MmioPtr::new(self.power_wells.ctl_aux.as_mut_ptr()) };
-            let _pwr_guard = CallbackGuard::new(
-                &mut pwr_well_ctl_aux,
-                |pwr_well_ctl_aux| {
-                    // Enable aux power
-                    pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, true);
-                    let timeout = Timeout::from_micros(1500);
-                    while !pwr_well_ctl_aux.readf(pwr_well_ctl_aux_state) {
-                        timeout.run().map_err(|()| {
-                            log::debug!("timeout while requesting DDI {} aux power", ddi.name);
-                            Error::new(EIO)
-                        })?;
-                    }
-                    Ok(())
-                },
-                |pwr_well_ctl_aux| {
-                    // Disable aux power
-                    pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, false);
-                },
-            )?;
-
-            let mut edid_data = [0; 128];
-            Aux::new(ddi)
-                .write_read(0x50, &[0x00], &mut edid_data)
-                .map_err(|_err| Error::new(EIO))?;
-
-            Ok(edid_data)
-        };
-
-        let mut gmbus_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
-            let Some(pin_pair) = ddi.gmbus_pin_pair else {
-                return Err(Error::new(EIO));
-            };
-
-            let mut edid_data = [0; 128];
-            self.gmbus
-                .pin_pair(pin_pair)
-                .write_read(0x50, &[0x00], &mut edid_data)
-                .map_err(|_err| Error::new(EIO))?;
-
-            Ok(edid_data)
-        };
-
-        let gpio_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
-            let Some(port) = &ddi.gpio_port else {
-                return Err(Error::new(EIO));
-            };
-
-            let mut edid_data = [0; 128];
-            let i2c_freq = 100_000.0;
-            bitbang_hal::i2c::I2cBB::new(
-                unsafe { port.clock(&self.gttmm)? },
-                unsafe { port.data(&self.gttmm)? },
-                HalTimer::new(Duration::from_secs_f64(1.0 / i2c_freq)),
-            )
-            .write_read(0x50, &[0x00], &mut edid_data)
-            .map_err(|_err| Error::new(EIO))?;
-
-            Ok(edid_data)
-        };
-
-        let (source, edid_data) = match aux_read_edid(ddi) {
-            Ok(edid_data) => ("AUX", edid_data),
-            Err(err) => {
-                log::debug!("DDI {} failed to read EDID from AUX: {}", ddi.name, err);
-                match gmbus_read_edid(ddi) {
-                    Ok(edid_data) => ("GMBUS", edid_data),
-                    Err(err) => {
-                        log::debug!("DDI {} failed to read EDID from GMBUS: {}", ddi.name, err);
-                        match gpio_read_edid(ddi) {
-                            Ok(edid_data) => ("GPIO", edid_data),
-                            Err(err) => {
-                                log::debug!(
-                                    "DDI {} failed to read EDID from GPIO: {}",
-                                    ddi.name,
-                                    err
-                                );
-                                // Will try again but not fail the driver
-                                return Ok(false);
-                            }
-                        }
-                    }
-                }
-            }
+        let Some((source, edid_data)) =
+            ddi.probe_edid(&mut self.power_wells, &self.gttmm, &mut self.gmbus)?
+        else {
+            return Ok(false);
         };
 
         let edid = match edid::parse(&edid_data).to_full_result() {
@@ -667,16 +573,10 @@ impl Device {
             }
         };
 
-        let mut timing_opt = None;
-        for desc in edid.descriptors.iter() {
-            match desc {
-                edid::Descriptor::DetailedTiming(timing) => {
-                    timing_opt = Some(timing);
-                    break;
-                }
-                _ => {}
-            }
-        }
+        let timing_opt = edid.descriptors.iter().find_map(|desc| match desc {
+            edid::Descriptor::DetailedTiming(timing) => Some(timing),
+            _ => None,
+        });
         let Some(timing) = timing_opt else {
             log::warn!(
                 "DDI {} EDID from {} missing detailed timing",
