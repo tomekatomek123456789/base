@@ -2,12 +2,11 @@ use common::io::{Io, MmioPtr, WriteOnly};
 use common::timeout::Timeout;
 use embedded_hal::prelude::*;
 use std::sync::Arc;
-use std::time::Duration;
 use syscall::error::{Error, Result, EIO};
 
 use crate::device::aux::Aux;
 use crate::device::power::PowerWells;
-use crate::device::{CallbackGuard, Gmbus, HalTimer};
+use crate::device::{CallbackGuard, Gmbus};
 
 use super::{GpioPort, MmioRegion};
 
@@ -269,14 +268,9 @@ impl Ddi {
             };
 
             let mut edid_data = [0; 128];
-            let i2c_freq = 100_000.0;
-            bitbang_hal::i2c::I2cBB::new(
-                unsafe { port.clock(gttmm)? },
-                unsafe { port.data(gttmm)? },
-                HalTimer::new(Duration::from_secs_f64(1.0 / i2c_freq)),
-            )
-            .write_read(0x50, &[0x00], &mut edid_data)
-            .map_err(|_err| Error::new(EIO))?;
+            unsafe { port.i2c(gttmm)? }
+                .write_read(0x50, &[0x00], &mut edid_data)
+                .map_err(|_err| Error::new(EIO))?;
 
             Ok(edid_data)
         };
