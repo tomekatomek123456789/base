@@ -400,10 +400,14 @@ impl Device {
             }
         }
 
+        //TODO: get number of available buffers
+        let buffers = 1024;
+        //TODO: how to use 64-bit surface addresses?
+        let surface_memory = gm.size.min(u32::max_value() as usize) as u32;
         let mut this = Self {
             kind,
-            alloc_buffers: RangeAllocator::new(0..1024), //TODO: get number of available buffers
-            alloc_surfaces: RangeAllocator::new(0..gm.size as u32),
+            alloc_buffers: RangeAllocator::new(0..buffers),
+            alloc_surfaces: RangeAllocator::new(0..surface_memory),
             bios,
             ddis,
             dpclka_cfgcr0,
