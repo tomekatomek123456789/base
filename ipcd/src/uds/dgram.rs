@@ -13,7 +13,6 @@ use redox_scheme::{
     scheme::SchemeSync, CallerCtx, OpenResult, RecvFdRequest, Response, SendFdRequest,
     SignalBehavior, Socket as SchemeSocket,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     cell::RefCell,
     cmp,
@@ -111,7 +110,7 @@ impl Socket {
 
 pub struct UdsDgramScheme<'sock> {
     sockets: HashMap<usize, Rc<RefCell<Socket>>>,
-    next_id: AtomicUsize,
+    next_id: usize,
     socket_paths: HashMap<String, Rc<RefCell<Socket>>>,
     socket_tokens: HashMap<u64, Rc<RefCell<Socket>>>,
     socket: &'sock SchemeSocket,
@@ -123,7 +122,7 @@ impl<'sock> UdsDgramScheme<'sock> {
     pub fn new(socket: &'sock SchemeSocket) -> Result<Self> {
         Ok(Self {
             sockets: HashMap::new(),
-            next_id: 0.into(),
+            next_id: 0,
             socket_paths: HashMap::new(),
             socket_tokens: HashMap::new(),
             socket,
@@ -173,12 +172,13 @@ impl<'sock> UdsDgramScheme<'sock> {
     }
 
     fn handle_unnamed_socket(&mut self, flags: usize) -> usize {
-        let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let new_id = self.next_id;
         let mut new = Socket::default();
         new.flags = flags;
         new.primary_id = new_id;
 
         self.sockets.insert(new_id, Rc::new(RefCell::new(new)));
+        self.next_id += 1;
         new_id
     }
 
@@ -448,7 +448,7 @@ impl<'sock> UdsDgramScheme<'sock> {
     }
 
     fn handle_connect_socketpair(&mut self, id: usize) -> Result<OpenResult> {
-        let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let new_id = self.next_id;
         let mut new = Socket::default();
         new.primary_id = new_id;
 
@@ -475,6 +475,8 @@ impl<'sock> UdsDgramScheme<'sock> {
 
         self.sockets.insert(new_id, Rc::new(RefCell::new(new)));
 
+        self.next_id += 1;
+
         Ok(OpenResult::ThisScheme {
             number: new_id,
             flags: NewFdFlags::empty(),
@@ -492,9 +494,10 @@ impl<'sock> UdsDgramScheme<'sock> {
     fn handle_listen(&mut self, id: usize) -> Result<OpenResult> {
         let socket_rc = self.get_socket(id)?;
 
-        let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let new_id = self.next_id;
 
         self.sockets.insert(new_id, socket_rc.clone());
+        self.next_id += 1;
 
         Ok(OpenResult::ThisScheme {
             number: new_id,
