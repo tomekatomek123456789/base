@@ -24,9 +24,11 @@ use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
 use syscall::schemev2::NewFdFlags;
 use syscall::{Error, MapFlags, Result, EAGAIN, EBADF, EINVAL, ENOENT, EOPNOTSUPP};
 
-use crate::objects::{DrmObjectId, DrmObjects, DrmPropertyKind};
+use crate::objects::{DrmObjectId, DrmObjects};
+use crate::properties::DrmPropertyKind;
 
 pub mod objects;
+pub mod properties;
 
 #[derive(Debug, Copy, Clone)]
 pub struct StandardProperties {
@@ -35,7 +37,7 @@ pub struct StandardProperties {
 }
 
 pub trait GraphicsAdapter: Sized + Debug {
-    type Connector: Debug;
+    type Connector: Debug + 'static;
 
     type Framebuffer: Framebuffer;
     type Cursor: CursorFramebuffer;

@@ -7,7 +7,7 @@ use driver_graphics::{
     modeinfo_for_size, CursorFramebuffer, CursorPlane, Framebuffer, GraphicsAdapter,
     GraphicsScheme, StandardProperties,
 };
-use drm_sys::DRM_MODE_DPMS_ON;
+use drm_sys::{DRM_MODE_DPMS_ON, DRM_MODE_TYPE_PREFERRED};
 use graphics_ipc::v1::Damage;
 use graphics_ipc::v2::ipc::{DRM_CAP_DUMB_BUFFER, DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT};
 use inputd::DisplayHandle;
@@ -307,6 +307,41 @@ impl<'a> GraphicsAdapter for VirtGpuAdapter<'a> {
             };
 
             if self.has_edid {
+                let edid = edid::parse(&display.edid).unwrap().1;
+
+                let first_detailed_timing = edid
+                    .descriptors
+                    .iter()
+                    .find_map(|descriptor| match descriptor {
+                        edid::Descriptor::DetailedTiming(detailed_timing) => Some(detailed_timing),
+                        _ => None,
+                    })
+                    .unwrap();
+                connector.mm_width = first_detailed_timing.horizontal_size.into();
+                connector.mm_height = first_detailed_timing.vertical_size.into();
+
+                connector.modes = edid
+                    .descriptors
+                    .iter()
+                    .filter_map(|descriptor| {
+                        match descriptor {
+                            edid::Descriptor::DetailedTiming(detailed_timing) => {
+                                // FIXME extract full information
+                                Some(modeinfo_for_size(
+                                    u32::from(detailed_timing.horizontal_active_pixels),
+                                    u32::from(detailed_timing.vertical_active_lines),
+                                ))
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // First detailed timing descriptor indicates preferred mode.
+                for mode in connector.modes.iter_mut().skip(1) {
+                    mode.flags &= !DRM_MODE_TYPE_PREFERRED;
+                }
+
                 let blob = objects.add_blob(display.edid.clone());
                 objects.set_object_property(id, standard_properties.edid, blob.into());
             }

@@ -97,7 +97,13 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
                     readiness_based
                         .poll_all_requests(|| device.borrow_mut())
-                        .expect("ihdad: failed to poll requests");
+                        .expect("alxd: failed to poll requests");
+                    if !readiness_based
+                        .write_responses()
+                        .expect("alxd: failed to write to socket")
+                    {
+                        break;
+                    }
 
                     /* TODO: Currently a no-op
                     let next_read = device.next_read();

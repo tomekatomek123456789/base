@@ -102,6 +102,12 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
                 readiness_based
                     .poll_all_requests(|| device.borrow_mut())
                     .expect("ac97d: failed to poll requests");
+                if !readiness_based
+                    .write_responses()
+                    .expect("ac97d: failed to write to socket")
+                {
+                    break;
+                }
 
                 /*
                 let next_read = device_irq.next_read();

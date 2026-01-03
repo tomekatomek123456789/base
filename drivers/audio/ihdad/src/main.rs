@@ -104,6 +104,12 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
                     readiness_based
                         .poll_all_requests(|| device.borrow_mut())
                         .expect("ihdad: failed to poll requests");
+                    if !readiness_based
+                        .write_responses()
+                        .expect("ihdad: failed to write to socket")
+                    {
+                        break;
+                    }
 
                     /*
                     let next_read = device_irq.next_read();

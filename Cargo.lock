@@ -2569,6 +2569,7 @@ dependencies = [
  "daemon",
  "driver-graphics",
  "drm-sys",
+ "edid",
  "futures",
  "graphics-ipc",
  "inputd",

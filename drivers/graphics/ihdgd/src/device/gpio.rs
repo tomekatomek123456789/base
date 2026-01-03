@@ -1,7 +1,11 @@
 use std::convert::Infallible;
+use std::time::Duration;
 
 use common::io::{Io, MmioPtr};
+use embedded_hal::blocking::i2c;
 use embedded_hal::digital::v2 as digital;
+
+use crate::device::HalTimer;
 
 use super::MmioRegion;
 
@@ -35,18 +39,28 @@ pub enum GpioPort {
 }
 
 impl GpioPort {
-    pub unsafe fn clock(&self, gttmm: &MmioRegion) -> syscall::Result<GpioPin> {
-        Ok(GpioPin {
-            ctl: gttmm.mmio(*self as usize)?,
-            shift: GPIO_CLOCK_SHIFT,
-        })
-    }
-
-    pub unsafe fn data(&self, gttmm: &MmioRegion) -> syscall::Result<GpioPin> {
-        Ok(GpioPin {
-            ctl: gttmm.mmio(*self as usize)?,
-            shift: GPIO_DATA_SHIFT,
-        })
+    pub unsafe fn i2c(
+        &self,
+        gttmm: &MmioRegion,
+    ) -> syscall::Result<bitbang_hal::i2c::I2cBB<GpioPin, GpioPin, HalTimer>> {
+        let i2c_freq = 100_000.0;
+        let (scl, sda) = unsafe {
+            (
+                GpioPin {
+                    ctl: gttmm.mmio(*self as usize)?,
+                    shift: GPIO_CLOCK_SHIFT,
+                },
+                GpioPin {
+                    ctl: gttmm.mmio(*self as usize)?,
+                    shift: GPIO_DATA_SHIFT,
+                },
+            )
+        };
+        Ok(bitbang_hal::i2c::I2cBB::new(
+            scl,
+            sda,
+            HalTimer::new(Duration::from_secs_f64(1.0 / i2c_freq)),
+        ))
     }
 }
 

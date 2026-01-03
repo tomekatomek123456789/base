@@ -1,6 +1,12 @@
 use common::io::{Io, MmioPtr, WriteOnly};
+use common::timeout::Timeout;
+use embedded_hal::prelude::*;
 use std::sync::Arc;
 use syscall::error::{Error, Result, EIO};
+
+use crate::device::aux::Aux;
+use crate::device::power::PowerWells;
+use crate::device::{CallbackGuard, Gmbus};
 
 use super::{GpioPort, MmioRegion};
 
@@ -198,6 +204,101 @@ impl Ddi {
     //TODO: return WriteOnly if PortLane::Grp?
     pub fn port_tx(&self, reg: PortTxReg, lane: PortLane) -> Option<MmioPtr<u32>> {
         self.port_reg((reg as usize) + (lane as usize))
+    }
+
+    pub fn probe_edid(
+        &mut self,
+        power_wells: &mut PowerWells,
+        gttmm: &MmioRegion,
+        gmbus: &mut Gmbus,
+    ) -> Result<Option<(&'static str, [u8; 128])>, Error> {
+        if let Some(port_comp_dw0) = self.port_comp(PortCompReg::Dw0) {
+            log::debug!("PORT_COMP_DW0_{}: {:08X}", self.name, port_comp_dw0.read());
+        }
+        let mut aux_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
+            //TODO: BLOCK TCCOLD?
+
+            //TODO: the request can be shared by multiple DDIs
+            let pwr_well_ctl_aux_request = ddi.pwr_well_ctl_aux_request;
+            let pwr_well_ctl_aux_state = ddi.pwr_well_ctl_aux_state;
+            let mut pwr_well_ctl_aux = unsafe { MmioPtr::new(power_wells.ctl_aux.as_mut_ptr()) };
+            let _pwr_guard = CallbackGuard::new(
+                &mut pwr_well_ctl_aux,
+                |pwr_well_ctl_aux| {
+                    // Enable aux power
+                    pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, true);
+                    let timeout = Timeout::from_micros(1500);
+                    while !pwr_well_ctl_aux.readf(pwr_well_ctl_aux_state) {
+                        timeout.run().map_err(|()| {
+                            log::debug!("timeout while requesting DDI {} aux power", ddi.name);
+                            Error::new(EIO)
+                        })?;
+                    }
+                    Ok(())
+                },
+                |pwr_well_ctl_aux| {
+                    // Disable aux power
+                    pwr_well_ctl_aux.writef(pwr_well_ctl_aux_request, false);
+                },
+            )?;
+
+            let mut edid_data = [0; 128];
+            Aux::new(ddi)
+                .write_read(0x50, &[0x00], &mut edid_data)
+                .map_err(|_err| Error::new(EIO))?;
+
+            Ok(edid_data)
+        };
+        let mut gmbus_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
+            let Some(pin_pair) = ddi.gmbus_pin_pair else {
+                return Err(Error::new(EIO));
+            };
+
+            let mut edid_data = [0; 128];
+            gmbus
+                .pin_pair(pin_pair)
+                .write_read(0x50, &[0x00], &mut edid_data)
+                .map_err(|_err| Error::new(EIO))?;
+
+            Ok(edid_data)
+        };
+        let gpio_read_edid = |ddi: &mut Ddi| -> Result<[u8; 128]> {
+            let Some(port) = &ddi.gpio_port else {
+                return Err(Error::new(EIO));
+            };
+
+            let mut edid_data = [0; 128];
+            unsafe { port.i2c(gttmm)? }
+                .write_read(0x50, &[0x00], &mut edid_data)
+                .map_err(|_err| Error::new(EIO))?;
+
+            Ok(edid_data)
+        };
+        let (source, edid_data) = match aux_read_edid(self) {
+            Ok(edid_data) => ("AUX", edid_data),
+            Err(err) => {
+                log::debug!("DDI {} failed to read EDID from AUX: {}", self.name, err);
+                match gmbus_read_edid(self) {
+                    Ok(edid_data) => ("GMBUS", edid_data),
+                    Err(err) => {
+                        log::debug!("DDI {} failed to read EDID from GMBUS: {}", self.name, err);
+                        match gpio_read_edid(self) {
+                            Ok(edid_data) => ("GPIO", edid_data),
+                            Err(err) => {
+                                log::debug!(
+                                    "DDI {} failed to read EDID from GPIO: {}",
+                                    self.name,
+                                    err
+                                );
+                                // Will try again but not fail the driver
+                                return Ok(None);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        Ok(Some((source, edid_data)))
     }
 
     pub fn voltage_swing_hdmi(
