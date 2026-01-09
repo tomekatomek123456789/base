@@ -1,3 +1,5 @@
+use core::str::FromStr;
+
 use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
@@ -35,9 +37,6 @@ pub fn main() -> ! {
         .unwrap();
     let this_thr_fd = unsafe { redox_rt::initialize_freestanding(this_thr_fd) };
 
-    log::set_max_level(log::LevelFilter::Warn);
-    let _ = log::set_logger(&Logger);
-
     let mut env_bytes = [0_u8; 4096];
     let envs = {
         let fd = FdGuard::open("/scheme/sys/env", O_RDONLY | O_CLOEXEC)
@@ -58,6 +57,19 @@ pub fn main() -> ! {
             .filter(|var| !var.starts_with(b"INITFS_"))
             .collect::<Vec<_>>()
     };
+
+    log::set_max_level(log::LevelFilter::Warn);
+
+    if let Some(log_env) = envs
+        .iter()
+        .find_map(|var| var.strip_prefix(b"BOOT_LOG_LEVEL="))
+    {
+        if let Ok(Ok(log_level)) = str::from_utf8(&log_env).map(|s| log::LevelFilter::from_str(s)) {
+            log::set_max_level(log_level);
+        }
+    }
+
+    let _ = log::set_logger(&Logger);
 
     unsafe extern "C" {
         // The linker script will define this as the location of the initfs header.
