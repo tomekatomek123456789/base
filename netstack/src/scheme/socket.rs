@@ -412,17 +412,11 @@ where
         metadata: &[u64],
         ctx: &CallerCtx,
     ) -> SyscallResult<usize> {
-        let file = self
-            .files
-            .get_mut(&fd)
-            .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
         // metadata to Vec<u8>
         let Some(verb) = SocketCall::try_from_raw(metadata[0] as usize) else {
             warn!("Invalid verb in metadata: {:?}", metadata);
             return Err(SyscallError::new(EINVAL));
         };
-        let mut socket_set = self.socket_set.borrow_mut();
-        let socket = socket_set.get_mut::<SocketT>(file.socket_handle());
         match verb {
             // TODO
             // SocketCall::Bind => self.handle_bind(id, &payload),
@@ -430,6 +424,7 @@ where
             SocketCall::SetSockOpt => {
                 // currently not used
                 // self.handle_setsockopt(id, metadata[1] as i32, &payload)
+                // TODO: SO_REUSEADDR from null socket
                 Ok(0)
             }
             // SocketCall::GetSockOpt => self.handle_getsockopt(id, metadata[1] as i32, payload),
@@ -437,7 +432,16 @@ where
             // SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
             // SocketCall::Unbind => self.handle_unbind(id),
             // SocketCall::GetToken => self.handle_get_token(id, payload),
-            SocketCall::GetPeerName => SocketT::handle_get_peer_name(socket, file, payload),
+            SocketCall::GetPeerName => {
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
+                let mut socket_set = self.socket_set.borrow_mut();
+                let socket = socket_set.get_mut::<SocketT>(file.socket_handle());
+
+                SocketT::handle_get_peer_name(socket, file, payload)
+            }
             _ => Err(SyscallError::new(EOPNOTSUPP)),
         }
     }
