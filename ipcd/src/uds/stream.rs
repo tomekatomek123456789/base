@@ -625,6 +625,10 @@ impl<'sock> UdsStreamScheme<'sock> {
                 }
                 Ok(value_slice.len())
             }
+            libc::SO_SNDBUF => {
+                // FIXME: implement
+                Ok(0)
+            }
             _ => {
                 eprintln!(
                     "socket_setsockopt(id: {}): Unsupported option: {}",
