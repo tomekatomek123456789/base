@@ -236,15 +236,13 @@ fn main() {
 }
 
 fn daemon(daemon: daemon::Daemon) -> ! {
-    let mut args = pico_args::Arguments::from_env();
-    let verbosity = (0..).find(|_| !args.contains("-v")).unwrap_or(0);
-    let log_level = match verbosity {
-        0 => log::LevelFilter::Info,
-        1 => log::LevelFilter::Debug,
-        _ => log::LevelFilter::Trace,
-    };
-
-    common::setup_logging("bus", "pci", "pcid", log_level, log::LevelFilter::Info);
+    common::setup_logging(
+        "bus",
+        "pci",
+        "pcid",
+        common::output_level(),
+        common::file_level(),
+    );
 
     let pcie = Pcie::new();
     let mut tree = BTreeMap::new();

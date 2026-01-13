@@ -33,3 +33,6 @@ features = [
     "log"
 ]
 #For debugging: "log", "verbose"
+
+[target.'cfg(target_os = "redox")'.dependencies]
+redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", default-features = false }

@@ -24,7 +24,8 @@ fn daemon(daemon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> ! {
         "graphics",
         "pci",
         &name,
-        log::LevelFilter::Debug, //common::output_level(),
+        // TODO: common::output_level() once stable
+        log::LevelFilter::Debug,
         common::file_level(),
     );
 

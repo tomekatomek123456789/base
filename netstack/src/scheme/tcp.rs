@@ -79,6 +79,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let tx_buffer = TcpSocketBuffer::new(tx_packets);
         let socket = TcpSocket::new(rx_buffer, tx_buffer);
 
+        // TODO: claim port with ethernet ip address
         if local_endpoint.port == 0 {
             local_endpoint.port = port_set
                 .get_port()
@@ -95,6 +96,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             let local_endpoint_addr = match local_endpoint.addr {
                 Some(addr) if !addr.is_unspecified() => Some(addr),
                 _ => {
+                    // local ip is 0.0.0.0, resolve it
                     let route_table = context.route_table.borrow();
                     let addr = route_table
                         .lookup_src_addr(&remote_endpoint.addr.expect("Checked in is_specified"));
@@ -264,7 +266,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
 
     fn fpath(&self, file: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize> {
         let unspecified = "0.0.0.0:0";
-        let mut path = String::from("tcp:");
+        let mut path = String::from("/scheme/tcp/");
         match self.remote_endpoint() {
             Some(endpoint) => write!(&mut path, "{}", endpoint).unwrap(),
             None => path.push_str(unspecified),
@@ -297,5 +299,13 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         }
 
         Ok(i)
+    }
+
+    fn handle_get_peer_name(
+        &self,
+        file: &SchemeFile<Self>,
+        buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        self.fpath(file, buf)
     }
 }

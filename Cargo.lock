@@ -1844,6 +1844,7 @@ dependencies = [
  "libredox",
  "log",
  "redox-log",
+ "redox-rt",
  "redox-scheme",
  "redox_event",
  "redox_syscall 0.6.0",

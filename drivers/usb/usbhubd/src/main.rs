@@ -34,7 +34,7 @@ fn main() {
         "usb",
         "device",
         &name,
-        log::LevelFilter::Warn,
+        common::output_level(),
         common::file_level(),
     );
 

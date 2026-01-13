@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::str;
 
 use libredox::flag::CLOCK_MONOTONIC;
+use redox_rt::protocol::SocketCall;
 use redox_scheme::{
     scheme::{Op, SchemeSync},
     CallerCtx, OpenResult, Socket,
@@ -17,7 +18,10 @@ use redox_scheme::{
 use syscall::data::TimeSpec;
 use syscall::flag::{EVENT_READ, EVENT_WRITE};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Result as SyscallResult};
+use syscall::{
+    Error as SyscallError, EventFlags as SyscallEventFlags, Result as SyscallResult, EINVAL,
+    EOPNOTSUPP,
+};
 
 use super::Interface;
 use crate::router::route_table::RouteTable;
@@ -216,6 +220,12 @@ where
         path: &str,
         data: &mut Self::SchemeDataT,
     ) -> SyscallResult<DupResult<Self>>;
+
+    fn handle_get_peer_name(
+        &self,
+        file: &SchemeFile<Self>,
+        payload: &mut [u8],
+    ) -> SyscallResult<usize>;
 }
 
 pub struct SocketScheme<SocketT>
@@ -395,6 +405,47 @@ where
         }
     }
 
+    fn call_inner(
+        &mut self,
+        fd: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        ctx: &CallerCtx,
+    ) -> SyscallResult<usize> {
+        // metadata to Vec<u8>
+        let Some(verb) = SocketCall::try_from_raw(metadata[0] as usize) else {
+            warn!("Invalid verb in metadata: {:?}", metadata);
+            return Err(SyscallError::new(EINVAL));
+        };
+        match verb {
+            // TODO
+            // SocketCall::Bind => self.handle_bind(id, &payload),
+            // SocketCall::Connect => self.handle_connect(id, &payload),
+            SocketCall::SetSockOpt => {
+                // currently not used
+                // self.handle_setsockopt(id, metadata[1] as i32, &payload)
+                // TODO: SO_REUSEADDR from null socket
+                Ok(0)
+            }
+            // SocketCall::GetSockOpt => self.handle_getsockopt(id, metadata[1] as i32, payload),
+            // SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
+            // SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
+            // SocketCall::Unbind => self.handle_unbind(id),
+            // SocketCall::GetToken => self.handle_get_token(id, payload),
+            SocketCall::GetPeerName => {
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
+                let mut socket_set = self.socket_set.borrow_mut();
+                let socket = socket_set.get_mut::<SocketT>(file.socket_handle());
+
+                SocketT::handle_get_peer_name(socket, file, payload)
+            }
+            _ => Err(SyscallError::new(EOPNOTSUPP)),
+        }
+    }
+
     fn open_inner(
         &mut self,
         path: &str,
@@ -454,6 +505,16 @@ where
 {
     fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> SyscallResult<OpenResult> {
         self.open_inner(path, flags, ctx.uid, ctx.gid)
+    }
+
+    fn call(
+        &mut self,
+        id: usize,
+        payload: &mut [u8],
+        metadata: &[u64],
+        ctx: &CallerCtx,
+    ) -> SyscallResult<usize> {
+        self.call_inner(id, payload, metadata, ctx)
     }
 
     fn on_close(&mut self, fd: usize) {
@@ -586,6 +647,7 @@ where
             .get(&fd)
             .map(|null| (null.flags, null.uid, null.gid))
         {
+            // dup from empty path to a new path
             return self.open_inner(path, flags, uid, gid);
         }
 

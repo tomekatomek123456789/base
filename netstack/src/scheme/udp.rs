@@ -11,6 +11,7 @@ use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
 use super::{parse_endpoint, SchemeWrapper, Smolnetd, SocketSet};
 use crate::port_set::PortSet;
 use crate::router::Router;
+use std::fmt::Write;
 
 pub type UdpScheme = SchemeWrapper<UdpSocket<'static>>;
 
@@ -64,7 +65,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
-        _context: &Context,
+        context: &Context,
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
@@ -84,6 +85,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         );
         let udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 
+        // TODO: claim port with ethernet ip address
         if local_endpoint.port == 0 {
             local_endpoint.port = port_set
                 .get_port()
@@ -95,6 +97,27 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         let socket_handle = socket_set.add(udp_socket);
 
         let udp_socket = socket_set.get_mut::<UdpSocket>(socket_handle);
+
+        if remote_endpoint.is_specified() {
+            let local_endpoint_addr = match local_endpoint.addr {
+                Some(addr) if addr.is_unspecified() => Some(addr),
+                _ => {
+                    // local ip is 0.0.0.0, resolve it
+                    let route_table = context.route_table.borrow();
+                    let addr = route_table
+                        .lookup_src_addr(&remote_endpoint.addr.expect("Checked in is_specified"));
+                    if matches!(addr, None) {
+                        error!("Opening a TCP connection with a probably invalid source IP as no route have been found for destination: {}", remote_endpoint);
+                    }
+                    addr
+                }
+            };
+            local_endpoint = IpListenEndpoint {
+                addr: local_endpoint_addr,
+                port: local_endpoint.port,
+            };
+        }
+
         udp_socket
             .bind(local_endpoint)
             .expect("Can't bind udp socket to local endpoint");
@@ -161,6 +184,10 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
     ) -> SyscallResult<DupResult<Self>> {
         let socket_handle = file.socket_handle();
         let file = match path {
+            "listen" => {
+                // there's no accept() for UDP
+                return Err(SyscallError::new(syscall::EAFNOSUPPORT));
+            }
             _ => {
                 let remote_endpoint = parse_endpoint(path);
                 if let SchemeFile::Socket(ref udp_handle) = *file {
@@ -190,19 +217,44 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
     }
 
     fn fpath(&self, file: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize> {
-        if let SchemeFile::Socket(ref socket_file) = *file {
-            let path = format!("udp:{}/{}", socket_file.data, self.endpoint());
-            let path = path.as_bytes();
+        let unspecified = "0.0.0.0:0";
+        let mut path = String::from("/scheme/udp/");
 
-            let mut i = 0;
-            while i < buf.len() && i < path.len() {
-                buf[i] = path[i];
-                i += 1;
+        // remote
+        match file {
+            SchemeFile::Socket(SocketFile { data: endpoint, .. }) => {
+                if endpoint.is_specified() {
+                    write!(&mut path, "{}", endpoint).unwrap()
+                } else {
+                    write!(&mut path, "0.0.0.0:{}", endpoint.port).unwrap()
+                }
             }
-
-            Ok(i)
-        } else {
-            Err(SyscallError::new(syscall::EBADF))
+            _ => path.push_str(unspecified),
         }
+        path.push('/');
+        // local
+        let endpoint = self.endpoint();
+        if endpoint.is_specified() {
+            write!(&mut path, "{}", endpoint).unwrap()
+        } else {
+            write!(&mut path, "0.0.0.0:{}", endpoint.port).unwrap()
+        }
+        let path = path.as_bytes();
+
+        let mut i = 0;
+        while i < buf.len() && i < path.len() {
+            buf[i] = path[i];
+            i += 1;
+        }
+
+        Ok(i)
+    }
+
+    fn handle_get_peer_name(
+        &self,
+        file: &SchemeFile<Self>,
+        buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        self.fpath(file, buf)
     }
 }
