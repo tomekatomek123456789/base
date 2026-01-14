@@ -6,7 +6,7 @@ edition = "2018"
 [dependencies]
 bitflags = "1"
 log = "0.4"
-orbclient = "0.3.27"
+orbclient = { workspace = true }
 redox_event = "0.4.1"
 redox_syscall = "0.6"
 redox-scheme = "0.8.3"

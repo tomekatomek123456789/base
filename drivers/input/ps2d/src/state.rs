@@ -18,14 +18,12 @@ bitflags! {
     }
 }
 
-pub struct Ps2d<F: Fn(u8, bool) -> char> {
+pub struct Ps2d {
     ps2: Ps2,
     vmmouse: bool,
     vmmouse_relative: bool,
     input: ProducerHandle,
     extended: bool,
-    lshift: bool,
-    rshift: bool,
     mouse_x: i32,
     mouse_y: i32,
     mouse_left: bool,
@@ -34,12 +32,10 @@ pub struct Ps2d<F: Fn(u8, bool) -> char> {
     packets: [u8; 4],
     packet_i: usize,
     extra_packet: bool,
-    //Keymap function
-    get_char: F,
 }
 
-impl<F: Fn(u8, bool) -> char> Ps2d<F> {
-    pub fn new(input: ProducerHandle, keymap: F) -> Self {
+impl Ps2d {
+    pub fn new(input: ProducerHandle) -> Self {
         let mut ps2 = Ps2::new();
         let extra_packet = ps2.init();
 
@@ -53,8 +49,6 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
             vmmouse_relative,
             input,
             extended: false,
-            lshift: false,
-            rshift: false,
             mouse_x: 0,
             mouse_y: 0,
             mouse_left: false,
@@ -63,12 +57,7 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
             packets: [0; 4],
             packet_i: 0,
             extra_packet,
-            get_char: keymap,
         }
-    }
-
-    pub fn update_keymap(&mut self, keymap: F) {
-        self.get_char = keymap;
     }
 
     pub fn irq(&mut self) {
@@ -91,13 +80,16 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
                 let scancode = if self.extended {
                     self.extended = false;
                     match ps2_scancode {
-                        //TODO: media keys
-                        //TODO: 0x1C => orbclient::K_NUM_ENTER,
-                        0x1D => orbclient::K_CTRL, //TODO: 0x1D => orbclient::K_RIGHT_CTRL,
-                        0x20 => 0x80 + 0x20,       //TODO: orbclient::K_VOLUME_MUTE,
-                        0x2E => 0x80 + 0x2E,       //TODO: orbclient::K_VOLUME_DOWN,
-                        0x30 => 0x80 + 0x30,       //TODO: orbclient::K_VOLUME_UP,
-                        //TODO: 0x35 => orbclient::K_NUM_SLASH,
+                        0x1C => orbclient::K_NUM_ENTER,
+                        0x1D => orbclient::K_RIGHT_CTRL,
+                        0x20 => orbclient::K_VOLUME_TOGGLE,
+                        0x22 => orbclient::K_MEDIA_PLAY_PAUSE,
+                        0x24 => orbclient::K_MEDIA_STOP,
+                        0x10 => orbclient::K_MEDIA_REWIND,
+                        0x19 => orbclient::K_MEDIA_FAST_FORWARD,
+                        0x2E => orbclient::K_VOLUME_DOWN,
+                        0x30 => orbclient::K_VOLUME_UP,
+                        0x35 => orbclient::K_NUM_SLASH,
                         0x38 => orbclient::K_ALT_GR,
                         0x47 => orbclient::K_HOME,
                         0x48 => orbclient::K_UP,
@@ -107,12 +99,13 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
                         0x4F => orbclient::K_END,
                         0x50 => orbclient::K_DOWN,
                         0x51 => orbclient::K_PGDN,
-                        //TODO: 0x52 => orbclient::K_INSERT,
+                        0x52 => orbclient::K_INS,
                         0x53 => orbclient::K_DEL,
-                        0x5B => 0x5B, //TODO: orbclient::K_LEFT_SUPER,
-                        //TODO: 0x5C => orbclient::K_RIGHT_SUPER,
-                        //TODO: 0x5D => orbclient::K_APP,
-                        //TODO power keys
+                        0x5B => orbclient::K_LEFT_SUPER,
+                        0x5C => orbclient::K_RIGHT_SUPER,
+                        0x5D => orbclient::K_APP,
+                        0x5E => orbclient::K_POWER,
+                        0x5F => orbclient::K_SLEEP,
                         /* 0x80 to 0xFF used for press/release detection */
                         _ => {
                             if pressed {
@@ -178,7 +171,7 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
                         0x34 => orbclient::K_PERIOD,
                         0x35 => orbclient::K_SLASH,
                         0x36 => orbclient::K_RIGHT_SHIFT,
-                        //TODO: 0x37 => orbclient::K_NUM_ASTERISK,
+                        0x37 => orbclient::K_NUM_ASTERISK,
                         0x38 => orbclient::K_ALT,
                         0x39 => orbclient::K_SPACE,
                         0x3A => orbclient::K_CAPS,
@@ -192,22 +185,23 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
                         0x42 => orbclient::K_F8,
                         0x43 => orbclient::K_F9,
                         0x44 => orbclient::K_F10,
-                        //TODO: 0x45 => orbclient::K_NUM_LOCK,
-                        //TODO: 0x46 => orbclient::K_SCROLL_LOCK,
+                        0x45 => orbclient::K_NUM,
+                        0x46 => orbclient::K_SCROLL,
                         0x47 => orbclient::K_NUM_7,
                         0x48 => orbclient::K_NUM_8,
                         0x49 => orbclient::K_NUM_9,
-                        //TODO: 0x4A => orbclient::K_NUM_MINUS,
+                        0x4A => orbclient::K_NUM_MINUS,
                         0x4B => orbclient::K_NUM_4,
                         0x4C => orbclient::K_NUM_5,
                         0x4D => orbclient::K_NUM_6,
-                        //TODO: 0x4E => orbclient::K_NUM_PLUS,
+                        0x4E => orbclient::K_NUM_PLUS,
                         0x4F => orbclient::K_NUM_1,
                         0x50 => orbclient::K_NUM_2,
                         0x51 => orbclient::K_NUM_3,
                         0x52 => orbclient::K_NUM_0,
-                        //TODO: 0x53 => orbclient::K_NUM_PERIOD,
-                        /* 0x54 to 0x56 unused */
+                        0x53 => orbclient::K_NUM_PERIOD,
+                        /* 0x54 to 0x55 unused */
+                        0x56 => 0x56, // UK Backslash
                         0x57 => orbclient::K_F11,
                         0x58 => orbclient::K_F12,
                         /* 0x59 to 0x7F unused */
@@ -221,20 +215,11 @@ impl<F: Fn(u8, bool) -> char> Ps2d<F> {
                     }
                 };
 
-                if scancode == orbclient::K_LEFT_SHIFT {
-                    self.lshift = pressed;
-                } else if scancode == orbclient::K_RIGHT_SHIFT {
-                    self.rshift = pressed;
-                }
-
                 if scancode != 0 {
                     self.input
                         .write_event(
                             KeyEvent {
-                                character: (self.get_char)(
-                                    ps2_scancode,
-                                    self.lshift || self.rshift,
-                                ),
+                                character: '\0',
                                 scancode,
                                 pressed,
                             }

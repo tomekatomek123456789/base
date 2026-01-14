@@ -23,7 +23,7 @@ fn read_to_slice<T: Copy>(
     }
 }
 
-unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>())
 }
 
@@ -111,8 +111,35 @@ impl ConsumerHandle {
 
 #[derive(Debug, Clone)]
 #[repr(C)]
+pub struct ControlEvent {
+    pub kind: usize,
+    pub data: usize,
+}
+
+impl From<VtActivate> for ControlEvent {
+    fn from(value: VtActivate) -> Self {
+        ControlEvent {
+            kind: 1,
+            data: value.vt,
+        }
+    }
+}
+
+impl From<KeymapActivate> for ControlEvent {
+    fn from(value: KeymapActivate) -> Self {
+        ControlEvent {
+            kind: 2,
+            data: value.keymap,
+        }
+    }
+}
+
 pub struct VtActivate {
     pub vt: usize,
+}
+
+pub struct KeymapActivate {
+    pub keymap: usize,
 }
 
 pub struct DisplayHandle(File);
@@ -160,8 +187,15 @@ impl ControlHandle {
         Ok(Self(File::open(path)?))
     }
 
+    /// Sent to Handle::Display
     pub fn activate_vt(&mut self, vt: usize) -> io::Result<usize> {
-        let cmd = VtActivate { vt };
+        let cmd = ControlEvent::from(VtActivate { vt });
+        self.0.write(unsafe { any_as_u8_slice(&cmd) })
+    }
+
+    /// Sent to Handle::Producer
+    pub fn activate_keymap(&mut self, keymap: usize) -> io::Result<usize> {
+        let cmd = ControlEvent::from(KeymapActivate { keymap });
         self.0.write(unsafe { any_as_u8_slice(&cmd) })
     }
 }
