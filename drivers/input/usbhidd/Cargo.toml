@@ -10,7 +10,7 @@ license = "MIT"
 [dependencies]
 bitflags = "2"
 log = "0.4"
-orbclient = "0.3.47"
+orbclient = { workspace = true }
 redox_syscall = "0.6"
 rehid = { git = "https://gitlab.redox-os.org/redox-os/rehid.git" }
 xhcid = { path = "../../usb/xhcid" }

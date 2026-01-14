@@ -8,7 +8,7 @@ authors = ["Anhad Singh <andypython@protonmail.com>"]
 anyhow = "1.0.71"
 log = "0.4.19"
 redox_syscall = { version = "0.6", features = ["std"] }
-orbclient = "0.3.27"
+orbclient = { workspace = true }
 libredox = "0.1.3"
 
 common = { path = "../common" }
