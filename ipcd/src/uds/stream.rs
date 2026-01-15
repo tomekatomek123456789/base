@@ -282,33 +282,30 @@ impl Socket {
         Ok(())
     }
 
-    fn connect(&mut self, other: usize, flags: usize) -> Result<()> {
+    fn connect(&mut self, other: &mut Socket) -> Result<()> {
         match self.state {
             State::Unbound | State::Bound => {
                 // If the socket is unbound or bound, wait for the listener to start listening.
-                if flags & O_NONBLOCK == O_NONBLOCK {
-                    self.awaiting.push_back(other);
-                    Ok(())
-                } else {
+                if other.flags & O_NONBLOCK != O_NONBLOCK {
                     // If the connecting target is not a listening,
                     // the connecting socket will block until the socket
                     // is ready to accept.
-                    Err(Error::new(EWOULDBLOCK))
+                    return Err(Error::new(EWOULDBLOCK));
                 }
             }
             State::Listening => {
                 // If the socket is already listening, it can accept connections.
-                self.awaiting.push_back(other);
-                Ok(())
             }
-            _ => Err(Error::new(ECONNREFUSED)),
+            _ => return Err(Error::new(ECONNREFUSED)),
         }
+        self.connect_unchecked(other);
+        Ok(())
     }
 
-    // For socketpair, add the peer's id to the base socket's awaiting queue.
-    // TODO: Probably merge with connect()
-    fn connect_socketpair(&mut self, peer: usize) {
-        self.awaiting.push_back(peer);
+    fn connect_unchecked(&mut self, other: &mut Socket) {
+        self.awaiting.push_back(other.primary_id);
+        other.state = State::Connecting;
+        other.connection = Some(Connection::new(self.primary_id));
     }
 
     fn is_listening(&self) -> bool {
@@ -597,10 +594,8 @@ impl<'sock> UdsStreamScheme<'sock> {
                 _ => {}
             }
 
-            listener.connect(id, client.flags)?;
             // Phase 2: listener is now listening
-            client.state = State::Connecting;
-            client.connection = Some(Connection::new(listener_id));
+            listener.connect(&mut client)?;
 
             (listener_id, client.flags)
         };
@@ -958,9 +953,7 @@ impl<'sock> UdsStreamScheme<'sock> {
                 );
                 return Err(Error::new(EPIPE));
             }
-            socket.connect_socketpair(new_id);
-            new.state = State::Connecting;
-            new.connection = Some(Connection::new(id));
+            socket.connect_unchecked(&mut new);
         }
 
         // smoltcp sends writeable whenever a listener gets a
