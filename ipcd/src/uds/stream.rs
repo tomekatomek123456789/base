@@ -878,7 +878,7 @@ impl<'sock> UdsStreamScheme<'sock> {
                 if flags & O_NONBLOCK == O_NONBLOCK {
                     return Err(Error::new(EAGAIN));
                 } else {
-                    return Ok(Some(OpenResult::WouldBlock));
+                    return Err(Error::new(EWOULDBLOCK));
                 }
             };
             return match self.accept_connection(socket, client_id, ctx) {
