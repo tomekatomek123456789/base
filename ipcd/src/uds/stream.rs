@@ -260,7 +260,7 @@ impl Socket {
         ))
     }
 
-    fn establish(&mut self, peer: usize) -> Result<()> {
+    fn establish(&mut self, new_peer: usize, peer: usize) -> Result<()> {
         if self.state != State::Connecting {
             eprintln!(
                 "establish(id: {}): Cannot establish connection in state: {:?}",
@@ -269,11 +269,12 @@ impl Socket {
             return Err(Error::new(EINVAL));
         }
         self.state = State::Accepted;
-        if let Some(conn) = &self.connection {
+        if let Some(conn) = &mut self.connection {
             if conn.peer != peer {
                 // client is expecting other connection
                 return Err(Error::new(EAGAIN));
             }
+            conn.peer = new_peer;
         } else {
             // client is dead
             return Err(Error::new(EAGAIN));
@@ -305,6 +306,7 @@ impl Socket {
     }
 
     // For socketpair, add the peer's id to the base socket's awaiting queue.
+    // TODO: Probably merge with connect()
     fn connect_socketpair(&mut self, peer: usize) {
         self.awaiting.push_back(peer);
     }
@@ -848,7 +850,7 @@ impl<'sock> UdsStreamScheme<'sock> {
             let new = listener_socket.accept(new_id, client_id, ctx)?;
 
             let mut client_socket = client_rc.borrow_mut();
-            client_socket.establish(new_id)?;
+            client_socket.establish(new_id, listener_socket.primary_id)?;
             (new_id, new)
         };
 
@@ -936,10 +938,10 @@ impl<'sock> UdsStreamScheme<'sock> {
     fn handle_connect_socketpair(&mut self, id: usize, ctx: &CallerCtx) -> Result<OpenResult> {
         let new_id = self.next_id;
         let flags = self.get_socket(id)?.borrow().flags;
-        let new = Socket::new(
+        let mut new = Socket::new(
             new_id,
             None,
-            State::Connecting,
+            State::Unbound,
             HashSet::new(),
             flags,
             None,
@@ -957,6 +959,8 @@ impl<'sock> UdsStreamScheme<'sock> {
                 return Err(Error::new(EPIPE));
             }
             socket.connect_socketpair(new_id);
+            new.state = State::Connecting;
+            new.connection = Some(Connection::new(id));
         }
 
         // smoltcp sends writeable whenever a listener gets a
