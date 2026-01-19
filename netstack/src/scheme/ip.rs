@@ -98,7 +98,9 @@ impl<'a> SchemeSocket for RawSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
     ) -> SyscallResult<usize> {
-        if self.can_send() {
+        if !file.write_enabled {
+            return Err(SyscallError::new(syscall::EPIPE));
+        } else if self.can_send() {
             self.send_slice(buf).expect("Can't send slice");
             Ok(buf.len())
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
@@ -113,7 +115,9 @@ impl<'a> SchemeSocket for RawSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
     ) -> SyscallResult<usize> {
-        if self.can_recv() {
+        if !file.read_enabled {
+            Ok(0)
+        } else if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
@@ -151,5 +155,23 @@ impl<'a> SchemeSocket for RawSocket<'a> {
         buf: &mut [u8],
     ) -> SyscallResult<usize> {
         self.fpath(file, buf)
+    }
+
+    fn handle_shutdown(&mut self, file: &mut SchemeFile<Self>, how: usize) -> SyscallResult<usize> {
+        let socket_file = match file {
+            SchemeFile::Socket(ref mut file) => file,
+            _ => return Err(SyscallError::new(syscall::EBADF)),
+        };
+
+        match how {
+            0 => socket_file.read_enabled = false,  // SHUT_RD
+            1 => socket_file.write_enabled = false, // SHUT_WR
+            2 => {
+                socket_file.read_enabled = false;
+                socket_file.write_enabled = false;
+            } // SHUT_RDWR
+            _ => return Err(SyscallError::new(syscall::EINVAL)),
+        }
+        Ok(0)
     }
 }
