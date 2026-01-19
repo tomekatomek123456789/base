@@ -40,8 +40,8 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
         self.can_send()
     }
 
-    fn can_recv(&self) -> bool {
-        self.can_recv()
+    fn can_recv(&mut self, _data: &Self::DataT) -> bool {
+        smoltcp::socket::icmp::Socket::can_recv(self)
     }
 
     fn may_recv(&self) -> bool {
@@ -212,7 +212,7 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
         if !file.read_enabled {
             return Ok(0);
         }
-        while self.can_recv() {
+        while self.can_recv(&file.data) {
             let (payload, _) = self.recv().expect("Can't recv icmp packet");
             let icmp_packet = Icmpv4Packet::new_unchecked(&payload);
             //TODO: replace default with actual caps

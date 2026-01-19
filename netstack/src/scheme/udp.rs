@@ -28,8 +28,46 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         self.can_send()
     }
 
-    fn can_recv(&self) -> bool {
-        self.can_recv()
+    fn can_recv(&mut self, data: &IpListenEndpoint) -> bool {
+        loop {
+            // If buffer is empty, we definitely can't recv
+            if !UdpSocket::can_recv(self) {
+                return false;
+            }
+
+            // If we are not connected to a specific remote, any packet is valid
+            if !data.is_specified() {
+                return true;
+            }
+
+            // If we are connected, peek at the packet.
+            match self.peek() {
+                Ok((_, meta)) => {
+                    let source = meta.endpoint;
+                    let connected_addr = data.addr.unwrap(); // Safe because is_specified() checked it
+
+                    // Allow Broadcast special case (DHCP)
+                    let is_broadcast = match connected_addr {
+                        smoltcp::wire::IpAddress::Ipv4(ip) => {
+                            ip == smoltcp::wire::Ipv4Address::BROADCAST
+                        }
+                        _ => false,
+                    };
+
+                    if !is_broadcast && !connected_addr.is_unspecified() {
+                        if source.addr != connected_addr || source.port != data.port {
+                            // Bad packet detetced
+                            // Remove it from the buffer immediately so poll() doesn't trigger
+                            let _ = self.recv();
+                            continue; // Loop again to check the next packet
+                        }
+                    }
+                    // Packet is valid
+                    return true;
+                }
+                Err(_) => return false,
+            }
+        }
     }
 
     fn may_recv(&self) -> bool {
