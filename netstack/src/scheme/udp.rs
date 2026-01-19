@@ -209,7 +209,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
     ) -> SyscallResult<usize> {
         if !file.read_enabled {
             Ok(0)
-        } else if self.can_recv() {
+        } else if self.can_recv(&file.data) {
             let (length, _) = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
