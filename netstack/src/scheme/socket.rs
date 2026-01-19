@@ -133,13 +133,14 @@ where
             events,
             ref mut read_notified,
             ref mut write_notified,
+            ref data,
             ..
         }) = self
         {
-            let socket = socket_set.get::<SocketT>(socket_handle);
+            let socket = socket_set.get_mut::<SocketT>(socket_handle);
 
             if events & syscall::EVENT_READ.bits() == syscall::EVENT_READ.bits()
-                && (socket.can_recv() || !socket.may_recv())
+                && (socket.can_recv(data) || !socket.may_recv())
             {
                 if !*read_notified {
                     *read_notified = true;
@@ -180,7 +181,7 @@ where
     fn new_scheme_data() -> Self::SchemeDataT;
 
     fn can_send(&self) -> bool;
-    fn can_recv(&self) -> bool;
+    fn can_recv(&mut self, data: &Self::DataT) -> bool;
     fn may_recv(&self) -> bool;
 
     fn hop_limit(&self) -> u8;

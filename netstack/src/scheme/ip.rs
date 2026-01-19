@@ -27,8 +27,8 @@ impl<'a> SchemeSocket for RawSocket<'a> {
         self.can_send()
     }
 
-    fn can_recv(&self) -> bool {
-        self.can_recv()
+    fn can_recv(&mut self, _data: &Self::DataT) -> bool {
+        smoltcp::socket::raw::Socket::can_recv(self)
     }
 
     fn may_recv(&self) -> bool {
@@ -117,7 +117,7 @@ impl<'a> SchemeSocket for RawSocket<'a> {
     ) -> SyscallResult<usize> {
         if !file.read_enabled {
             Ok(0)
-        } else if self.can_recv() {
+        } else if self.can_recv(&file.data) {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
