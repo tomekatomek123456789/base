@@ -153,7 +153,9 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
     ) -> SyscallResult<usize> {
-        if !self.is_active() {
+        if !file.write_enabled {
+            return Err(SyscallError::new(syscall::EPIPE));
+        } else if !self.is_active() {
             Err(SyscallError::new(syscall::ENOTCONN))
         } else if self.can_send() {
             self.send_slice(buf).expect("Can't send slice");
@@ -170,7 +172,9 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
     ) -> SyscallResult<usize> {
-        if !self.is_active() {
+        if !file.read_enabled {
+            Ok(0)
+        } else if !self.is_active() {
             Err(SyscallError::new(syscall::ENOTCONN))
         } else if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
@@ -307,5 +311,27 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         buf: &mut [u8],
     ) -> SyscallResult<usize> {
         self.fpath(file, buf)
+    }
+
+    fn handle_shutdown(&mut self, file: &mut SchemeFile<Self>, how: usize) -> SyscallResult<usize> {
+        let socket_file = match file {
+            SchemeFile::Socket(ref mut file) => file,
+            _ => return Err(SyscallError::new(syscall::EBADF)),
+        };
+
+        match how {
+            0 => socket_file.read_enabled = false, // SHUT_RD
+            1 => {
+                socket_file.write_enabled = false;
+                self.close();
+            } // SHUT_WR
+            2 => {
+                socket_file.read_enabled = false;
+                socket_file.write_enabled = false;
+                self.close();
+            } // SHUT_RDWR
+            _ => return Err(SyscallError::new(syscall::EINVAL)),
+        }
+        Ok(0)
     }
 }

@@ -39,6 +39,8 @@ pub struct NullFile {
     pub flags: usize,
     pub uid: u32,
     pub gid: u32,
+    pub read_enabled: bool,
+    pub write_enabled: bool,
 }
 
 pub struct SocketFile<DataT> {
@@ -51,6 +53,8 @@ pub struct SocketFile<DataT> {
     write_notified: bool,
     read_timeout: Option<TimeSpec>,
     write_timeout: Option<TimeSpec>,
+    pub read_enabled: bool,
+    pub write_enabled: bool,
 }
 
 impl<DataT> SocketFile<DataT> {
@@ -63,6 +67,8 @@ impl<DataT> SocketFile<DataT> {
             read_timeout: self.read_timeout,
             write_timeout: self.write_timeout,
             socket_handle: self.socket_handle,
+            read_enabled: self.read_enabled,
+            write_enabled: self.write_enabled,
             data,
         }
     }
@@ -75,6 +81,8 @@ impl<DataT> SocketFile<DataT> {
             write_notified: false,
             read_timeout: None,
             write_timeout: None,
+            read_enabled: true,
+            write_enabled: true,
             socket_handle,
             data,
         }
@@ -226,6 +234,8 @@ where
         file: &SchemeFile<Self>,
         payload: &mut [u8],
     ) -> SyscallResult<usize>;
+
+    fn handle_shutdown(&mut self, file: &mut SchemeFile<Self>, how: usize) -> SyscallResult<usize>;
 }
 
 pub struct SocketScheme<SocketT>
@@ -442,6 +452,32 @@ where
 
                 SocketT::handle_get_peer_name(socket, file, payload)
             }
+            SocketCall::Shutdown => {
+                let how = metadata[1] as usize;
+
+                if let Some(null_file) = self.nulls.get_mut(&fd) {
+                    match how {
+                        0 => null_file.read_enabled = false,
+                        1 => null_file.write_enabled = false,
+                        2 => {
+                            null_file.read_enabled = false;
+                            null_file.write_enabled = false;
+                        }
+                        _ => return Err(SyscallError::new(EINVAL)),
+                    }
+                    return Ok(0);
+                }
+
+                let file = self
+                    .files
+                    .get_mut(&fd)
+                    .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
+
+                let mut socket_set = self.socket_set.borrow_mut();
+                let socket = socket_set.get_mut::<SocketT>(file.socket_handle());
+
+                SocketT::handle_shutdown(socket, file, how)
+            }
             _ => Err(SyscallError::new(EOPNOTSUPP)),
         }
     }
@@ -452,9 +488,17 @@ where
         flags: usize,
         uid: u32,
         gid: u32,
+        read_enabled: bool,
+        write_enabled: bool,
     ) -> SyscallResult<OpenResult> {
         if path.is_empty() {
-            let null = NullFile { flags, uid, gid };
+            let null = NullFile {
+                flags,
+                uid,
+                gid,
+                read_enabled,
+                write_enabled,
+            };
 
             let id = self.next_fd;
             self.next_fd += 1;
@@ -482,6 +526,8 @@ where
                 write_notified: false,
                 write_timeout: None,
                 read_timeout: None,
+                read_enabled: read_enabled,
+                write_enabled: write_enabled,
                 data,
             });
 
@@ -504,7 +550,7 @@ where
     SocketT: SchemeSocket + AnySocket<'static>,
 {
     fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> SyscallResult<OpenResult> {
-        self.open_inner(path, flags, ctx.uid, ctx.gid)
+        self.open_inner(path, flags, ctx.uid, ctx.gid, true, true)
     }
 
     fn call(
@@ -642,13 +688,19 @@ where
     fn dup(&mut self, fd: usize, buf: &[u8], _ctx: &CallerCtx) -> SyscallResult<OpenResult> {
         let path = str::from_utf8(buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
 
-        if let Some((flags, uid, gid)) = self
-            .nulls
-            .get(&fd)
-            .map(|null| (null.flags, null.uid, null.gid))
+        if let Some((flags, uid, gid, read_enabled, write_enabled)) =
+            self.nulls.get(&fd).map(|null| {
+                (
+                    null.flags,
+                    null.uid,
+                    null.gid,
+                    null.read_enabled,
+                    null.write_enabled,
+                )
+            })
         {
             // dup from empty path to a new path
-            return self.open_inner(path, flags, uid, gid);
+            return self.open_inner(path, flags, uid, gid, read_enabled, write_enabled);
         }
 
         let new_file = {
