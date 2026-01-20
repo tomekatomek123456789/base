@@ -17,7 +17,7 @@ anyhow = "1.0.81"
 redox-scheme.workspace = true
 
 [dependencies.log]
-version = "0.4"
+workspace = true
 default-features = false
 features = ["release_max_level_warn"]
 
