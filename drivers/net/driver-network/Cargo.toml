@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-libredox = "0.1.11"
+libredox.workspace = true
 daemon = { path = "../../../daemon" }
-redox-scheme = "0.8.3"
-redox_syscall = { version = "0.6", features = ["std"] }
+redox-scheme.workspace = true
+redox_syscall = { workspace = true, features = ["std"] }

@@ -5,10 +5,10 @@ edition = "2018"
 
 [dependencies]
 bitflags = "2"
-log = "0.4"
-libredox = "0.1.11"
-redox_event = "0.4.2"
-redox_syscall = "0.6"
+log.workspace = true
+libredox.workspace = true
+redox_event.workspace = true
+redox_syscall.workspace = true
 
 common = { path = "../../common" }
 daemon = { path = "../../../daemon" }

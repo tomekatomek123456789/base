@@ -15,10 +15,12 @@ hashbrown = { version = "0.15", default-features = false, features = [
     "default-hasher",
 ] }
 linked_list_allocator = "0.10"
+# libredox 0.1.12 uses redox_syscall 0.7, wait until that is supported
+libredox = { version = "=0.1.11", default-features = false }
 log = { version = "0.4", default-features = false }
 plain = "0.2"
 redox-initfs = { path = "../initfs", default-features = false }
-redox_syscall = { version = "0.6.0", default-features = false }
+redox_syscall = { version = "0.6", default-features = false }
 redox-scheme = { version = "0.8.3", default-features = false }
 redox-path = "0.3.1"
 slab = { version = "0.4.9", default-features = false }

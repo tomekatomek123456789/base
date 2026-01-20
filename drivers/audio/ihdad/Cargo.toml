@@ -5,13 +5,13 @@ edition = "2021"
 
 [dependencies]
 bitflags = "2"
-libredox = "0.1.3"
-log = "0.4"
-redox_event = "0.4.1"
-redox_syscall = "0.6"
+libredox.workspace = true
+log.workspace = true
+redox_event.workspace = true
+redox_syscall.workspace = true
 spin = "0.9"
 
 common = { path = "../../common" }
 daemon = { path = "../../../daemon" }
 pcid = { path = "../../pcid" }
-redox-scheme = "0.8.3"
+redox-scheme.workspace = true

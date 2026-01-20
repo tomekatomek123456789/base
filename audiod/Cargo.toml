@@ -6,9 +6,9 @@ edition = "2021"
 
 [dependencies]
 daemon = { path = "../daemon" }
-redox_syscall = { version = "0.6", features = ["std"] }
-libc = "0.2"
-libredox = { version = "0.1.10", features = ["mkns"] }
-redox-scheme = "0.8.3"
+redox_syscall = { workspace = true, features = ["std"] }
+libc.workspace = true
+libredox = { workspace =  true, features = ["mkns"] }
+redox-scheme.workspace = true
 anyhow = "1.0.97"
 ioslice = "0.6.0"

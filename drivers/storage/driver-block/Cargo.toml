@@ -8,11 +8,11 @@ daemon = { path = "../../../daemon" }
 executor = { path = "../../executor" }
 partitionlib = { path = "../partitionlib" }
 
-libredox = "0.1.3"
-log = "0.4"
+libredox.workspace = true
+log.workspace = true
 
 # TODO: migrate virtio to our executor
 futures = { version = "0.3.28", features = ["executor"] }
 
-redox_syscall = { version = "0.6", features = ["std"] }
-redox-scheme = "0.8.3"
+redox_syscall = { workspace = true, features = ["std"] }
+redox-scheme.workspace = true

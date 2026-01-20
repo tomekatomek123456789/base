@@ -7,11 +7,11 @@ edition = "2021"
 arrayvec = "0.7"
 bitflags = "2"
 futures = "0.3"
-libredox = "0.1.3"
-log = "0.4"
+libredox.workspace = true
+log.workspace = true
 parking_lot = "0.12.1"
-redox_event = "0.4.1"
-redox_syscall = { version = "0.6", features = ["std"] }
+redox_event.workspace = true
+redox_syscall = { workspace = true, features = ["std"] }
 smallvec = "1"
 
 executor = { path = "../../executor" }
