@@ -788,7 +788,7 @@ checksum = "784a4df722dc6267a04af36895398f59d21d07dce47232adf31ec0ff2fa45e67"
 [[package]]
 name = "fdt"
 version = "0.2.0-alpha1"
-source = "git+https://github.com/repnop/fdt.git#124145d5a069f7fe7426fc73f0696aa3c3ef0cae"
+source = "git+https://github.com/repnop/fdt.git?rev=059bb23#059bb2383873f8001959456e36ec123228f67642"
 
 [[package]]
 name = "find-msvc-tools"
@@ -903,7 +903,7 @@ dependencies = [
 [[package]]
 name = "generic-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#5d378c146078a58c025ad9c857402c983e5e8b37"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3362ca356a9dafdfd7d74fc88d97609f400f7329"
 
 [[package]]
 name = "getrandom"
@@ -1778,7 +1778,7 @@ dependencies = [
 [[package]]
 name = "redox-ioctl"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#5d378c146078a58c025ad9c857402c983e5e8b37"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3362ca356a9dafdfd7d74fc88d97609f400f7329"
 dependencies = [
  "drm-sys",
  "redox_syscall 0.6.0",
@@ -1805,7 +1805,7 @@ checksum = "436d45c2b6a5b159d43da708e62b25be3a4a3d5550d654b72216ade4c4bfd717"
 [[package]]
 name = "redox-rt"
 version = "0.1.0"
-source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#5d378c146078a58c025ad9c857402c983e5e8b37"
+source = "git+https://gitlab.redox-os.org/redox-os/relibc.git#3362ca356a9dafdfd7d74fc88d97609f400f7329"
 dependencies = [
  "bitflags 2.10.0",
  "generic-rt",
