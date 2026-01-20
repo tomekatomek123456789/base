@@ -8,7 +8,7 @@ authors = ["Anhad Singh <andypython@protonmail.com>"]
 drm-sys = "0.8.0"
 #TODO: edid is abandoned, fork it an maintain?
 edid = "0.3.0"
-log = "0.4"
+log.workspace = true
 static_assertions = "1.1.0"
 futures = { version = "0.3.28", features = ["executor"] }
 anyhow = "1.0.71"
@@ -21,8 +21,8 @@ virtio-core = { path = "../../virtio-core" }
 pcid = { path = "../../pcid" }
 inputd = { path = "../../inputd" }
 
-redox_event = "0.4.1"
-redox_syscall = "0.6"
-orbclient = "0.3.27"
+redox_event.workspace = true
+redox_syscall.workspace = true
+orbclient.workspace = true
 spin = "0.9.8"
-libredox = "0.1.3"
+libredox.workspace = true

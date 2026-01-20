@@ -5,19 +5,19 @@ edition = "2021"
 
 [dependencies]
 drm = "0.14.1"
-log = "0.4"
-orbclient = "0.3.27"
+log.workspace = true
+orbclient.workspace = true
 ransid = "0.4"
-redox_event = "0.4"
-redox_syscall = "0.6"
-redox-scheme = "0.8.3"
+redox_event.workspace = true
+redox_syscall.workspace = true
+redox-scheme.workspace = true
 
 common = { path = "../../common" }
 console-draw = { path = "../console-draw" }
 daemon = { path = "../../../daemon" }
 graphics-ipc = { path = "../graphics-ipc" }
 inputd = { path = "../../inputd" }
-libredox = "0.1.11"
+libredox.workspace = true
 
 [features]
 default = []

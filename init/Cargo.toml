@@ -5,4 +5,4 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-libredox = "0.1"
+libredox.workspace = true

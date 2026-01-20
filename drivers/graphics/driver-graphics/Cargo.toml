@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 drm-sys = "0.8.0"
-log = "0.4"
-redox-scheme = "0.8.3"
-redox_syscall = "0.6"
-libredox = "0.1.3"
+log.workspace = true
+redox-scheme.workspace = true
+redox_syscall.workspace = true
+libredox.workspace = true
 
 common = { path = "../../common" }
 graphics-ipc = { path = "../graphics-ipc" }

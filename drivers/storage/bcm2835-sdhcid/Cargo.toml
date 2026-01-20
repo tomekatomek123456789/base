@@ -11,6 +11,6 @@ common = { path = "../../common" }
 daemon = { path = "../../../daemon" }
 driver-block = { path = "../driver-block" }
 
-libredox = "0.1.3"
-redox_syscall = { version = "0.6", features = ["std"] }
-redox_event = "0.4"
+libredox.workspace = true
+redox_syscall = { workspace = true, features = ["std"] }
+redox_event.workspace = true

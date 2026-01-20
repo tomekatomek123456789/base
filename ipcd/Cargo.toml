@@ -4,14 +4,14 @@ name = "ipcd"
 version = "0.1.0"
 
 [dependencies]
-libredox = { version = "0.1.8", features = ["call"]}
+libredox = { workspace = true, features = ["call"]}
 daemon = { path = "../daemon" }
-redox_syscall = "0.6"
-redox-scheme = "0.8.3"
-redox_event = "0.4.0"
+redox_syscall.workspace = true
+redox-scheme.workspace = true
+redox_event.workspace = true
 anyhow = "1.0.97"
-libc = "0.2"
+libc.workspace = true
 rand = { version = "0.8", features = ["small_rng"] }
 
 [target.'cfg(target_os = "redox")'.dependencies]
-redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", default-features = false }
+redox-rt = { workspace = true, default-features = false }

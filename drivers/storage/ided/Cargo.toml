@@ -6,9 +6,9 @@ edition = "2021"
 [dependencies]
 common = { path = "../../common" }
 driver-block = { path = "../driver-block" }
-libredox = "0.1.3"
-log = "0.4"
+libredox.workspace = true
+log.workspace = true
 pcid = { path = "../../pcid" }
 daemon = { path = "../../../daemon" }
-redox_syscall = { version = "0.6", features = ["std"] }
-redox_event = "0.4"
+redox_syscall = { workspace = true, features = ["std"] }
+redox_event.workspace = true
