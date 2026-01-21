@@ -20,13 +20,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use inputd::{ControlEvent, VtEvent, VtEventKind};
 
 use libredox::errno::ESTALE;
-use log::warn;
-use redox_scheme::scheme::SchemeSync;
+use redox_scheme::scheme::{register_sync_scheme, SchemeSync};
 use redox_scheme::{CallerCtx, OpenResult, RequestKind, Response, SignalBehavior, Socket};
 
 use orbclient::{Event, EventOption};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error as SysError, EventFlags, EINVAL};
+use syscall::{Error as SysError, EventFlags, EACCES, EBADF, EINVAL};
 
 pub mod keymap;
 
@@ -54,6 +53,7 @@ enum Handle {
         is_earlyfb: bool,
     },
     Control,
+    SchemeRoot,
 }
 
 struct InputScheme {
@@ -152,7 +152,27 @@ impl InputScheme {
 }
 
 impl SchemeSync for InputScheme {
-    fn open(&mut self, path: &str, _flags: usize, _ctx: &CallerCtx) -> syscall::Result<OpenResult> {
+    fn scheme_root(&mut self) -> syscall::Result<usize> {
+        let fd = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.handles.insert(fd, Handle::SchemeRoot);
+        Ok(fd)
+    }
+
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        _flags: usize,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> syscall::Result<OpenResult> {
+        if !matches!(
+            self.handles.get(&dirfd).ok_or(SysError::new(EINVAL))?,
+            Handle::SchemeRoot
+        ) {
+            return Err(SysError::new(EACCES));
+        }
+
         let mut path_parts = path.split('/');
 
         let command = path_parts.next().ok_or(SysError::new(EINVAL))?;
@@ -167,7 +187,6 @@ impl SchemeSync for InputScheme {
                 if self.active_vt.is_none() {
                     self.switch_vt(vt);
                 }
-
                 Handle::Consumer {
                     events: EventFlags::empty(),
                     pending: Vec::new(),
@@ -319,6 +338,7 @@ impl SchemeSync for InputScheme {
                 log::error!("control tried to read");
                 return Err(SysError::new(EINVAL));
             }
+            Handle::SchemeRoot => return Err(SysError::new(EBADF)),
         }
     }
 
@@ -364,6 +384,7 @@ impl SchemeSync for InputScheme {
                 return Err(SysError::new(EINVAL));
             }
             Handle::Producer => {}
+            Handle::SchemeRoot => return Err(SysError::new(EBADF)),
         }
 
         if buf.len() == 1 && buf[0] > 0xf4 {
@@ -508,11 +529,10 @@ impl SchemeSync for InputScheme {
                 log::error!("producer or control tried to use an event queue");
                 Err(SysError::new(EINVAL))
             }
+            Handle::SchemeRoot => Err(SysError::new(EBADF)),
         }
     }
-}
 
-impl InputScheme {
     fn on_close(&mut self, id: usize) {
         let handle = self.handles.remove(&id).unwrap();
 
@@ -534,9 +554,10 @@ impl InputScheme {
 
 fn deamon(deamon: daemon::Daemon) -> anyhow::Result<()> {
     // Create the ":input" scheme.
-    let socket_file = Socket::create("input")?;
+    let socket_file = Socket::create()?;
     let mut scheme = InputScheme::new();
 
+    register_sync_scheme(&socket_file, "input", &mut scheme)?;
     deamon.ready();
 
     loop {

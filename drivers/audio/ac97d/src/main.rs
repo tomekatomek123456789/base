@@ -11,6 +11,7 @@ use std::usize;
 
 use event::{user_data, EventQueue};
 use pcid_interface::PciFunctionHandle;
+use redox_scheme::scheme::register_sync_scheme;
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 use std::cell::RefCell;
@@ -19,6 +20,7 @@ use std::cell::RefCell;
 pub mod device;
 
 fn main() {
+    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 
@@ -51,10 +53,10 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
 
     let mut irq_file = irq.irq_handle("ac97d");
 
+    let socket = Socket::nonblock().expect("ac97d: failed to create socket");
     let device = RefCell::new(unsafe {
         device::Ac97::new(bar0, bar1).expect("ac97d: failed to allocate device")
     });
-    let socket = Socket::nonblock("audiohw").expect("ac97d: failed to create socket");
     let mut readiness_based = ReadinessBased::new(&socket, 16);
 
     user_data! {
@@ -80,6 +82,8 @@ fn daemon(daemon: daemon::Daemon, pcid_handle: PciFunctionHandle) -> ! {
         )
         .unwrap();
 
+    register_sync_scheme(&socket, "audiohw", &mut *device.borrow_mut())
+        .expect("ac97d: failed to register audiohw scheme to namespace");
     daemon.ready();
 
     libredox::call::setrens(0, 0).expect("ac97d: failed to enter null namespace");

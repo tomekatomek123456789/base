@@ -2,11 +2,12 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::mem;
+use std::os::fd::{FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult};
+use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
 use syscall::error::*;
 use syscall::schemev2::NewFdFlags;
 
@@ -16,10 +17,12 @@ pub enum LogHandle {
         bufs: BTreeMap<usize, Vec<u8>>,
     },
     AddSink,
+    SchemeRoot,
 }
 
-pub struct LogScheme {
+pub struct LogScheme<'sock> {
     next_id: usize,
+    socket: &'sock Socket,
     output_tx: Sender<OutputCmd>,
     handles: BTreeMap<usize, LogHandle>,
 }
@@ -28,15 +31,17 @@ enum OutputCmd {
     Log(Vec<u8>),
     /// Log a message from the kernel. This skips writing it back to the kernel debug output.
     LogKernel(Vec<u8>),
-    AddSink(PathBuf),
+    AddSink(usize),
 }
 
-impl LogScheme {
-    pub fn new() -> Self {
+impl<'sock> LogScheme<'sock> {
+    pub fn new(socket: &'sock Socket) -> Self {
         let mut kernel_debug = OpenOptions::new()
             .write(true)
             .open("/scheme/debug")
             .unwrap();
+
+        let mut kernel_sys_log = std::fs::File::open("/scheme/sys/log").unwrap();
 
         let (output_tx, output_rx) = mpsc::channel::<OutputCmd>();
 
@@ -69,20 +74,14 @@ impl LogScheme {
                             logs.pop_front();
                         }
                     }
-                    OutputCmd::AddSink(sink_path) => {
-                        match OpenOptions::new().write(true).open(&sink_path) {
-                            Ok(mut file) => {
-                                for line in &logs {
-                                    let _ = file.write(line);
-                                    let _ = file.flush();
-                                }
-
-                                files.push(file)
-                            }
-                            Err(err) => {
-                                eprintln!("logd: failed to open {:?}: {:?}", sink_path, err)
-                            }
+                    OutputCmd::AddSink(log_fd) => {
+                        let mut file = unsafe { File::from_raw_fd(log_fd as RawFd) };
+                        for line in &logs {
+                            let _ = file.write(line);
+                            let _ = file.flush();
                         }
+
+                        files.push(file)
                     }
                 }
             }
@@ -90,12 +89,11 @@ impl LogScheme {
 
         let output_tx2 = output_tx.clone();
         std::thread::spawn(move || {
-            let mut debug_file = std::fs::File::open("/scheme/sys/log").unwrap();
             let mut handle_buf = vec![];
             let mut buf = [0; 4096];
             buf[.."kernel: ".len()].copy_from_slice(b"kernel: ");
             loop {
-                let n = debug_file.read(&mut buf["kernel: ".len()..]).unwrap();
+                let n = kernel_sys_log.read(&mut buf["kernel: ".len()..]).unwrap();
                 if n == 0 {
                     // FIXME currently possible as /scheme/log/kernel presents a snapshot of the log queue
                     break;
@@ -106,6 +104,7 @@ impl LogScheme {
 
         LogScheme {
             next_id: 0,
+            socket,
             output_tx,
             handles: BTreeMap::new(),
         }
@@ -144,8 +143,28 @@ impl LogScheme {
     }
 }
 
-impl SchemeSync for LogScheme {
-    fn open(&mut self, path: &str, _flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+impl<'sock> SchemeSync for LogScheme<'sock> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.handles.insert(id, LogHandle::SchemeRoot);
+        Ok(id)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        _flags: usize,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if !matches!(
+            self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
+            LogHandle::SchemeRoot
+        ) {
+            return Err(Error::new(EACCES));
+        }
+
         let id = self.next_id;
         self.next_id += 1;
 
@@ -192,17 +211,7 @@ impl SchemeSync for LogScheme {
     ) -> Result<usize> {
         let (context, bufs) = match self.handles.get_mut(&id).ok_or(Error::new(EBADF))? {
             LogHandle::Log { context, bufs } => (context, bufs),
-            LogHandle::AddSink => {
-                // FIXME maybe check if root
-
-                let sink_path = PathBuf::from(
-                    String::from_utf8(buf.to_owned()).map_err(|_| Error::new(EINVAL))?,
-                );
-
-                self.output_tx.send(OutputCmd::AddSink(sink_path)).unwrap();
-
-                return Ok(buf.len());
-            }
+            LogHandle::SchemeRoot | LogHandle::AddSink => return Err(Error::new(EBADF)),
         };
 
         let handle_buf = bufs.entry(ctx.pid).or_insert_with(|| Vec::new());
@@ -210,6 +219,29 @@ impl SchemeSync for LogScheme {
         Self::write_logs(&self.output_tx, handle_buf, context, buf, false);
 
         Ok(buf.len())
+    }
+
+    fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
+        let id = sendfd_request.id();
+
+        if !matches!(
+            self.handles.get(&id).ok_or(Error::new(EBADF))?,
+            LogHandle::AddSink
+        ) {
+            return Err(Error::new(EBADF));
+        }
+
+        let mut new_fd = usize::MAX;
+        if let Err(e) = sendfd_request.obtain_fd(
+            &self.socket,
+            syscall::FobtainFdFlags::CLOEXEC,
+            std::slice::from_mut(&mut new_fd),
+        ) {
+            return Err(e);
+        }
+        self.output_tx.send(OutputCmd::AddSink(new_fd)).unwrap();
+
+        Ok(1)
     }
 
     fn fcntl(&mut self, id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
@@ -232,6 +264,7 @@ impl SchemeSync for LogScheme {
         let path_bytes = match handle {
             LogHandle::Log { context, .. } => context.as_bytes(),
             LogHandle::AddSink => b"add_sink",
+            LogHandle::SchemeRoot => return Err(Error::new(EBADF)),
         };
         let mut j = 0;
         while i < buf.len() && j < path_bytes.len() {
@@ -250,10 +283,8 @@ impl SchemeSync for LogScheme {
 
         Ok(())
     }
-}
 
-impl LogScheme {
-    pub fn on_close(&mut self, id: usize) {
+    fn on_close(&mut self, id: usize) {
         self.handles.remove(&id);
     }
 }

@@ -12,6 +12,7 @@ use crate::scheme::{FbAdapter, FrameBuffer};
 mod scheme;
 
 fn main() {
+    common::init();
     daemon::Daemon::new(daemon);
 }
 fn daemon(daemon: daemon::Daemon) -> ! {

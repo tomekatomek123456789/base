@@ -2,29 +2,33 @@ use acpi::aml::namespace::AmlName;
 use amlserde::aml_serde_name::to_aml_format;
 use amlserde::AmlSerdeValue;
 use core::str;
+use libredox::Fd;
 use parking_lot::RwLockReadGuard;
 use redox_scheme::scheme::SchemeSync;
-use redox_scheme::{CallerCtx, OpenResult};
+use redox_scheme::{CallerCtx, OpenResult, SendFdRequest, Socket};
 use ron::de::SpannedError;
 use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::str::FromStr;
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::schemev2::NewFdFlags;
+use syscall::FobtainFdFlags;
 
 use syscall::data::Stat;
 use syscall::error::{Error, Result};
-use syscall::error::{EBADF, EBADFD, EINVAL, EIO, EISDIR, ENOENT, ENOTDIR};
+use syscall::error::{EACCES, EBADF, EBADFD, EINVAL, EIO, EISDIR, ENOENT, ENOTDIR};
 use syscall::flag::{MODE_DIR, MODE_FILE};
 use syscall::flag::{O_ACCMODE, O_DIRECTORY, O_RDONLY, O_STAT, O_SYMLINK};
 use syscall::{EOPNOTSUPP, EOVERFLOW, EPERM};
 
 use crate::acpi::{AcpiContext, AmlSymbols, SdtSignature};
 
-pub struct AcpiScheme<'acpi> {
+pub struct AcpiScheme<'acpi, 'sock> {
     ctx: &'acpi AcpiContext,
     handles: BTreeMap<usize, Handle<'acpi>>,
     next_fd: usize,
+    pci_fd: Option<Fd>,
+    socket: &'sock Socket,
 }
 
 struct Handle<'a> {
@@ -38,6 +42,8 @@ enum HandleKind<'a> {
     Table(SdtSignature),
     Symbols(RwLockReadGuard<'a, AmlSymbols>),
     Symbol { name: String, description: String },
+    SchemeRoot,
+    RegisterPci,
 }
 
 impl HandleKind<'_> {
@@ -48,6 +54,8 @@ impl HandleKind<'_> {
             Self::Table(_) => false,
             Self::Symbols(_) => true,
             Self::Symbol { .. } => false,
+            Self::SchemeRoot => false,
+            Self::RegisterPci => false,
         }
     }
     fn len(&self, acpi_ctx: &AcpiContext) -> Result<usize> {
@@ -60,16 +68,19 @@ impl HandleKind<'_> {
             Self::Symbol { description, .. } => description.len(),
             // Directories
             Self::TopLevel | Self::Symbols(_) | Self::Tables => 0,
+            Self::SchemeRoot | Self::RegisterPci => return Err(Error::new(EBADF)),
         })
     }
 }
 
-impl<'acpi> AcpiScheme<'acpi> {
-    pub fn new(ctx: &'acpi AcpiContext) -> Self {
+impl<'acpi, 'sock> AcpiScheme<'acpi, 'sock> {
+    pub fn new(ctx: &'acpi AcpiContext, socket: &'sock Socket) -> Self {
         Self {
             ctx,
             handles: BTreeMap::new(),
             next_fd: 0,
+            pci_fd: None,
+            socket,
         }
     }
 }
@@ -148,53 +159,92 @@ fn parse_table(table: &[u8]) -> Option<SdtSignature> {
     })
 }
 
-impl SchemeSync for AcpiScheme<'_> {
-    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+impl SchemeSync for AcpiScheme<'_, '_> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let fd = self.next_fd;
+        self.next_fd += 1;
+
+        self.handles.insert(
+            fd,
+            Handle {
+                stat: false,
+                kind: HandleKind::SchemeRoot,
+                allowed_to_eval: false,
+            },
+        );
+        Ok(fd)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        let handle = self.handles.get(&dirfd).ok_or(Error::new(EBADF))?;
+
         let path = path.trim_start_matches('/');
 
         let flag_stat = flags & O_STAT == O_STAT;
         let flag_dir = flags & O_DIRECTORY == O_DIRECTORY;
 
-        // TODO: arrayvec
-        let components = {
-            let mut v = arrayvec::ArrayVec::<&str, 3>::new();
-            let it = path.split('/');
-            for component in it.take(3) {
-                v.push(component);
-            }
+        let kind = match handle.kind {
+            HandleKind::SchemeRoot => {
+                // TODO: arrayvec
+                let components = {
+                    let mut v = arrayvec::ArrayVec::<&str, 3>::new();
+                    let it = path.split('/');
+                    for component in it.take(3) {
+                        v.push(component);
+                    }
 
-            v
-        };
+                    v
+                };
 
-        let kind = match &*components {
-            [""] => HandleKind::TopLevel,
-            ["tables"] => HandleKind::Tables,
+                match &*components {
+                    [""] => HandleKind::TopLevel,
+                    ["register_pci"] => HandleKind::RegisterPci,
+                    ["tables"] => HandleKind::Tables,
 
-            ["tables", table] => {
-                let signature = parse_table(table.as_bytes()).ok_or(Error::new(ENOENT))?;
-                HandleKind::Table(signature)
-            }
+                    ["tables", table] => {
+                        let signature = parse_table(table.as_bytes()).ok_or(Error::new(ENOENT))?;
+                        HandleKind::Table(signature)
+                    }
 
-            ["symbols"] => {
-                if let Ok(aml_symbols) = self.ctx.aml_symbols() {
-                    HandleKind::Symbols(aml_symbols)
-                } else {
-                    return Err(Error::new(EIO));
+                    ["symbols"] => {
+                        if let Ok(aml_symbols) = self.ctx.aml_symbols(self.pci_fd.as_ref()) {
+                            HandleKind::Symbols(aml_symbols)
+                        } else {
+                            return Err(Error::new(EIO));
+                        }
+                    }
+
+                    ["symbols", symbol] => {
+                        if let Some(description) = self.ctx.aml_lookup(symbol) {
+                            HandleKind::Symbol {
+                                name: (*symbol).to_owned(),
+                                description,
+                            }
+                        } else {
+                            return Err(Error::new(ENOENT));
+                        }
+                    }
+
+                    _ => return Err(Error::new(ENOENT)),
                 }
             }
-
-            ["symbols", symbol] => {
-                if let Some(description) = self.ctx.aml_lookup(symbol) {
+            HandleKind::Symbols(ref aml_symbols) => {
+                if let Some(description) = aml_symbols.lookup(path) {
                     HandleKind::Symbol {
-                        name: (*symbol).to_owned(),
+                        name: (*path).to_owned(),
                         description,
                     }
                 } else {
                     return Err(Error::new(ENOENT));
                 }
             }
-
-            _ => return Err(Error::new(ENOENT)),
+            _ => return Err(Error::new(EACCES)),
         };
 
         if kind.is_dir() && !flag_dir && !flag_stat {
@@ -419,9 +469,44 @@ impl SchemeSync for AcpiScheme<'_> {
 
         Ok(result_len)
     }
+
+    fn on_sendfd(&mut self, sendfd_request: &SendFdRequest) -> Result<usize> {
+        let id = sendfd_request.id();
+        let num_fds = sendfd_request.num_fds();
+
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        if !matches!(handle.kind, HandleKind::RegisterPci) {
+            return Err(Error::new(EACCES));
+        }
+
+        if num_fds == 0 {
+            return Ok(0);
+        }
+
+        if num_fds > 1 {
+            return Err(Error::new(EINVAL));
+        }
+        let mut new_fd = usize::MAX;
+        if let Err(e) = sendfd_request.obtain_fd(
+            &self.socket,
+            FobtainFdFlags::UPPER_TBL,
+            std::slice::from_mut(&mut new_fd),
+        ) {
+            return Err(e);
+        }
+        let new_fd = libredox::Fd::new(new_fd);
+
+        if self.pci_fd.is_some() {
+            return Err(Error::new(EINVAL));
+        } else {
+            self.pci_fd = Some(new_fd);
+        }
+
+        Ok(num_fds)
+    }
 }
 
-impl AcpiScheme<'_> {
+impl AcpiScheme<'_, '_> {
     pub fn on_close(&mut self, id: usize) {
         self.handles.remove(&id);
     }

@@ -47,19 +47,27 @@ impl ShmScheme {
 }
 
 impl SchemeSync for ShmScheme {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.handles.insert(id, Handle::SchemeRoot);
+        Ok(id)
+    }
     //FIXME: Handle O_RDONLY/O_WRONLY/O_RDWR
-    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
-        if path.is_empty() {
-            let id = self.next_id;
-            self.next_id += 1;
-
-            self.handles.insert(id, Handle::SchemeRoot);
-
-            return Ok(OpenResult::ThisScheme {
-                number: id,
-                flags: NewFdFlags::empty(),
-            });
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        let handle = self.handles.get(&dirfd).ok_or(Error::new(EBADF))?;
+        if !matches!(handle, Handle::SchemeRoot) {
+            return Err(Error::new(EACCES));
         }
+
         let path = Rc::from(path);
         let entry = match self.maps.entry(Rc::clone(&path)) {
             Entry::Occupied(e) => {

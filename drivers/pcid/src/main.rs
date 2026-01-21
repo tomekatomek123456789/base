@@ -10,7 +10,7 @@ use pci_types::{
     Bar as TyBar, CommandRegister, EndpointHeader, HeaderType, PciAddress,
     PciHeader as TyPciHeader, PciPciBridgeHeader,
 };
-use redox_scheme::{RequestKind, SignalBehavior};
+use redox_scheme::{scheme::register_sync_scheme, RequestKind, SignalBehavior};
 
 use crate::cfg_access::Pcie;
 use pcid_interface::{FullDeviceId, LegacyInterruptLine, PciBar, PciFunction, PciRom};
@@ -232,6 +232,7 @@ fn enable_function(
 }
 
 fn main() {
+    common::init();
     daemon::Daemon::new(daemon);
 }
 
@@ -245,9 +246,38 @@ fn daemon(daemon: daemon::Daemon) -> ! {
     );
 
     let pcie = Pcie::new();
-    let mut tree = BTreeMap::new();
 
     info!("PCI SG-BS:DV.F VEND:DEVI CL.SC.IN.RV");
+
+    let mut scheme = scheme::PciScheme::new(pcie);
+    let socket = redox_scheme::Socket::create().expect("failed to open pci scheme socket");
+
+    {
+        match libredox::Fd::open("/scheme/acpi/register_pci", libredox::flag::O_WRONLY, 0) {
+            Ok(register_pci) => {
+                let access_id = scheme.access();
+
+                let access_fd = socket
+                    .create_this_scheme_fd(0, access_id, syscall::O_RDWR, 0)
+                    .expect("failed to issue this resource");
+                let access_bytes = access_fd.to_ne_bytes();
+                let _ = register_pci
+                    .call_wo(
+                        &access_bytes,
+                        syscall::CallFlags::WRITE | syscall::CallFlags::FD,
+                        &[],
+                    )
+                    .expect("failed to send pci_fd to acpid");
+            }
+            Err(err) => {
+                if err.errno() == libredox::errno::ENODEV {
+                    debug!("pcid: acpid not found. Running without ACPI integration.");
+                } else {
+                    warn!("pcid: failed to open acpid register_pci (error: {}). Running without ACPI integration.", err);
+                }
+            }
+        }
+    }
 
     // FIXME Use full ACPI for enumerating the host bridges. MCFG only describes the first
     // host bridge, while multi-processor systems likely have a host bridge for each CPU.
@@ -261,13 +291,19 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         bus_i += 1;
 
         for dev_num in 0..32 {
-            scan_device(&mut tree, &pcie, &mut bus_nums, bus_num, dev_num);
+            scan_device(
+                &mut scheme.tree,
+                &scheme.pcie,
+                &mut bus_nums,
+                bus_num,
+                dev_num,
+            );
         }
     }
     debug!("Enumeration complete, now starting pci scheme");
 
-    let mut scheme = scheme::PciScheme::new(pcie, tree);
-    let socket = redox_scheme::Socket::create("pci").expect("failed to open pci scheme socket");
+    register_sync_scheme(&socket, "pci", &mut scheme)
+        .expect("failed to register pci scheme to namespace");
 
     let _ = daemon.ready();
 

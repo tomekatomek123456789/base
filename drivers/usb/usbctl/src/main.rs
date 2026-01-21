@@ -2,6 +2,7 @@ use clap::{App, Arg};
 use xhcid_interface::{PortId, XhciClientHandle};
 
 fn main() {
+    common::init();
     let matches = App::new("usbctl")
         .arg(
             Arg::with_name("SCHEME")
@@ -35,7 +36,8 @@ fn main() {
             .parse::<PortId>()
             .expect("expected PORT ID");
 
-        let handle = XhciClientHandle::new(scheme.to_owned(), port);
+        let handle =
+            XhciClientHandle::new(scheme.to_owned(), port).expect("Faild to open XhciClientHandle");
 
         if let Some(_status_scmd_matches) = port_scmd_matches.subcommand_matches("status") {
             let state = handle.port_state().expect("Failed to get port state");

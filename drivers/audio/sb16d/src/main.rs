@@ -1,6 +1,7 @@
 //#![deny(warnings)]
 
 use libredox::{flag, Fd};
+use redox_scheme::scheme::register_sync_scheme;
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 use std::cell::RefCell;
@@ -34,9 +35,9 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     common::acquire_port_io_rights().expect("sb16d: failed to acquire port IO rights");
 
+    let socket = Socket::nonblock().expect("sb16d: failed to create socket");
     let device =
         RefCell::new(unsafe { device::Sb16::new(addr).expect("sb16d: failed to allocate device") });
-    let socket = Socket::nonblock("audiohw").expect("sb16d: failed to create socket");
     let mut readiness_based = ReadinessBased::new(&socket, 16);
 
     //TODO: error on multiple IRQs?
@@ -63,6 +64,9 @@ fn daemon(daemon: daemon::Daemon) -> ! {
             event::EventFlags::READ,
         )
         .unwrap();
+
+    register_sync_scheme(&socket, "sb16d", &mut *device.borrow_mut())
+        .expect("sb16d: failed to register audiohw scheme to namespace");
 
     daemon.ready();
 

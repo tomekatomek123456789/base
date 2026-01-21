@@ -2,9 +2,11 @@ pub extern crate serde;
 pub extern crate smallvec;
 
 use std::convert::TryFrom;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::prelude::*;
 use std::num::NonZeroU8;
+use std::os::fd::{FromRawFd, RawFd};
+use std::string::FromUtf8Error;
 use std::{fmt, io, result, str};
 
 use serde::{Deserialize, Serialize};
@@ -392,10 +394,19 @@ impl str::FromStr for PortId {
     }
 }
 
-#[derive(Debug)]
 pub struct XhciClientHandle {
+    fd: libredox::Fd,
     scheme: String,
     port: PortId,
+}
+impl fmt::Debug for XhciClientHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("XhciClientHandle")
+            .field("scheme", &self.scheme)
+            .field("port", &self.port)
+            .field("fd", &"libredox::Fd")
+            .finish()
+    }
 }
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -522,34 +533,43 @@ impl DeviceReqData<'_> {
 }
 
 impl XhciClientHandle {
-    pub fn new(scheme: String, port: PortId) -> Self {
-        Self { scheme, port }
+    pub fn new(scheme: String, port: PortId) -> result::Result<Self, XhciClientHandleError> {
+        let path = format!("/scheme/{}/port{}", scheme, port);
+        let fd = libredox::Fd::open(&path, libredox::flag::O_DIRECTORY, 0)?;
+        Ok(Self { fd, scheme, port })
     }
-
+    fn read(&self, path: &str) -> result::Result<Vec<u8>, XhciClientHandleError> {
+        let target_fd = self.fd.openat(path, libredox::flag::O_RDONLY, 0)?;
+        let stat = target_fd.stat()?;
+        let mut buf: Vec<u8> = vec![0u8; stat.st_size as usize];
+        let count = target_fd.read(&mut buf)?;
+        buf.truncate(count);
+        Ok(buf)
+    }
+    fn read_to_string(&self, path: &str) -> result::Result<String, XhciClientHandleError> {
+        let buf = self.read(path)?;
+        Ok(String::from_utf8(buf)?)
+    }
     pub fn attach(&self) -> result::Result<(), XhciClientHandleError> {
-        let path = format!("/scheme/{}/port{}/attach", self.scheme, self.port);
-        let mut file = OpenOptions::new().read(false).write(true).open(path)?;
+        let mut file = self.fd.openat("attach", libredox::flag::O_WRONLY, 0)?;
         let _bytes_written = file.write(&[])?;
         Ok(())
     }
     pub fn detach(&self) -> result::Result<(), XhciClientHandleError> {
-        let path = format!("/scheme/{}/port{}/detach", self.scheme, self.port);
-        let mut file = OpenOptions::new().read(false).write(true).open(path)?;
+        let mut file = self.fd.openat("detach", libredox::flag::O_WRONLY, 0)?;
         let _bytes_written = file.write(&[])?;
         Ok(())
     }
     pub fn get_standard_descs(&self) -> result::Result<DevDesc, XhciClientHandleError> {
-        let path = format!("/scheme/{}/port{}/descriptors", self.scheme, self.port);
-        let json = std::fs::read(path)?;
+        let json = self.read("descriptors")?;
         Ok(serde_json::from_slice(&json)?)
     }
     pub fn configure_endpoints(
         &self,
         req: &ConfigureEndpointsReq,
     ) -> result::Result<(), XhciClientHandleError> {
-        let path = format!("/scheme/{}/port{}/configure", self.scheme, self.port);
         let json = serde_json::to_vec(req)?;
-        let mut file = OpenOptions::new().read(false).write(true).open(path)?;
+        let mut file = self.fd.openat("configure", libredox::flag::O_WRONLY, 0)?;
         let json_bytes_written = file.write(&json)?;
         if json_bytes_written != json.len() {
             return Err(XhciClientHandleError::InvalidResponse(Invalid(
@@ -559,23 +579,18 @@ impl XhciClientHandle {
         Ok(())
     }
     pub fn port_state(&self) -> result::Result<PortState, XhciClientHandleError> {
-        let path = format!("/scheme/{}/port{}/state", self.scheme, self.port);
-        let string = std::fs::read_to_string(path)?;
+        let string = self.read_to_string("state")?;
         Ok(string.parse()?)
     }
     pub fn open_endpoint_ctl(&self, num: u8) -> result::Result<File, XhciClientHandleError> {
-        let path = format!(
-            "/scheme/{}/port{}/endpoints/{}/ctl",
-            self.scheme, self.port, num
-        );
-        Ok(File::open(path)?)
+        let path = format!("endpoints/{}/ctl", num);
+        let fd = self.fd.openat(&path, libredox::flag::O_RDWR, 0)?;
+        Ok(unsafe { File::from_raw_fd(fd.into_raw() as RawFd) })
     }
     pub fn open_endpoint_data(&self, num: u8) -> result::Result<File, XhciClientHandleError> {
-        let path = format!(
-            "/scheme/{}/port{}/endpoints/{}/data",
-            self.scheme, self.port, num
-        );
-        Ok(File::open(path)?)
+        let path = format!("endpoints/{}/data", num);
+        let fd = self.fd.openat(&path, libredox::flag::O_RDWR, 0)?;
+        Ok(unsafe { File::from_raw_fd(fd.into_raw() as RawFd) })
     }
     pub fn open_endpoint(&self, num: u8) -> result::Result<XhciEndpHandle, XhciClientHandleError> {
         Ok(XhciEndpHandle {
@@ -607,8 +622,7 @@ impl XhciClientHandle {
         };
         let json = serde_json::to_vec(&req)?;
 
-        let path = format!("/scheme/{}/port{}/request", self.scheme, self.port);
-        let mut file = File::open(path)?;
+        let file = self.fd.openat("request", libredox::flag::O_RDWR, 0)?;
 
         let json_bytes_written = file.write(&json)?;
         if json_bytes_written != json.len() {
@@ -863,4 +877,13 @@ pub enum XhciClientHandleError {
 
     #[error("unexpected short packet of size {0}")]
     UnexpectedShortPacket(usize),
+
+    #[error("utf8 error: {0}")]
+    Utf8Error(#[from] FromUtf8Error),
+}
+
+impl From<libredox::error::Error> for XhciClientHandleError {
+    fn from(error: libredox::error::Error) -> Self {
+        Self::IoError(error.into())
+    }
 }

@@ -146,22 +146,17 @@ pub struct AmlPhysMemHandler {
 /// Read from a physical address.
 /// Generic parameter must be u8, u16, u32 or u64.
 impl AmlPhysMemHandler {
-    pub fn new(page_cache: Arc<Mutex<AmlPageCache>>) -> Self {
-        //TODO: have PCID send a socket?
-        let pci_fd = Arc::new(
-            match libredox::Fd::open(
-                "/scheme/pci/access",
-                libredox::flag::O_RDWR | libredox::flag::O_CLOEXEC,
-                0,
-            ) {
-                Ok(fd) => Some(fd),
-                Err(err) => {
-                    log::error!("failed to open /scheme/pci/access: {}", err);
-                    None
-                }
-            },
-        );
-        Self { page_cache, pci_fd }
+    pub fn new(pci_fd_opt: Option<&libredox::Fd>, page_cache: Arc<Mutex<AmlPageCache>>) -> Self {
+        let pci_fd = if let Some(pci_fd) = pci_fd_opt {
+            Some(libredox::Fd::new(pci_fd.raw()))
+        } else {
+            log::error!("pci_fd is not registered");
+            None
+        };
+        Self {
+            page_cache,
+            pci_fd: Arc::new(pci_fd),
+        }
     }
 
     fn pci_call_metadata(kind: u8, addr: PciAddress, off: u16) -> [u64; 2] {

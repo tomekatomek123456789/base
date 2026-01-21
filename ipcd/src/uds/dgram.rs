@@ -22,6 +22,44 @@ use std::{
 };
 use syscall::{error::*, flag::*, schemev2::NewFdFlags, Error, FobtainFdFlags, Stat};
 
+#[derive(Debug, Default)]
+pub struct Socket {
+    primary_id: usize,
+    path: Option<String>,
+    state: State,
+    peer: Option<usize>,
+    messages: VecDeque<DataPacket>,
+    options: HashSet<i32>,
+    fds: VecDeque<usize>,
+    flags: usize,
+    issued_token: Option<u64>,
+}
+
+impl Socket {
+    fn drop_fds(&mut self, num_fd: usize) -> Result<()> {
+        for i in 0..num_fd {
+            if self.fds.pop_front().is_none() {
+                eprintln!("Socket::drop_fds: Attempted to drop FD #{} of {}, but fd queue is empty. State inconsistency.", i + 1, num_fd);
+                return Err(Error::new(EINVAL));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum State {
+    Unbound,
+    Bound,
+    Closed,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::Unbound
+    }
+}
+
 impl DataPacket {
     pub fn serialize_to_stream(
         self,
@@ -70,46 +108,26 @@ impl DataPacket {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum State {
-    Unbound,
-    Bound,
-    Closed,
+enum Handle {
+    Socket(Rc<RefCell<Socket>>),
+    SchemeRoot,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        Self::Unbound
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct Socket {
-    primary_id: usize,
-    path: Option<String>,
-    state: State,
-    peer: Option<usize>,
-    messages: VecDeque<DataPacket>,
-    options: HashSet<i32>,
-    fds: VecDeque<usize>,
-    flags: usize,
-    issued_token: Option<u64>,
-}
-
-impl Socket {
-    fn drop_fds(&mut self, num_fd: usize) -> Result<()> {
-        for i in 0..num_fd {
-            if self.fds.pop_front().is_none() {
-                eprintln!("Socket::drop_fds: Attempted to drop FD #{} of {}, but fd queue is empty. State inconsistency.", i + 1, num_fd);
-                return Err(Error::new(EINVAL));
-            }
+impl Handle {
+    fn as_socket(&self) -> Option<&Rc<RefCell<Socket>>> {
+        if let Self::Socket(socket) = self {
+            Some(socket)
+        } else {
+            None
         }
-        Ok(())
+    }
+    fn is_scheme_root(&self) -> bool {
+        matches!(self, Self::SchemeRoot)
     }
 }
 
 pub struct UdsDgramScheme<'sock> {
-    sockets: HashMap<usize, Rc<RefCell<Socket>>>,
+    handles: HashMap<usize, Handle>,
     next_id: usize,
     socket_paths: HashMap<String, Rc<RefCell<Socket>>>,
     socket_tokens: HashMap<u64, Rc<RefCell<Socket>>>,
@@ -121,15 +139,18 @@ pub struct UdsDgramScheme<'sock> {
 impl<'sock> UdsDgramScheme<'sock> {
     pub fn new(socket: &'sock SchemeSocket) -> Result<Self> {
         Ok(Self {
-            sockets: HashMap::new(),
+            handles: HashMap::new(),
             next_id: 0,
             socket_paths: HashMap::new(),
             socket_tokens: HashMap::new(),
             socket,
-            proc_creds_capability: syscall::open(
-                "/scheme/proc/proc-creds-capability",
-                syscall::O_RDONLY,
-            )?,
+            proc_creds_capability: {
+                libredox::call::open(
+                    "/scheme/proc/proc-creds-capability",
+                    libredox::flag::O_RDONLY,
+                    0,
+                )?
+            },
             rng: SmallRng::from_entropy(),
         })
     }
@@ -147,7 +168,14 @@ impl<'sock> UdsDgramScheme<'sock> {
     }
 
     fn get_socket(&self, id: usize) -> Result<&Rc<RefCell<Socket>>, Error> {
-        self.sockets.get(&id).ok_or(Error::new(EBADF))
+        self.handles
+            .get(&id)
+            .and_then(Handle::as_socket)
+            .ok_or(Error::new(EBADF))
+    }
+
+    fn insert_socket(&mut self, id: usize, socket: Rc<RefCell<Socket>>) {
+        self.handles.insert(id, Handle::Socket(socket));
     }
 
     fn get_connected_peer(&self, id: usize) -> Result<(usize, Rc<RefCell<Socket>>), Error> {
@@ -177,7 +205,7 @@ impl<'sock> UdsDgramScheme<'sock> {
         new.flags = flags;
         new.primary_id = new_id;
 
-        self.sockets.insert(new_id, Rc::new(RefCell::new(new)));
+        self.insert_socket(new_id, Rc::new(RefCell::new(new)));
         self.next_id += 1;
         new_id
     }
@@ -473,7 +501,7 @@ impl<'sock> UdsDgramScheme<'sock> {
         // why not)
         self.post_fevent(id, (EVENT_READ | EVENT_WRITE).bits())?;
 
-        self.sockets.insert(new_id, Rc::new(RefCell::new(new)));
+        self.insert_socket(new_id, Rc::new(RefCell::new(new)));
 
         self.next_id += 1;
 
@@ -496,7 +524,7 @@ impl<'sock> UdsDgramScheme<'sock> {
 
         let new_id = self.next_id;
 
-        self.sockets.insert(new_id, socket_rc.clone());
+        self.insert_socket(new_id, socket_rc.clone());
         self.next_id += 1;
 
         Ok(OpenResult::ThisScheme {
@@ -625,9 +653,45 @@ impl<'sock> UdsDgramScheme<'sock> {
 }
 
 impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
-    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let new_id = self.next_id;
+        self.handles.insert(new_id, Handle::SchemeRoot);
+        self.next_id += 1;
+        Ok(new_id)
+    }
+
+    fn openat(
+        &mut self,
+        fd: usize,
+        path: &str,
+        mut flags: usize,
+        fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        {
+            let Some(handle) = self.handles.get(&fd) else {
+                return Err(Error::new(EBADF));
+            };
+            if !handle.is_scheme_root() {
+                eprintln!(
+                    "openat(fd: {}, path: '{}'): fd is not an open capability.",
+                    fd, path
+                );
+                return Err(Error::new(EACCES));
+            }
+        }
+        flags |= fcntl_flags as usize;
+
         let new_id = if path.is_empty() {
-            self.handle_unnamed_socket(flags)
+            if flags & O_CREAT == O_CREAT {
+                self.handle_unnamed_socket(flags)
+            } else {
+                eprintln!(
+                    "open(path: '{}'): Attempting to open an unnamed socket without O_CREAT.",
+                    path
+                );
+                return Err(Error::new(EINVAL));
+            }
         } else {
             eprintln!(
                 "open(path: '{}'): Attempting to open a named socket, which is not supported.",
@@ -674,12 +738,15 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        let socket_rc = self.get_socket(id)?;
-        let socket = socket_rc.borrow();
-
-        let empty = String::new();
-        let path = socket.path.as_ref().unwrap_or(&empty);
-        Ok(Self::fpath_inner(path, buf)?)
+        match self.handles.get(&id).ok_or(Error::new(EBADF))? {
+            Handle::SchemeRoot => Ok(Self::fpath_inner(&String::new(), buf)?),
+            Handle::Socket(socket_rc) => {
+                let socket = socket_rc.borrow();
+                let empty = String::new();
+                let path = socket.path.as_ref().unwrap_or(&empty);
+                Ok(Self::fpath_inner(path, buf)?)
+            }
+        }
     }
 
     fn fsync(&mut self, id: usize, _ctx: &CallerCtx) -> Result<()> {
@@ -698,7 +765,7 @@ impl<'sock> SchemeSync for UdsDgramScheme<'sock> {
     }
 
     fn on_close(&mut self, id: usize) {
-        let Some(socket_rc) = self.sockets.remove(&id) else {
+        let Some(Handle::Socket(socket_rc)) = self.handles.remove(&id) else {
             return;
         };
         let mut socket = socket_rc.borrow_mut();

@@ -1,4 +1,5 @@
 use redox_rt::protocol::ProcMeta;
+use std::fmt::Debug;
 use std::{cmp, convert::TryInto, mem};
 use syscall::{error::*, Error};
 
@@ -143,78 +144,40 @@ impl DataPacket {
     }
 }
 
+trait NumFromBytes: Sized + Debug {
+    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self, Error>;
+}
+
+macro_rules! num_from_bytes_impl {
+    ($($t:ty),*) => {
+        $(
+            impl NumFromBytes for $t {
+                fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self, Error> {
+                    let size = mem::size_of::<Self>();
+                    let buffer_slice = buffer.get(..size).and_then(|s| s.try_into().ok());
+
+                    if let Some(slice) = buffer_slice {
+                        Ok(Self::from_le_bytes(slice))
+                    } else {
+                        eprintln!(
+                            "read_num: buffer is too short to read num of size {} (buffer len: {})",
+                            size, buffer.len()
+                        );
+                        Err(Error::new(EINVAL))
+                    }
+                }
+            }
+        )*
+    };
+}
+
+num_from_bytes_impl!(i32, u32, u64, usize);
+
 fn read_num<T>(buffer: &[u8]) -> Result<T, Error>
 where
     T: NumFromBytes,
 {
     T::from_le_bytes_slice(buffer)
-}
-trait NumFromBytes: Sized {
-    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self, Error>;
-}
-impl NumFromBytes for i32 {
-    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self> {
-        Ok(i32::from_le_bytes(
-            buffer
-                .get(..mem::size_of::<i32>())
-                .and_then(|slice| slice.try_into().ok())
-                .ok_or_else(|| {
-                    eprintln!(
-                        "read_num: buffer is too short to read num len: {}",
-                        buffer.len()
-                    );
-                    Error::new(EINVAL)
-                })?,
-        ))
-    }
-}
-impl NumFromBytes for u32 {
-    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self> {
-        Ok(u32::from_le_bytes(
-            buffer
-                .get(..mem::size_of::<u32>())
-                .and_then(|slice| slice.try_into().ok())
-                .ok_or_else(|| {
-                    eprintln!(
-                        "read_num: buffer is too short to read num len: {}",
-                        buffer.len()
-                    );
-                    Error::new(EINVAL)
-                })?,
-        ))
-    }
-}
-impl NumFromBytes for u64 {
-    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self> {
-        Ok(u64::from_le_bytes(
-            buffer
-                .get(..mem::size_of::<u64>())
-                .and_then(|slice| slice.try_into().ok())
-                .ok_or_else(|| {
-                    eprintln!(
-                        "read_num: buffer is too short to read num len: {}",
-                        buffer.len()
-                    );
-                    Error::new(EINVAL)
-                })?,
-        ))
-    }
-}
-impl NumFromBytes for usize {
-    fn from_le_bytes_slice(buffer: &[u8]) -> Result<Self> {
-        Ok(usize::from_le_bytes(
-            buffer
-                .get(..mem::size_of::<usize>())
-                .and_then(|slice| slice.try_into().ok())
-                .ok_or_else(|| {
-                    eprintln!(
-                        "read_num: buffer is too short to read num len: {}",
-                        buffer.len()
-                    );
-                    Error::new(EINVAL)
-                })?,
-        ))
-    }
 }
 
 fn get_uid_gid_from_pid(cap_fd: usize, target_pid: usize) -> Result<(u32, u32, u32)> {

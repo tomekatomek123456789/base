@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::io::{Cursor, Seek};
 use std::iter;
@@ -22,9 +23,19 @@ use redox_scheme::{CallerCtx, OpenResult};
 
 use crate::filesystem::{self, File, FileData, Filesystem, Inode};
 
+enum Handle {
+    Inode(usize),
+    SchemeRoot,
+}
+
+// TODO: Move to relibc
+const AT_REMOVEDIR: usize = 0x200;
+
 pub struct Scheme {
     scheme_name: String,
     filesystem: Filesystem,
+    handles: HashMap<usize, Handle>,
+    next_id: usize,
 }
 impl Scheme {
     /// Create the scheme, with the name being used for `fpath`.
@@ -32,10 +43,11 @@ impl Scheme {
         Ok(Self {
             scheme_name,
             filesystem: Filesystem::new()?,
+            handles: HashMap::new(),
+            next_id: 0,
         })
     }
-    /// Remove a directory entry, where the entry can be both a file or a directory. Used by both
-    /// `unlink` and `rmdir`.
+    /// Remove a directory entry, where the entry can be both a file or a directory. Used by `unlinkat`.
     pub fn remove_dentry(&mut self, path: &str, uid: u32, gid: u32, directory: bool) -> Result<()> {
         let removed_inode = {
             let (parent_dir_inode, name_to_delete) =
@@ -148,7 +160,27 @@ impl Scheme {
 }
 
 impl SchemeSync for Scheme {
-    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id;
+        self.handles.insert(id, Handle::SchemeRoot);
+        self.next_id += 1;
+        Ok(id)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        flags: usize,
+        fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if !matches!(
+            self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
+            Handle::SchemeRoot
+        ) {
+            return Err(Error::new(EACCES));
+        }
+
         let exists = self.filesystem.resolve(path, 0, 0).is_ok();
         if flags & O_CREAT != 0 && flags & O_EXCL != 0 && exists {
             return Err(Error::new(EEXIST));
@@ -232,19 +264,26 @@ impl SchemeSync for Scheme {
 
             new_inode_number
         } else {
-            self.open_existing(path, flags, ctx.uid, ctx.gid)?.0
+            self.open_existing(path, flags | fcntl_flags as usize, ctx.uid, ctx.gid)?
+                .0
         };
+        let new_id = self.next_id;
+        self.handles.insert(new_id, Handle::Inode(inode));
+        self.next_id += 1;
         Ok(OpenResult::ThisScheme {
-            number: inode,
+            number: new_id,
             flags: NewFdFlags::POSITIONED,
         })
     }
     fn unlinkat(&mut self, dirfd: usize, path: &str, flags: usize, ctx: &CallerCtx) -> Result<()> {
-        let _ = self
-            .filesystem
-            .files
-            .get_mut(&dirfd)
-            .ok_or(Error::new(EBADFD))?;
+        {
+            if !matches!(
+                self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
+                Handle::SchemeRoot
+            ) {
+                return Err(Error::new(EACCES));
+            }
+        }
         self.remove_dentry(
             path,
             ctx.uid,
@@ -254,7 +293,7 @@ impl SchemeSync for Scheme {
     }
     fn read(
         &mut self,
-        inode: usize,
+        fd: usize,
         buf: &mut [u8],
         offset: u64,
         fcntl_flags: u32,
@@ -263,7 +302,10 @@ impl SchemeSync for Scheme {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
         };
-
+        let inode = match self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
         let file = self
             .filesystem
             .files
@@ -289,12 +331,16 @@ impl SchemeSync for Scheme {
     }
     fn getdents<'buf>(
         &mut self,
-        inode: usize,
+        fd: usize,
         mut buf: DirentBuf<&'buf mut [u8]>,
         opaque_offset: u64,
     ) -> Result<DirentBuf<&'buf mut [u8]>> {
         let Ok(offset) = usize::try_from(opaque_offset) else {
             return Ok(buf);
+        };
+        let inode = match self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
         };
         let file = self
             .filesystem
@@ -318,7 +364,7 @@ impl SchemeSync for Scheme {
     }
     fn write(
         &mut self,
-        inode: usize,
+        fd: usize,
         buf: &[u8],
         offset: u64,
         _fcntl_flags: u32,
@@ -327,7 +373,10 @@ impl SchemeSync for Scheme {
         let Ok(offset) = usize::try_from(offset) else {
             return Ok(0);
         };
-
+        let inode = match self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
         let file = self
             .filesystem
             .files
@@ -353,7 +402,11 @@ impl SchemeSync for Scheme {
             Err(Error::new(EISDIR))
         }
     }
-    fn fchmod(&mut self, inode: usize, mode: u16, _ctx: &CallerCtx) -> Result<()> {
+    fn fchmod(&mut self, fd: usize, mode: u16, _ctx: &CallerCtx) -> Result<()> {
+        let inode = match self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
         let file = self
             .filesystem
             .files
@@ -413,12 +466,12 @@ impl SchemeSync for Scheme {
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn fpath(
-        &mut self,
-        mut current_inode: usize,
-        buf: &mut [u8],
-        _ctx: &CallerCtx,
-    ) -> Result<usize> {
+    fn fpath(&mut self, fd: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
+        let mut current_inode = match *self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
+
         let mut chain = Vec::new();
 
         let mut current_info = self
@@ -462,7 +515,12 @@ impl SchemeSync for Scheme {
         // TODO
         Err(Error::new(ENOSYS))
     }
-    fn fstat(&mut self, inode: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
+    fn fstat(&mut self, fd: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
+        let inode = match *self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
+
         let block_size = self.filesystem.block_size();
         let file = self
             .filesystem
@@ -535,7 +593,11 @@ impl SchemeSync for Scheme {
     fn fsync(&mut self, _inode: usize, _ctx: &CallerCtx) -> Result<()> {
         Ok(())
     }
-    fn ftruncate(&mut self, inode: usize, size: u64, _ctx: &CallerCtx) -> Result<()> {
+    fn ftruncate(&mut self, fd: usize, size: u64, _ctx: &CallerCtx) -> Result<()> {
+        let inode = match self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
         let file = self
             .filesystem
             .files
@@ -560,7 +622,11 @@ impl SchemeSync for Scheme {
         }
         Ok(())
     }
-    fn futimens(&mut self, inode: usize, times: &[TimeSpec], _ctx: &CallerCtx) -> Result<()> {
+    fn futimens(&mut self, fd: usize, times: &[TimeSpec], _ctx: &CallerCtx) -> Result<()> {
+        let inode = match self.handles.get(&fd).ok_or(Error::new(EBADFD))? {
+            Handle::Inode(inode) => inode,
+            Handle::SchemeRoot => return Err(Error::new(EISDIR)),
+        };
         let file = self
             .filesystem
             .files
@@ -577,7 +643,10 @@ impl SchemeSync for Scheme {
     }
 }
 impl Scheme {
-    pub fn on_close(&mut self, inode: usize) {
+    pub fn on_close(&mut self, fd: usize) {
+        let Some(Handle::Inode(inode)) = self.handles.remove(&fd) else {
+            return;
+        };
         let Some(inode_info) = self.filesystem.files.get_mut(&inode) else {
             return;
         };

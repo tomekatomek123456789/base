@@ -19,10 +19,12 @@ use graphics_ipc::v1::CursorDamage;
 use graphics_ipc::v2::Damage;
 use inputd::{VtEvent, VtEventKind};
 use libredox::Fd;
-use redox_scheme::scheme::SchemeSync;
+use redox_scheme::scheme::{register_scheme_inner, SchemeSync};
 use redox_scheme::{CallerCtx, OpenResult, RequestKind, SignalBehavior, Socket};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error, MapFlags, Result, EAGAIN, EBADF, EINVAL, ENOENT, EOPNOTSUPP};
+use syscall::{
+    CallFlags, Error, MapFlags, Result, EACCES, EAGAIN, EBADF, EINVAL, ENOENT, EOPNOTSUPP,
+};
 
 use crate::objects::{DrmObjectId, DrmObjects};
 use crate::properties::DrmPropertyKind;
@@ -119,12 +121,13 @@ enum Handle<T: GraphicsAdapter> {
         next_id: u32,
         fbs: HashMap<u32, Arc<T::Framebuffer>>,
     },
+    SchemeRoot,
 }
 
 impl<T: GraphicsAdapter> GraphicsScheme<T> {
     pub fn new(mut adapter: T, scheme_name: String) -> Self {
         assert!(scheme_name.starts_with("display"));
-        let socket = Socket::nonblock(&scheme_name).expect("failed to create graphics scheme");
+        let socket = Socket::nonblock().expect("failed to create graphics scheme");
 
         let disable_graphical_debug = Some(
             File::open("/scheme/debug/disable-graphical-debug")
@@ -152,7 +155,7 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
             adapter.probe_connector(&mut objects, &standard_properties, connector_id)
         }
 
-        GraphicsScheme {
+        let mut scheme = GraphicsScheme {
             adapter,
             scheme_name,
             disable_graphical_debug,
@@ -163,7 +166,15 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
             handles: BTreeMap::new(),
             active_vt: 0,
             vts: HashMap::new(),
-        }
+        };
+
+        let cap_id = scheme
+            .scheme_root()
+            .expect("failed to get this scheme root");
+        register_scheme_inner(&scheme.socket, &scheme.scheme_name, cap_id)
+            .expect("failed to register graphics scheme root");
+
+        scheme
     }
 
     pub fn event_handle(&self) -> &Fd {
@@ -308,7 +319,26 @@ impl<T: GraphicsAdapter> GraphicsScheme<T> {
 const MAP_FAKE_OFFSET_MULTIPLIER: usize = 0x10_000_000;
 
 impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
-    fn open(&mut self, path: &str, _flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.handles.insert(id, Handle::SchemeRoot);
+        Ok(id)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        _flags: usize,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if !matches!(
+            self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
+            Handle::SchemeRoot
+        ) {
+            return Err(Error::new(EACCES));
+        }
         if path.is_empty() {
             return Err(Error::new(EINVAL));
         }
@@ -369,6 +399,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 next_id: _,
                 fbs: _,
             } => format!("/scheme/{}/v2/{vt}", self.scheme_name),
+            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
         };
         buf[..path.len()].copy_from_slice(path.as_bytes());
         Ok(path.len())
@@ -390,6 +421,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 Ok(())
             }
             Handle::V2 { .. } => Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot => Err(Error::new(EOPNOTSUPP)),
         }
     }
 
@@ -414,6 +446,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 Ok(1)
             }
             Handle::V2 { .. } => Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot => Err(Error::new(EOPNOTSUPP)),
         }
     }
 
@@ -493,6 +526,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                 Ok(buf.len())
             }
             Handle::V2 { .. } => Err(Error::new(EOPNOTSUPP)),
+            Handle::SchemeRoot => Err(Error::new(EOPNOTSUPP)),
         }
     }
 
@@ -535,6 +569,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
             Handle::V1Screen { .. } => {
                 return Err(Error::new(EOPNOTSUPP));
             }
+            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
             Handle::V2 { vt, next_id, fbs } => match metadata[0] {
                 ipc::VERSION => ipc::DrmVersion::with(payload, |mut data| {
                     data.set_version_major(1);
@@ -887,6 +922,7 @@ impl<T: GraphicsAdapter> SchemeSync for GraphicsScheme<T> {
                     .unwrap(),
                 offset & (MAP_FAKE_OFFSET_MULTIPLIER as u64 - 1),
             ),
+            Handle::SchemeRoot => return Err(Error::new(EOPNOTSUPP)),
         };
         let ptr = T::map_dumb_framebuffer(&mut self.adapter, framebuffer);
         Ok(unsafe { ptr.add(offset as usize) } as usize)

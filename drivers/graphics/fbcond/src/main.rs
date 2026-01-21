@@ -3,13 +3,13 @@ use inputd::ConsumerHandleEvent;
 use libredox::errno::{EAGAIN, EINTR};
 use orbclient::Event;
 use redox_scheme::{
-    scheme::{Op, SchemeResponse, SchemeSync},
+    scheme::{register_sync_scheme, Op, SchemeResponse, SchemeSync},
     CallerCtx, RequestKind, Response, SignalBehavior, Socket,
 };
 use std::env;
 use syscall::{EOPNOTSUPP, EVENT_READ};
 
-use crate::scheme::{FbconScheme, VtIndex};
+use crate::scheme::{FbconScheme, Handle, VtIndex};
 
 mod display;
 mod scheme;
@@ -35,7 +35,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     // FIXME listen for resize events from inputd and handle them
 
-    let mut socket = Socket::nonblock("fbcon").expect("fbcond: failed to create fbcon scheme");
+    let mut socket = Socket::nonblock().expect("fbcond: failed to create fbcon scheme");
     event_queue
         .subscribe(
             socket.inner().raw(),
@@ -45,6 +45,9 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         .expect("fbcond: failed to subscribe to scheme events");
 
     let mut scheme = FbconScheme::new(&vt_ids, &mut event_queue);
+
+    register_sync_scheme(&socket, "fbcon", &mut scheme)
+        .expect("fbcond: failed to register scheme to namespace");
 
     // This is not possible for now as fbcond needs to open new displays at runtime for graphics
     // driver handoff. In the future inputd may directly pass a handle to the display instead.
@@ -204,7 +207,8 @@ fn handle_event(
 
     for (handle_id, handle) in scheme.handles.iter_mut() {
         let handle = match handle {
-            handle => handle,
+            Handle::SchemeRoot => continue,
+            Handle::Vt(handle) => handle,
         };
 
         if !handle.events.contains(EVENT_READ) {

@@ -1,9 +1,8 @@
 use std::cell::RefCell;
 use std::rc::Weak;
 
-use syscall::error::{Error, Result, EAGAIN, EINVAL, EPIPE};
+use syscall::error::{Error, Result, EAGAIN, EINVAL, EPIPE, EWOULDBLOCK};
 use syscall::flag::{EventFlags, F_GETFL, F_SETFL, O_ACCMODE, O_NONBLOCK};
-use syscall::EWOULDBLOCK;
 
 use crate::pty::Pty;
 use crate::resource::Resource;

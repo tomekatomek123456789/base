@@ -14,6 +14,7 @@ use log::{error, info};
 pub mod ahci;
 
 fn main() {
+    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

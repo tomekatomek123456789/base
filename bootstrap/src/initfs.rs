@@ -6,13 +6,12 @@ use core::str;
 use alloc::string::String;
 
 use hashbrown::HashMap;
-use redox_initfs::{InitFs, Inode, InodeDir, InodeKind, InodeStruct, types::Timespec};
+use redox_initfs::{types::Timespec, InitFs, Inode, InodeDir, InodeKind, InodeStruct};
 
 use redox_path::canonicalize_to_standard;
-use redox_scheme::{CallerCtx, OpenResult, RequestKind, scheme::SchemeSync};
+use redox_scheme::{scheme::SchemeSync, CallerCtx, OpenResult, RequestKind};
 
 use redox_scheme::{SignalBehavior, Socket};
-use syscall::PAGE_SIZE;
 use syscall::data::Stat;
 use syscall::dirent::DirEntry;
 use syscall::dirent::DirentBuf;
@@ -20,8 +19,30 @@ use syscall::dirent::DirentKind;
 use syscall::error::*;
 use syscall::flag::*;
 use syscall::schemev2::NewFdFlags;
+use syscall::PAGE_SIZE;
 
-struct Handle {
+use crate::KernelSchemeMap;
+
+enum Handle {
+    Node(Node),
+    SchemeRoot,
+}
+impl Handle {
+    fn as_node(&self) -> Result<&Node> {
+        match self {
+            Handle::Node(n) => Ok(n),
+            _ => Err(Error::new(EBADF)),
+        }
+    }
+    fn as_node_mut(&mut self) -> Result<&mut Node> {
+        match self {
+            Handle::Node(n) => Ok(n),
+            _ => Err(Error::new(EBADF)),
+        }
+    }
+}
+
+struct Node {
     inode: Inode,
     // TODO: Any better way to implement fpath? Or maybe work around it, e.g. by giving paths such
     // as `initfs:__inodes__/<inode>`?
@@ -91,7 +112,20 @@ fn inode_len(inode: InodeStruct<'static>) -> Result<usize> {
 }
 
 impl SchemeSync for InitFsScheme {
-    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if !matches!(
+            self.handles.get(&dirfd).ok_or(Error::new(EBADF))?,
+            Handle::SchemeRoot
+        ) {
+            return Err(Error::new(EACCES));
+        }
         let mut components = path
             // trim leading and trailing slash
             .trim_matches('/')
@@ -158,10 +192,10 @@ impl SchemeSync for InitFsScheme {
         let id = self.next_id();
         let old = self.handles.insert(
             id,
-            Handle {
+            Handle::Node(Node {
                 inode: current_inode,
                 filename: path.into(),
-            },
+            }),
         );
         assert!(old.is_none());
 
@@ -183,7 +217,11 @@ impl SchemeSync for InitFsScheme {
             return Ok(0);
         };
 
-        let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+        let handle = self
+            .handles
+            .get_mut(&id)
+            .ok_or(Error::new(EBADF))?
+            .as_node_mut()?;
 
         match Self::get_inode(&self.fs, handle.inode)?.kind() {
             InodeKind::File(file) => {
@@ -222,7 +260,7 @@ impl SchemeSync for InitFsScheme {
         let Ok(offset) = u32::try_from(opaque_offset) else {
             return Ok(buf);
         };
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?.as_node()?;
         let InodeKind::Dir(dir) = Self::get_inode(&self.fs, handle.inode)?.kind() else {
             return Err(Error::new(ENOTDIR));
         };
@@ -247,19 +285,23 @@ impl SchemeSync for InitFsScheme {
     }
 
     fn fsize(&mut self, id: usize, _ctx: &CallerCtx) -> Result<u64> {
-        let handle = self.handles.get_mut(&id).ok_or(Error::new(EBADF))?;
+        let handle = self
+            .handles
+            .get_mut(&id)
+            .ok_or(Error::new(EBADF))?
+            .as_node_mut()?;
 
         Ok(inode_len(Self::get_inode(&self.fs, handle.inode)?)? as u64)
     }
 
     fn fcntl(&mut self, id: usize, _cmd: usize, _arg: usize, _ctx: &CallerCtx) -> Result<usize> {
-        let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?.as_node()?;
 
         Ok(0)
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?.as_node()?;
 
         // TODO: Copy scheme part in kernel
         let scheme_path = b"/scheme/initfs";
@@ -274,7 +316,7 @@ impl SchemeSync for InitFsScheme {
     }
 
     fn fstat(&mut self, id: usize, stat: &mut Stat, _ctx: &CallerCtx) -> Result<()> {
-        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?.as_node()?;
 
         let Timespec { sec, nsec } = self.fs.image_creation_time();
 
@@ -315,8 +357,10 @@ impl SchemeSync for InitFsScheme {
         _ctx: &CallerCtx,
     ) -> syscall::Result<usize> {
         let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
-
-        let data = match Self::get_inode(&self.fs, handle.inode)?.kind() {
+        let Handle::Node(node) = handle else {
+            return Err(Error::new(EBADF));
+        };
+        let data = match Self::get_inode(&self.fs, node.inode)?.kind() {
             InodeKind::File(file) => file.data().map_err(|_| Error::new(EIO))?,
             InodeKind::Dir(_) => return Err(Error::new(EISDIR)),
             InodeKind::Link(link) => return Err(Error::new(ELOOP)),
@@ -339,12 +383,30 @@ impl SchemeSync for InitFsScheme {
     }
 }
 
-pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
+pub fn run(
+    bytes: &'static [u8],
+    sync_pipe: usize,
+    kernel_schemes: &KernelSchemeMap,
+    scheme_creation_cap: usize,
+) -> ! {
+    log::info!("bootstrap: starting initfs scheme");
     let mut scheme = InitFsScheme::new(bytes);
 
-    let socket = Socket::create("initfs").expect("failed to open initfs scheme socket");
+    let socket = Socket::create_inner(scheme_creation_cap, false)
+        .expect("failed to open initfs scheme socket");
+    let _ = syscall::close(scheme_creation_cap);
 
-    let _ = syscall::write(sync_pipe, &[0]);
+    for fd in kernel_schemes.0.values() {
+        let _ = syscall::close(*fd);
+    }
+
+    // send open-capability to bootstrap
+    let new_id = scheme.next_id();
+    scheme.handles.insert(new_id, Handle::SchemeRoot);
+    let cap_fd = socket
+        .create_this_scheme_fd(0, new_id, 0, 0)
+        .expect("failed to issue initfs root fd");
+    let _ = syscall::call_rw(sync_pipe, &mut cap_fd.to_ne_bytes(), CallFlags::FD, &[]);
     let _ = syscall::close(sync_pipe);
 
     loop {
@@ -380,17 +442,23 @@ pub fn run(bytes: &'static [u8], sync_pipe: usize) -> ! {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn redox_read_v1(fd: usize, ptr: *mut u8, len: usize) -> isize {
-    Error::mux(syscall::read(fd, core::slice::from_raw_parts_mut(ptr, len))) as isize
+    Error::mux(syscall::read(fd, unsafe {
+        core::slice::from_raw_parts_mut(ptr, len)
+    })) as isize
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn redox_write_v1(fd: usize, ptr: *const u8, len: usize) -> isize {
-    Error::mux(syscall::write(fd, core::slice::from_raw_parts(ptr, len))) as isize
+    Error::mux(syscall::write(fd, unsafe {
+        core::slice::from_raw_parts(ptr, len)
+    })) as isize
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn redox_open_v1(ptr: *const u8, len: usize, flags: usize) -> isize {
-    Error::mux(syscall::open(core::str::from_raw_parts(ptr, len), flags)) as isize
+pub unsafe fn redox_dup_v1(fd: usize, buf: *const u8, len: usize) -> isize {
+    Error::mux(syscall::dup(fd, unsafe {
+        core::slice::from_raw_parts(buf, len)
+    })) as isize
 }
 
 #[unsafe(no_mangle)]

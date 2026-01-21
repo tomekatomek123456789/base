@@ -14,14 +14,15 @@ use crate::cfg_access::Pcie;
 pub struct PciScheme {
     handles: BTreeMap<usize, HandleWrapper>,
     next_id: usize,
-    pcie: Pcie,
-    tree: BTreeMap<PciAddress, crate::Func>,
+    pub pcie: Pcie,
+    pub tree: BTreeMap<PciAddress, crate::Func>,
 }
 enum Handle {
     TopLevel { entries: Vec<String> },
     Access,
     Device,
     Channel { addr: PciAddress, st: ChannelState },
+    SchemeRoot,
 }
 struct HandleWrapper {
     inner: Handle,
@@ -38,6 +39,9 @@ impl Handle {
     fn requires_root(&self) -> bool {
         matches!(self, Self::Access | Self::Channel { .. })
     }
+    fn is_scheme_root(&self) -> bool {
+        matches!(self, Self::SchemeRoot)
+    }
 }
 
 enum ChannelState {
@@ -47,8 +51,50 @@ enum ChannelState {
 
 const DEVICE_CONTENTS: &[&str] = &["channel"];
 
+impl PciScheme {
+    pub fn access(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.handles.insert(
+            id,
+            HandleWrapper {
+                inner: Handle::Access,
+                stat: false,
+            },
+        );
+
+        id
+    }
+}
+
 impl SchemeSync for PciScheme {
-    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.handles.insert(
+            id,
+            HandleWrapper {
+                inner: Handle::SchemeRoot,
+                stat: false,
+            },
+        );
+        Ok(id)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        let handle = self.handles.get(&dirfd).ok_or(Error::new(EBADF))?;
+        if !handle.inner.is_scheme_root() {
+            return Err(Error::new(EACCES));
+        }
+
         log::trace!("OPEN `{}` flags {}", path, flags);
 
         // TODO: Check flags are correct
@@ -108,6 +154,7 @@ impl SchemeSync for PciScheme {
             Handle::TopLevel { ref entries } => (entries.len(), MODE_DIR | 0o755),
             Handle::Device => (DEVICE_CONTENTS.len(), MODE_DIR | 0o755),
             Handle::Access | Handle::Channel { .. } => (0, MODE_CHR | 0o600),
+            Handle::SchemeRoot => return Err(Error::new(EBADF)),
         };
         stat.st_size = len as u64;
         stat.st_mode = mode;
@@ -134,6 +181,7 @@ impl SchemeSync for PciScheme {
                 addr: _,
                 ref mut st,
             } => Self::read_channel(st, buf),
+            Handle::SchemeRoot => Err(Error::new(EBADF)),
             _ => Err(Error::new(EBADF)),
         }
     }
@@ -167,6 +215,7 @@ impl SchemeSync for PciScheme {
             }
             Handle::Device => DEVICE_CONTENTS,
             Handle::Access | Handle::Channel { .. } => return Err(Error::new(ENOTDIR)),
+            Handle::SchemeRoot => return Err(Error::new(EBADF)),
         };
 
         for (i, dent_name) in entries.iter().enumerate().skip(offset) {
@@ -296,12 +345,12 @@ impl PciScheme {
 }
 
 impl PciScheme {
-    pub fn new(pcie: Pcie, tree: BTreeMap<PciAddress, crate::Func>) -> Self {
+    pub fn new(pcie: Pcie) -> Self {
         Self {
             handles: BTreeMap::new(),
             next_id: 0,
             pcie,
-            tree,
+            tree: BTreeMap::new(),
         }
     }
     fn parse_after_pci_addr(&mut self, addr: PciAddress, after: &str) -> Result<Handle> {

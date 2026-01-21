@@ -9,10 +9,6 @@ mod sys;
 const DEFAULT_COLS: u32 = 80;
 const DEFAULT_LINES: u32 = 30;
 
-pub fn syscall_error(error: syscall::Error) -> io::Error {
-    io::Error::from_raw_os_error(error.errno)
-}
-
 event::user_data! {
     enum EventData {
         Pty,
@@ -32,15 +28,15 @@ fn handle(
                 let mut packet = [0; 4096];
                 loop {
                     // Read data from PTY master
-                    let count = match syscall::read(master_fd as usize, &mut packet) {
+                    let count = match libredox::call::read(master_fd as usize, &mut packet) {
                         Ok(0) => return Ok(false),
                         Ok(count) => count,
-                        Err(ref err) if err.errno == syscall::EAGAIN => return Ok(true),
-                        Err(err) => return Err(syscall_error(err)),
+                        Err(ref err) if err.errno() == libredox::errno::EAGAIN => return Ok(true),
+                        Err(err) => return Err(err.into()),
                     };
 
                     // Write data to stdout
-                    syscall::write(1, &packet[1..count]).map_err(syscall_error)?;
+                    libredox::call::write(1, &packet[1..count])?;
 
                     for i in 1..count {
                         // Write byte to QEMU debugcon (Bochs compatible)
@@ -50,10 +46,10 @@ fn handle(
             }
             EventData::Timer => {
                 let mut timespec = syscall::TimeSpec::default();
-                syscall::read(timeout_fd as usize, &mut timespec).map_err(syscall_error)?;
+                libredox::call::read(timeout_fd as usize, &mut timespec)?;
 
                 timespec.tv_sec += 1;
-                syscall::write(timeout_fd as usize, &mut timespec).map_err(syscall_error)?;
+                libredox::call::write(timeout_fd as usize, &mut timespec)?;
 
                 Ok(true)
             }
@@ -85,25 +81,28 @@ fn handle(
 }
 
 fn getpty(columns: u32, lines: u32) -> io::Result<(RawFd, String)> {
-    let master = syscall::open(
+    let master = libredox::call::open(
         "/scheme/pty",
-        syscall::O_CLOEXEC | syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK,
-    )
-    .map_err(syscall_error)?;
+        libredox::flag::O_CLOEXEC
+            | libredox::flag::O_RDWR
+            | libredox::flag::O_CREAT
+            | libredox::flag::O_NONBLOCK,
+        0,
+    )?;
 
-    if let Ok(winsize_fd) = syscall::dup(master, b"winsize") {
-        let _ = syscall::write(
+    if let Ok(winsize_fd) = libredox::call::dup(master, b"winsize") {
+        let _ = libredox::call::write(
             winsize_fd,
             &redox_termios::Winsize {
                 ws_row: lines as u16,
                 ws_col: columns as u16,
             },
         );
-        let _ = syscall::close(winsize_fd);
+        let _ = libredox::call::close(winsize_fd);
     }
 
     let mut buf: [u8; 4096] = [0; 4096];
-    let count = syscall::fpath(master, &mut buf).map_err(syscall_error)?;
+    let count = libredox::call::fpath(master, &mut buf)?;
     Ok((master as RawFd, unsafe {
         String::from_utf8_unchecked(Vec::from(&buf[..count]))
     }))
@@ -118,11 +117,11 @@ fn inner() -> anyhow::Result<()> {
     let (columns, lines) = (DEFAULT_COLS, DEFAULT_LINES);
     let (master_fd, pty) = getpty(columns, lines)?;
 
-    let timeout_fd = syscall::open(
+    let timeout_fd = libredox::call::open(
         "/scheme/time/4",
-        syscall::O_CLOEXEC | syscall::O_RDWR | syscall::O_NONBLOCK,
-    )
-    .map_err(syscall_error)? as RawFd;
+        libredox::flag::O_CLOEXEC | libredox::flag::O_RDWR | libredox::flag::O_NONBLOCK,
+        0,
+    )? as RawFd;
 
     let event_queue = event::EventQueue::new()?;
     event_queue.subscribe(master_fd as usize, EventData::Pty, event::EventFlags::READ)?;

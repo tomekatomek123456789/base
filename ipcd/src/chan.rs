@@ -19,6 +19,7 @@ pub struct Listener {
 pub enum Extra {
     Client(Client),
     Listener(Listener),
+    SchemeRoot,
 }
 impl Default for Extra {
     fn default() -> Self {
@@ -115,16 +116,8 @@ impl<'sock> ChanScheme<'sock> {
             Err(err) => Err(err),                 // Error writing response
         }
     }
-}
 
-impl<'sock> SchemeSync for ChanScheme<'sock> {
-    //   ___  ____  _____ _   _
-    //  / _ \|  _ \| ____| \ | |
-    // | | | | |_) |  _| |  \| |
-    // | |_| |  __/| |___| |\  |
-    //  \___/|_|   |_____|_| \_|
-
-    fn open(&mut self, path: &str, flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn open(&mut self, path: &str, flags: usize) -> Result<OpenResult> {
         let new_id = self.next_id;
         let mut new = Handle::default();
         new.flags = flags;
@@ -164,7 +157,45 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
             flags: NewFdFlags::empty(),
         })
     }
-    fn dup(&mut self, id: usize, buf: &[u8], ctx: &CallerCtx) -> Result<OpenResult> {
+}
+
+impl<'sock> SchemeSync for ChanScheme<'sock> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.handles.insert(
+            id,
+            Handle {
+                flags: 0,
+                extra: Extra::SchemeRoot,
+                path: None,
+            },
+        );
+        Ok(id)
+    }
+    //   ___  ____  _____ _   _
+    //  / _ \|  _ \| ____| \ | |
+    // | | | | |_) |  _| |  \| |
+    // | |_| |  __/| |___| |\  |
+    //  \___/|_|   |_____|_| \_|
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        let handle = self.handles.get(&dirfd).ok_or(Error::new(EBADF))?;
+
+        if !matches!(handle.extra, Extra::SchemeRoot) {
+            return Err(Error::new(EACCES));
+        }
+
+        self.open(path, flags)
+    }
+    fn dup(&mut self, id: usize, buf: &[u8], _ctx: &CallerCtx) -> Result<OpenResult> {
         match buf {
             b"listen" => {
                 loop {
@@ -190,6 +221,7 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
                             Extra::Listener(_) => {
                                 panic!("newly created handle can't possibly be a listener")
                             }
+                            Extra::SchemeRoot => return Err(Error::new(EBADF)),
                         }
                         self.post_fevent(remote_id, EVENT_WRITE.bits())?;
 
@@ -245,8 +277,12 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
                     return Err(Error::new(EBADF));
                 }
 
+                if matches!(handle.extra, Extra::SchemeRoot) {
+                    return Err(Error::new(EBADF));
+                }
+
                 let flags = handle.flags;
-                return self.open(path, flags, ctx);
+                return self.open(path, flags);
             }
         }
     }
@@ -283,6 +319,7 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
                 Extra::Listener(_) => {
                     panic!("somehow, a client was connected to a listener directly")
                 }
+                Extra::SchemeRoot => panic!("somehow, a client was connected to a SchemeRoot"),
             }
         } else if client.remote == Connection::Closed {
             Err(Error::new(EPIPE))
@@ -303,6 +340,9 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
 
         // Write path
         let handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
+        if let Extra::SchemeRoot = handle.extra {
+            return Ok(len);
+        }
         let path = handle.path.as_ref().ok_or(Error::new(EBADF))?;
         let len = cmp::min(path.len(), buf.len() - PREFIX.len());
         buf[PREFIX.len()..][..len].copy_from_slice(&path.as_bytes()[..len]);
@@ -358,6 +398,9 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
                             }
                         }
                         Extra::Listener(_) => panic!("a client can't be connected to a listener!"),
+                        Extra::SchemeRoot => {
+                            panic!("a client can't be connected to a scheme root!")
+                        }
                     }
                 }
             }
@@ -366,6 +409,7 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
                     self.listeners.remove(&path);
                 }
             }
+            Extra::SchemeRoot => {}
         }
     }
 
@@ -403,6 +447,7 @@ impl<'sock> SchemeSync for ChanScheme<'sock> {
                     events |= EVENT_READ | EVENT_WRITE;
                 }
             }
+            Extra::SchemeRoot => {}
         }
         Ok(events)
     }

@@ -75,6 +75,8 @@ lazy_static! {
         r"port([\d\.]+)/endpoints/(\d{1,3})/(ctl|data)$"
     )
     .expect("Failed to create the regex for the port<n>/endpoints/<n>/<sub_endpoint> scheme");
+    static ref REGEX_PORT_ROOT: Regex =
+        Regex::new(r"^port([\d\.]+)$").expect("Failed to create the regex for the port<n> scheme.");
     static ref REGEX_TOP_LEVEL: Regex =
         Regex::new(r"^$").expect("Failed to create the regex for the top-level scheme");
 }
@@ -141,6 +143,7 @@ pub enum Handle {
     ConfigureEndpoints(PortId),             // port
     AttachDevice(PortId),                   // port
     DetachDevice(PortId),                   // port
+    SchemeRoot,
 }
 
 /// The type of handle.
@@ -232,6 +235,7 @@ impl Handle {
             Handle::DetachDevice(port_num) => {
                 format!("port{}/detach", port_num)
             }
+            Handle::SchemeRoot => String::from(""),
         }
     }
 
@@ -263,6 +267,7 @@ impl Handle {
                 EndpointHandleTy::Ctl => HandleType::Character,
                 EndpointHandleTy::Root(_) => HandleType::Directory,
             },
+            &Handle::SchemeRoot => HandleType::Directory,
         }
     }
 
@@ -293,6 +298,7 @@ impl Handle {
                 EndpointHandleTy::Ctl => None,
                 EndpointHandleTy::Root(ref buf) => Some(buf.len()),
             },
+            &Handle::SchemeRoot => None,
         }
     }
 }
@@ -404,6 +410,9 @@ impl SchemeParameters {
             let handle_type = get_string_from_regex(&REGEX_PORT_SUB_ENDPOINT, scheme, 2)?;
 
             Ok(Self::Endpoint(port_num, endpoint_num, handle_type))
+        } else if REGEX_PORT_ROOT.is_match(scheme) {
+            let port_num = get_port_id_from_regex(&REGEX_PORT_ROOT, scheme, 0)?;
+            Ok(Self::Port(port_num))
         } else if REGEX_TOP_LEVEL.is_match(scheme) {
             Ok(Self::TopLevel)
         } else {
@@ -2099,7 +2108,31 @@ impl<const N: usize> Xhci<N> {
 }
 
 impl<const N: usize> SchemeSync for &Xhci<N> {
-    fn open(&mut self, path_str: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let fd = self.next_handle.fetch_add(1, atomic::Ordering::Relaxed);
+        self.handles.insert(fd, Handle::SchemeRoot);
+        Ok(fd)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path_str: &str,
+        mut flags: usize,
+        fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        let full_path = match *self.handles.get(&dirfd).ok_or(Error::new(EBADF))? {
+            Handle::SchemeRoot => path_str.trim_start_matches('/').to_string(),
+            Handle::Port(port_num, _) => {
+                let clean_path = path_str.trim_start_matches('/');
+                if clean_path.is_empty() {
+                    format!("port{}", port_num)
+                } else {
+                    format!("port{}/{}", port_num, clean_path)
+                }
+            }
+            _ => return Err(Error::new(EACCES)),
+        };
         if ctx.uid != 0 {
             return Err(Error::new(EACCES));
         }
@@ -2107,7 +2140,9 @@ impl<const N: usize> SchemeSync for &Xhci<N> {
         //Parse the scheme, determine if it's in the valid format, return an error if not.
         //This doesn't guarantee that the parameters themselves are valid (i.e. bounded correctly)
         //only that the scheme itself was parseable.
-        let scheme_parameters = SchemeParameters::from_scheme(path_str)?;
+        let scheme_parameters = SchemeParameters::from_scheme(&full_path)?;
+
+        flags |= fcntl_flags as usize;
 
         //Once we have our scheme parsed into parameters, we can match on those parameters to
         //find the correct routine to open a handle
@@ -2142,7 +2177,7 @@ impl<const N: usize> SchemeSync for &Xhci<N> {
 
         let fd = self.next_handle.fetch_add(1, atomic::Ordering::Relaxed);
 
-        trace!("OPENED {} to FD={}, handle: {:?}", path_str, fd, handle);
+        trace!("OPENED {} to FD={}, handle: {:?}", full_path, fd, handle);
 
         self.handles.insert(fd, handle);
 
@@ -2228,6 +2263,7 @@ impl<const N: usize> SchemeSync for &Xhci<N> {
             Handle::ConfigureEndpoints(_) => Err(Error::new(EBADF)),
             Handle::AttachDevice(_) => Err(Error::new(EBADF)),
             Handle::DetachDevice(_) => Err(Error::new(EBADF)),
+            Handle::SchemeRoot => Err(Error::new(EBADF)),
 
             &mut Handle::Endpoint(port_num, endp_num, ref mut st) => match st {
                 EndpointHandleTy::Ctl => self.on_read_endp_ctl(port_num, endp_num, buf),

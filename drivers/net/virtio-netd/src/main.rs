@@ -27,6 +27,7 @@ static_assertions::const_assert_eq!(core::mem::size_of::<VirtHeader>(), 12);
 
 const MAX_BUFFER_LEN: usize = 65535;
 fn main() {
+    common::init();
     pcid_interface::pci_daemon(daemon_runner);
 }
 
