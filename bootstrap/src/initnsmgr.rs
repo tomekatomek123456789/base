@@ -15,6 +15,7 @@ use redox_scheme::{
     CallerCtx, OpenResult, RequestKind, Response, SendFdRequest, SignalBehavior, Socket,
     scheme::SchemeSync,
 };
+use syscall::Stat;
 use syscall::dirent::{DirEntry, DirentBuf, DirentKind};
 use syscall::{CallFlags, FobtainFdFlags, error::*, schemev2::NewFdFlags};
 
@@ -428,6 +429,27 @@ impl<'sock> SchemeSync for NamespaceScheme<'sock> {
         }
 
         Ok(buf)
+    }
+
+    fn fstat(&mut self, id: usize, stat: &mut Stat, ctx: &CallerCtx) -> Result<()> {
+        let resource_stat = match self.handles.get(&id).ok_or(Error::new(EBADF))? {
+            Handle::List(_) => Stat {
+                st_mode: 0o444 | syscall::MODE_DIR,
+                st_uid: 0,
+                st_gid: 0,
+                st_size: 0,
+                ..Default::default()
+            },
+            Handle::Access(_) | Handle::Register(_) => Stat {
+                st_mode: 0o666 | syscall::MODE_FILE,
+                st_uid: 0,
+                st_gid: 0,
+                st_size: 0,
+                ..Default::default()
+            },
+        };
+        *stat = resource_stat;
+        Ok(())
     }
 }
 
