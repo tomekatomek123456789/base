@@ -3,7 +3,7 @@ use syscall::{data::Map, flag::MapFlags, number::SYS_FMAP};
 
 const STACK_SIZE: usize = 64 * 1024; // 64 KiB
 pub const USERMODE_END: usize = 0x8000_0000;
-pub const STACK_START: usize = USERMODE_END - STACK_SIZE;
+pub const STACK_START: usize = USERMODE_END - syscall::KERNEL_METADATA_SIZE - STACK_SIZE;
 
 static MAP: Map = Map {
     offset: 0,

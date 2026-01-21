@@ -20,11 +20,23 @@ impl Backend for AcpiBackend {
 
     fn probe(&mut self) -> Result<(), Box<dyn Error>> {
         // Read symbols from acpi scheme
-        for entry_res in fs::read_dir("/scheme/acpi/symbols")? {
+        let entries = fs::read_dir("/scheme/acpi/symbols")?;
+        // TODO: Reimplement with getdents?
+        let symbols_fd = libredox::Fd::open(
+            "/scheme/acpi/symbols",
+            libredox::flag::O_DIRECTORY | libredox::flag::O_RDONLY,
+            0,
+        )?;
+        for entry_res in entries {
             let entry = entry_res?;
             if let Some(file_name) = entry.file_name().to_str() {
                 if file_name.ends_with("_CID") || file_name.ends_with("_HID") {
-                    let ron = fs::read_to_string(entry.path())?;
+                    let symbol_fd = symbols_fd.openat(file_name, libredox::flag::O_RDONLY, 0)?;
+                    let stat = symbol_fd.stat()?;
+                    let mut buf: Vec<u8> = vec![0u8; stat.st_size as usize];
+                    let count = symbol_fd.read(&mut buf)?;
+                    buf.truncate(count);
+                    let ron = String::from_utf8(buf)?;
                     let AmlSerde { name, value } = ron::from_str(&ron)?;
                     let id = match value {
                         AmlSerdeValue::Integer(integer) => {

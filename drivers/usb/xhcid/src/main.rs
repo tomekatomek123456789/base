@@ -37,7 +37,7 @@ use pcid_interface::irq_helpers::{
 };
 use pcid_interface::{PciFeature, PciFeatureInfo, PciFunctionHandle};
 
-use redox_scheme::{RequestKind, SignalBehavior, Socket};
+use redox_scheme::{scheme::register_sync_scheme, RequestKind, SignalBehavior, Socket};
 
 use crate::xhci::{InterruptMethod, Xhci};
 
@@ -143,14 +143,16 @@ fn daemon_with_context_size<const N: usize>(
     log::info!("XHCI {}", pci_config.func.display());
 
     let scheme_name = format!("usb.{}", name);
-    let socket = Socket::create(scheme_name.clone()).expect("xhcid: failed to create usb scheme");
-
-    daemon.ready();
+    let socket = Socket::create().expect("xhcid: failed to create usb scheme");
 
     let hci = Arc::new(
-        Xhci::<N>::new(scheme_name, address, interrupt_method, pcid_handle)
+        Xhci::<N>::new(scheme_name.clone(), address, interrupt_method, pcid_handle)
             .expect("xhcid: failed to allocate device"),
     );
+    register_sync_scheme(&socket, &scheme_name, &mut &*hci)
+        .expect("xhcid: failed to regsiter scheme to namespace");
+
+    daemon.ready();
 
     xhci::start_irq_reactor(&hci, irq_file);
     xhci::start_device_enumerator(&hci);
@@ -182,6 +184,7 @@ fn daemon_with_context_size<const N: usize>(
 }
 
 fn main() {
+    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

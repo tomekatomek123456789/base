@@ -77,16 +77,14 @@ exclude = ["bootstrap"]
 [workspace.dependencies]
 libc = "0.2.180"
 log = "0.4"
-# libredox 0.1.12 uses redox_syscall 0.7, wait until that is supported
-libredox = "=0.1.11"
+libredox = "0.1.12"
 orbclient = { git = "https://gitlab.redox-os.org/redox-os/orbclient" }
-# redox_event 0.4.3 uses redox_syscall 0.7, wait until that is supported
-redox_event = "=0.4.2"
+redox_event = "0.4.3"
 redox-ioctl = { git = "https://gitlab.redox-os.org/redox-os/relibc.git" }
-redox-log = "0.1.4"
+redox-log = { git = "https://gitlab.redox-os.org/redox-os/redox-log.git" }
 redox-rt = { git = "https://gitlab.redox-os.org/redox-os/relibc.git", default-features = false }
-redox-scheme = "0.8.3"
-redox_syscall = "0.6"
+redox-scheme = "0.9.0"
+redox_syscall = "0.7"
 redox_termios = "0.1.3"
 
 [patch.crates-io]

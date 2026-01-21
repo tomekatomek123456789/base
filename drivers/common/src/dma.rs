@@ -7,7 +7,7 @@ use libredox::call::MmapArgs;
 use libredox::{error::Result, flag, Fd};
 use syscall::PAGE_SIZE;
 
-use crate::{MemoryType, VirtaddrTranslationHandle};
+use crate::{memory_root_fd, MemoryType, VirtaddrTranslationHandle};
 
 /// Defines the platform-specific memory type for DMA operations
 ///
@@ -42,8 +42,8 @@ const DMA_MEMTY: MemoryType = {
 ///
 /// - The request for the physical memory fails.
 pub(crate) fn phys_contiguous_fd() -> Result<Fd> {
-    Fd::open(
-        &format!("/scheme/memory/zeroed@{DMA_MEMTY}?phys_contiguous"),
+    memory_root_fd().openat(
+        &format!("zeroed@{DMA_MEMTY}?phys_contiguous"),
         flag::O_CLOEXEC,
         0,
     )

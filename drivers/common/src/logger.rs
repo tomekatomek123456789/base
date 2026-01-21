@@ -20,6 +20,7 @@ pub fn setup_logging(
     mut output_level: log::LevelFilter,
     file_level: log::LevelFilter,
 ) {
+    RedoxLogger::init_timezone();
     if let Some(log_level) = read_bootloader_log_level_env(category, subcategory) {
         output_level = log_level;
     }

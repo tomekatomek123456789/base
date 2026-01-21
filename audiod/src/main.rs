@@ -8,6 +8,7 @@ use ioslice::IoSlice;
 use libredox::flag;
 use libredox::{error::Result, Fd};
 
+use redox_scheme::scheme::register_sync_scheme;
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 
@@ -47,29 +48,32 @@ fn daemon(daemon: Daemon) -> anyhow::Result<()> {
 
     let pid = libredox::call::getpid()?;
 
-    let socket = Socket::create("audio").context("failed to create scheme")?;
+    let hw_file = Fd::open("/scheme/audiohw", flag::O_WRONLY | flag::O_CLOEXEC, 0)?;
+
+    let socket = Socket::create().context("failed to create scheme")?;
+
+    let scheme = Arc::new(Mutex::new(AudioScheme::new()));
+
+    {
+        let mut scheme = scheme.lock().unwrap();
+        register_sync_scheme(&socket, "audio", &mut *scheme)
+            .expect("audiod: failed to register scheme to namespace");
+    }
 
     // The scheme is now ready to accept requests, notify the original process
     daemon.ready();
 
-    let hw_file = Fd::open("/scheme/audiohw", flag::O_WRONLY | flag::O_CLOEXEC, 0)?;
-
-    let scheme = Arc::new(Mutex::new(AudioScheme::new()));
-
     // Enter a constrained namespace
     let ns = libredox::call::mkns(&[
-        //IoSlice::new(b"memory"), TODO: already included, uncommenting gives EEXIST
+        IoSlice::new(b"memory"),
         IoSlice::new(b"rand"), // for HashMap
     ])
     .context("failed to make namespace")?;
-    libredox::call::setrens(ns, ns).context("failed to set namespace")?;
+    libredox::call::setns(ns).context("failed to set namespace")?;
 
     // Spawn a thread to mix and send audio data
     let scheme_thread = scheme.clone();
-    let _thread = thread::spawn(move || {
-        libredox::call::setrens(ns, ns).unwrap();
-        thread(scheme_thread, pid, hw_file)
-    });
+    let _thread = thread::spawn(move || thread(scheme_thread, pid, hw_file));
 
     let mut readiness = ReadinessBased::new(&socket, 16);
 

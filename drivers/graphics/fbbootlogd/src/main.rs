@@ -14,7 +14,7 @@ use event::EventQueue;
 use inputd::ConsumerHandleEvent;
 use libredox::errno::EAGAIN;
 use orbclient::Event;
-use redox_scheme::{RequestKind, SignalBehavior, Socket};
+use redox_scheme::{scheme::register_sync_scheme, RequestKind, SignalBehavior, Socket};
 
 use crate::scheme::FbbootlogScheme;
 
@@ -33,17 +33,9 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         }
     }
 
-    let socket =
-        Socket::nonblock("fbbootlog").expect("fbbootlogd: failed to create fbbootlog scheme");
+    let socket = Socket::nonblock().expect("fbbootlogd: failed to create fbbootlog scheme");
 
-    {
-        // Add ourself as log sink
-        let mut log_file = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/scheme/log/add_sink")
-            .unwrap();
-        log_file.write(b"/scheme/fbbootlog").unwrap();
-    }
+    let mut scheme = FbbootlogScheme::new();
 
     event_queue
         .subscribe(
@@ -51,9 +43,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
             Source::Scheme,
             event::EventFlags::READ,
         )
-        .expect("fbcond: failed to subscribe to scheme events");
-
-    let mut scheme = FbbootlogScheme::new();
+        .expect("fbbootlogd: failed to subscribe to scheme events");
 
     event_queue
         .subscribe(
@@ -62,6 +52,25 @@ fn daemon(daemon: daemon::Daemon) -> ! {
             event::EventFlags::READ,
         )
         .expect("fbbootlogd: failed to subscribe to scheme events");
+
+    {
+        let log_fd = socket
+            .create_this_scheme_fd(0, 0, 0, 0)
+            .expect("fbbootlogd: failed to create log fd");
+        // Add ourself as log sink
+        let mut log_file = libredox::Fd::open(
+            "/scheme/log/add_sink",
+            libredox::flag::O_WRONLY | libredox::flag::O_CLOEXEC,
+            0,
+        )
+        .expect("fbbootlogd: failed to open log/add_sink");
+        log_file
+            .call_wo(&log_fd.to_ne_bytes(), syscall::CallFlags::FD, &[])
+            .expect("fbbootlogd: failed to send log fd to log scheme.");
+    }
+
+    register_sync_scheme(&socket, "fbbootlog", &mut scheme)
+        .expect("fbbootlog: failed to register scheme to namespace");
 
     // This is not possible for now as fbbootlogd needs to open new displays at runtime for graphics
     // driver handoff. In the future inputd may directly pass a handle to the display instead.

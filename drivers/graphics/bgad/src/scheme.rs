@@ -27,8 +27,23 @@ impl BgaScheme {
     }
 }
 
+const SCHEME_ROOT_ID: usize = 1;
+
 impl SchemeSync for BgaScheme {
-    fn open(&mut self, _path: &str, _flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        Ok(SCHEME_ROOT_ID)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        _path: &str,
+        _flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if dirfd != SCHEME_ROOT_ID {
+            return Err(Error::new(EACCES));
+        }
         if ctx.uid == 0 {
             Ok(OpenResult::ThisScheme {
                 number: 0,

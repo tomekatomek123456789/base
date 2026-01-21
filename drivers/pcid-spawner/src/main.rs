@@ -90,7 +90,7 @@ fn main() -> Result<()> {
 
         match command.status() {
             Ok(status) if !status.success() => {
-                log::error!("pcid-spawner: driver {command:?} failed with {status}");
+                log::error!("pcid-spawner: driver {command:?} failed with {status}")
             }
             Ok(_) => {}
             Err(err) => log::error!("pcid-spawner: failed to execute {command:?}: {err}"),

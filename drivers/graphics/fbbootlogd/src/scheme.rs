@@ -10,7 +10,7 @@ use orbclient::{Event, EventOption};
 use redox_scheme::scheme::SchemeSync;
 use redox_scheme::{CallerCtx, OpenResult};
 use syscall::schemev2::NewFdFlags;
-use syscall::{Error, Result, EINVAL, ENOENT};
+use syscall::{Error, Result, EACCES, EBADF, EINVAL, ENOENT};
 
 pub struct FbbootlogScheme {
     pub input_handle: ConsumerHandle,
@@ -173,8 +173,24 @@ impl FbbootlogScheme {
     }
 }
 
+const SCHEME_ROOT_ID: usize = 1;
+
 impl SchemeSync for FbbootlogScheme {
-    fn open(&mut self, path_str: &str, _flags: usize, _ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        Ok(SCHEME_ROOT_ID)
+    }
+
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path_str: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        _ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if dirfd != SCHEME_ROOT_ID {
+            return Err(Error::new(EACCES));
+        }
         if !path_str.is_empty() {
             return Err(Error::new(ENOENT));
         }
@@ -214,12 +230,15 @@ impl SchemeSync for FbbootlogScheme {
 
     fn write(
         &mut self,
-        _id: usize,
+        id: usize,
         buf: &[u8],
         _offset: u64,
         _fcntl_flags: u32,
         _ctx: &CallerCtx,
     ) -> Result<usize> {
+        if id == SCHEME_ROOT_ID {
+            return Err(Error::new(EBADF));
+        }
         if let Some(map) = &mut self.display_map {
             Self::handle_resize(map, &mut self.text_screen);
             self.text_buffer.write(buf);

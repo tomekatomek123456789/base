@@ -4,7 +4,7 @@ use crate::link::{loopback::LoopbackDevice, DeviceList};
 use crate::router::route_table::{RouteTable, Rule};
 use crate::router::Router;
 use crate::scheme::smoltcp::iface::SocketSet as SmoltcpSocketSet;
-use crate::scheme::socket::{SchemeSocket, SocketScheme};
+use crate::scheme::socket::{Handle, SchemeSocket, SocketScheme};
 use libredox::flag;
 use libredox::Fd;
 use redox_scheme::{
@@ -87,7 +87,7 @@ impl Smolnetd {
         icmp_file: Socket,
         time_file: Fd,
         netcfg_file: Socket,
-    ) -> Smolnetd {
+    ) -> Result<Smolnetd> {
         let protocol_addrs = vec![
             //This is a placeholder IP for DHCP
             IpCidr::new(IpAddress::v4(0, 0, 0, 0), 8),
@@ -131,43 +131,47 @@ impl Smolnetd {
         devices.borrow_mut().push(loopback);
         devices.borrow_mut().push(eth0);
 
-        Smolnetd {
+        Ok(Smolnetd {
             iface: Rc::clone(&iface),
             router_device: network_device,
             socket_set: Rc::clone(&socket_set),
             timer: ::std::time::Instant::now(),
             time_file: unsafe { File::from_raw_fd(time_file.into_raw() as RawFd) },
             ip_scheme: IpScheme::new(
+                "ip",
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
                 ip_file,
-            ),
+            )?,
             udp_scheme: UdpScheme::new(
+                "udp",
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
                 udp_file,
-            ),
+            )?,
             tcp_scheme: TcpScheme::new(
+                "tcp",
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
                 tcp_file,
-            ),
+            )?,
             icmp_scheme: IcmpScheme::new(
+                "icmp",
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
                 icmp_file,
-            ),
+            )?,
             netcfg_scheme: NetCfgScheme::new(
                 Rc::clone(&iface),
                 netcfg_file,
                 Rc::clone(&route_table),
                 Rc::clone(&devices),
-            ),
-        }
+            )?,
+        })
     }
 
     pub fn on_network_scheme_event(&mut self) -> Result<()> {
@@ -319,15 +323,19 @@ where
     SocketT: SchemeSocket + AnySocket<'static>,
 {
     pub fn new(
+        name: &str,
         iface: Interface,
         route_table: Rc<RefCell<RouteTable>>,
         socket_set: Rc<RefCell<SocketSet>>,
         scheme_file: Socket,
-    ) -> Self {
-        Self {
-            scheme: SocketScheme::<SocketT>::new(iface, route_table, socket_set, scheme_file),
+    ) -> Result<Self> {
+        Ok(Self {
+            scheme: SocketScheme::<SocketT>::new(name, iface, route_table, socket_set, scheme_file)
+                .map_err(|e| {
+                    Error::from_syscall_error(e, &format!("failed to initialize {} scheme", name))
+                })?,
             wait_queue: Vec::new(),
-        }
+        })
     }
     pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
         let result = loop {
@@ -442,7 +450,10 @@ where
         // Notify non-blocking sockets
         let scheme = &mut self.scheme;
 
-        for (&fd, ref mut file) in &mut scheme.files {
+        for (&fd, handle) in &mut scheme.handles {
+            let Handle::File(file) = handle else {
+                continue;
+            };
             let events = {
                 let mut socket_set = scheme.socket_set.borrow_mut();
                 file.events(&mut socket_set)

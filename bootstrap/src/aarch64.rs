@@ -2,7 +2,7 @@ use core::mem;
 use syscall::{data::Map, flag::MapFlags, number::SYS_FMAP};
 
 pub const USERMODE_END: usize = 0x0000_8000_0000_0000;
-pub const STACK_START: usize = USERMODE_END - STACK_SIZE;
+pub const STACK_START: usize = USERMODE_END - syscall::KERNEL_METADATA_SIZE - STACK_SIZE;
 
 const STACK_SIZE: usize = 64 * 1024; // 64 KiB
 static MAP: Map = Map {

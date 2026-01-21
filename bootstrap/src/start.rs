@@ -46,37 +46,41 @@ pub unsafe extern "C" fn start() -> ! {
     let (rodata_start, rodata_end) = offsets::rodata();
     let (data_start, data_end) = offsets::data_and_bss();
 
-    let _ = syscall::open("/scheme/debug", syscall::O_RDONLY); // stdin
-    let _ = syscall::open("/scheme/debug", syscall::O_WRONLY); // stdout
-    let _ = syscall::open("/scheme/debug", syscall::O_WRONLY); // stderr
+    // NOTE: Assuming the debug scheme root fd is always placed at this position
+    let debug_fd = syscall::UPPER_FDTBL_TAG + syscall::data::GlobalSchemes::Debug as usize;
+    let _ = syscall::openat(debug_fd, "", syscall::O_RDONLY, 0); // stdin
+    let _ = syscall::openat(debug_fd, "", syscall::O_WRONLY, 0); // stdout
+    let _ = syscall::openat(debug_fd, "", syscall::O_WRONLY, 0); // stderr
 
-    let _ = syscall::mprotect(4096, 4096, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE)
-        .expect("mprotect failed for initfs header page");
+    unsafe {
+        let _ = syscall::mprotect(4096, 4096, MapFlags::PROT_READ | MapFlags::MAP_PRIVATE)
+            .expect("mprotect failed for initfs header page");
 
-    let _ = syscall::mprotect(
-        text_start,
-        text_end - text_start,
-        MapFlags::PROT_READ | MapFlags::PROT_EXEC | MapFlags::MAP_PRIVATE,
-    )
-    .expect("mprotect failed for .text");
-    let _ = syscall::mprotect(
-        rodata_start,
-        rodata_end - rodata_start,
-        MapFlags::PROT_READ | MapFlags::MAP_PRIVATE,
-    )
-    .expect("mprotect failed for .rodata");
-    let _ = syscall::mprotect(
-        data_start,
-        data_end - data_start,
-        MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_PRIVATE,
-    )
-    .expect("mprotect failed for .data/.bss");
-    let _ = syscall::mprotect(
-        data_end,
-        crate::arch::STACK_START - data_end,
-        MapFlags::PROT_READ | MapFlags::MAP_PRIVATE,
-    )
-    .expect("mprotect failed for rest of memory");
+        let _ = syscall::mprotect(
+            text_start,
+            text_end - text_start,
+            MapFlags::PROT_READ | MapFlags::PROT_EXEC | MapFlags::MAP_PRIVATE,
+        )
+        .expect("mprotect failed for .text");
+        let _ = syscall::mprotect(
+            rodata_start,
+            rodata_end - rodata_start,
+            MapFlags::PROT_READ | MapFlags::MAP_PRIVATE,
+        )
+        .expect("mprotect failed for .rodata");
+        let _ = syscall::mprotect(
+            data_start,
+            data_end - data_start,
+            MapFlags::PROT_READ | MapFlags::PROT_WRITE | MapFlags::MAP_PRIVATE,
+        )
+        .expect("mprotect failed for .data/.bss");
+        let _ = syscall::mprotect(
+            data_end,
+            crate::arch::STACK_START - data_end,
+            MapFlags::PROT_READ | MapFlags::MAP_PRIVATE,
+        )
+        .expect("mprotect failed for rest of memory");
+    }
 
     // FIXME make the initfs read-only
 

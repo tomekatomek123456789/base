@@ -1787,8 +1787,23 @@ impl Alx {
     }
 }
 
+const SCHEME_ROOT_ID: usize = usize::MAX;
+
 impl SchemeSync for Alx {
-    fn open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        Ok(SCHEME_ROOT_ID)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path_str: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        if dirfd != SCHEME_ROOT_ID {
+            return Err(Error::new(EACCES));
+        }
         if ctx.uid == 0 {
             Ok(OpenResult::ThisScheme {
                 number: flags,

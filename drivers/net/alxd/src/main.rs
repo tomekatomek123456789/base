@@ -12,6 +12,7 @@ use std::os::fd::AsRawFd;
 use std::{env, iter};
 
 use event::{user_data, EventQueue};
+use redox_scheme::scheme::register_sync_scheme;
 use redox_scheme::wrappers::ReadinessBased;
 use redox_scheme::Socket;
 use std::cell::RefCell;
@@ -19,6 +20,7 @@ use std::cell::RefCell;
 pub mod device;
 
 fn main() {
+    common::init();
     daemon::Daemon::new(daemon);
 }
 
@@ -36,10 +38,8 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     println!(" + ALX {} on: {:X}, IRQ: {}\n", name, bar, irq);
 
-    let socket = Socket::nonblock("network").expect("alxd: failed to create socket");
+    let socket = Socket::nonblock().expect("alxd: failed to create socket");
     let mut readiness_based = ReadinessBased::new(&socket, 16);
-
-    daemon.ready();
 
     let mut irq_file =
         File::open(format!("/scheme/irq/{}", irq)).expect("alxd: failed to open IRQ file");
@@ -54,9 +54,15 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         .expect("alxd: failed to map address") as usize
     };
     {
-        let device = RefCell::new(unsafe {
-            device::Alx::new(address).expect("alxd: failed to allocate device")
+        let device = RefCell::new({
+            let mut device =
+                unsafe { device::Alx::new(address).expect("alxd: failed to allocate device") };
+            register_sync_scheme(&socket, "network", &mut device)
+                .expect("alxd: failed to register network scheme to namespace");
+            device
         });
+
+        daemon.ready();
 
         user_data! {
             enum Source {

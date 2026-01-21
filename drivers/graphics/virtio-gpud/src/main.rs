@@ -476,6 +476,7 @@ impl MoveCursor {
 static DEVICE: spin::Once<virtio_core::Device> = spin::Once::new();
 
 fn main() {
+    common::init();
     pcid_interface::pci_daemon(daemon_runner);
 }
 
@@ -524,7 +525,6 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
     device.transport.setup_config_notify(MSIX_PRIMARY_VECTOR);
 
     device.transport.run_device();
-    deamon.ready();
 
     let (mut scheme, mut inputd_handle) = scheme::GpuScheme::new(
         config,
@@ -533,6 +533,7 @@ fn deamon(deamon: daemon::Daemon, mut pcid_handle: PciFunctionHandle) -> anyhow:
         device.transport.clone(),
         has_edid,
     )?;
+    deamon.ready();
 
     user_data! {
         enum Source {

@@ -68,6 +68,7 @@ enum Handle {
     Pcmout(usize, usize, usize), // Card, index, block_ptr
     Pcmin(usize, usize, usize),  // Card, index, block_ptr
     StrBuf(Vec<u8>),
+    SchemeRoot,
 }
 
 #[repr(C, packed)]
@@ -984,7 +985,26 @@ impl Drop for IntelHDA {
 }
 
 impl SchemeSync for IntelHDA {
-    fn open(&mut self, path: &str, _flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn scheme_root(&mut self) -> Result<usize> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        self.handles.lock().insert(id, Handle::SchemeRoot);
+        Ok(id)
+    }
+    fn openat(
+        &mut self,
+        dirfd: usize,
+        path: &str,
+        _flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        {
+            let mut handles = self.handles.lock();
+            let handle = handles.get(&dirfd).ok_or(Error::new(EBADF))?;
+            if !matches!(handle, Handle::SchemeRoot) {
+                return Err(Error::new(EACCES));
+            }
+        }
         //let path: Vec<&str>;
         /*
         match str::from_utf8(_path) {

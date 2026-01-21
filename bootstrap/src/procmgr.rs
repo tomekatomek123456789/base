@@ -29,14 +29,17 @@ use redox_scheme::{
     Socket, Tag,
 };
 use slab::Slab;
+use syscall::data::GlobalSchemes;
 use syscall::schemev2::NewFdFlags;
 use syscall::{
-    ContextStatus, ContextVerb, CtxtStsBuf, EACCES, EAGAIN, EBADF, EBADFD, ECANCELED, ECHILD,
-    EEXIST, EINTR, EINVAL, ENOENT, ENOSYS, EOPNOTSUPP, EOWNERDEAD, EPERM, ERESTART, ESRCH,
+    CallFlags, ContextStatus, ContextVerb, CtxtStsBuf, EACCES, EAGAIN, EBADF, EBADFD, ECANCELED,
+    ECHILD, EEXIST, EINTR, EINVAL, ENOENT, ENOSYS, EOPNOTSUPP, EOWNERDEAD, EPERM, ERESTART, ESRCH,
     EWOULDBLOCK, Error, Event, EventFlags, FobtainFdFlags, MapFlags, O_ACCMODE, O_CREAT, O_RDONLY,
     PAGE_SIZE, ProcSchemeAttrs, Result, SenderInfo, SetSighandlerData, SigProcControl, Sigcontrol,
     sig_bit,
 };
+
+use crate::KernelSchemeMap;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum VirtualId {
@@ -45,13 +48,31 @@ enum VirtualId {
     InternalId(u64),
 }
 
-pub fn run(write_fd: usize, auth: &FdGuard) {
-    let socket = Socket::nonblock("proc").expect("failed to open proc scheme socket");
+pub fn run(
+    write_fd: usize,
+    auth: &FdGuard,
+    kernel_schemes: &KernelSchemeMap,
+    scheme_creation_cap: usize,
+) -> ! {
+    let socket =
+        Socket::create_inner(scheme_creation_cap, true).expect("failed to open proc scheme socket");
+    let _ = syscall::close(scheme_creation_cap);
 
     // TODO?
     let socket_ident = socket.inner().raw();
 
-    let queue = RawEventQueue::new().expect("failed to create event queue");
+    let queue = RawEventQueue::new(
+        *kernel_schemes
+            .get(GlobalSchemes::Event)
+            .expect("failed to get event fd"),
+    )
+    .expect("failed to create event queue");
+    for (scheme, fd) in kernel_schemes.0.iter() {
+        if *scheme == GlobalSchemes::Proc {
+            continue;
+        }
+        let _ = syscall::close(*fd);
+    }
 
     queue
         .subscribe(socket.inner().raw(), socket_ident, EventFlags::EVENT_READ)
@@ -59,8 +80,14 @@ pub fn run(write_fd: usize, auth: &FdGuard) {
 
     let mut scheme = ProcScheme::new(auth, &queue);
 
+    // send open-capability to bootstrap
+    let new_id = scheme.handles.insert(Handle::SchemeRoot);
+    let cap_fd = socket
+        .create_this_scheme_fd(0, new_id, 0, 0)
+        .expect("failed to issue procmgr root fd");
+
     log::debug!("process manager started");
-    let _ = syscall::write(write_fd, &[0]);
+    let _ = syscall::call_wo(write_fd, &cap_fd.to_ne_bytes(), CallFlags::FD, &[]);
     let _ = syscall::close(write_fd);
 
     let mut states = HashMap::<VirtualId, PendingState, DefaultHashBuilder>::new();
@@ -205,8 +232,8 @@ fn handle_scheme<'a>(
                 Err(req) => return Response::ready_err(ENOSYS, req),
             };
             match op {
-                Op::Open(op) => Ready(Response::open_dup_like(
-                    scheme.on_open(op.path(), op.flags, &caller),
+                Op::OpenAt(op) => Ready(Response::open_dup_like(
+                    scheme.on_openat(op.fd, op.path(), *op.flags(), op.fcntl_flags, &caller),
                     op,
                 )),
                 Op::Dup(op) => Ready(Response::open_dup_like(scheme.on_dup(op.fd, op.buf()), op)),
@@ -523,6 +550,9 @@ enum Handle {
 
     // A handle that grants the holder the capability to obtain process credentials.
     ProcCredsCapability,
+
+    // A handle that grants the holder the capability to open process scheme resource.
+    SchemeRoot,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -536,8 +566,10 @@ enum WaitpidTarget {
 // backend
 struct RawEventQueue(FdGuard);
 impl RawEventQueue {
-    pub fn new() -> Result<Self> {
-        FdGuard::open("/scheme/event", O_CREAT).map(Self)
+    pub fn new(cap_fd: usize) -> Result<Self> {
+        syscall::openat(cap_fd, "", O_CREAT, 0)
+            .map(FdGuard::new)
+            .map(Self)
     }
     pub fn subscribe(&self, fd: usize, ident: usize, flags: EventFlags) -> Result<()> {
         self.0.write(&Event {
@@ -586,7 +618,11 @@ impl<'a> ProcScheme<'a> {
         match self.handles[req.id()] {
             ref mut st @ Handle::Init => {
                 let mut fd_out = usize::MAX;
-                if let Err(e) = req.obtain_fd(socket, FobtainFdFlags::empty(), core::slice::from_mut(&mut fd_out)) {
+                if let Err(e) = req.obtain_fd(
+                    socket,
+                    FobtainFdFlags::empty(),
+                    core::slice::from_mut(&mut fd_out),
+                ) {
                     return Response::new(Err(e), req);
                 };
                 let fd = FdGuard::new(fd_out);
@@ -765,7 +801,18 @@ impl<'a> ProcScheme<'a> {
         self.thread_lookup.insert(ident, thread_weak);
         Ok(thread)
     }
-    fn on_open(&mut self, path: &str, flags: usize, ctx: &CallerCtx) -> Result<OpenResult> {
+    fn on_openat(
+        &mut self,
+        fd: usize,
+        path: &str,
+        flags: usize,
+        _fcntl_flags: u32,
+        ctx: &CallerCtx,
+    ) -> Result<OpenResult> {
+        match self.handles[fd] {
+            Handle::SchemeRoot => {}
+            _ => return Err(Error::new(EACCES)),
+        };
         let path = path.trim_start_matches('/');
         Ok(match path {
             "init" => {
@@ -833,7 +880,7 @@ impl<'a> ProcScheme<'a> {
                 buf[..len].copy_from_slice(&src_buf[..len]);
                 Ok(len)
             }
-            Handle::Init | Handle::Thread(_) | Handle::ProcCredsCapability => {
+            Handle::Init | Handle::Thread(_) | Handle::ProcCredsCapability | Handle::SchemeRoot => {
                 return Err(Error::new(EBADF));
             }
         }
@@ -882,7 +929,9 @@ impl<'a> ProcScheme<'a> {
                     fd: thread.fd.dup(buf)?.take(),
                 })
             }
-            Handle::Init | Handle::Ps(_) | Handle::ProcCredsCapability => Err(Error::new(EBADF)),
+            Handle::Init | Handle::Ps(_) | Handle::ProcCredsCapability | Handle::SchemeRoot => {
+                Err(Error::new(EBADF))
+            }
         }
     }
     fn on_call(
@@ -1063,6 +1112,7 @@ impl<'a> ProcScheme<'a> {
                     _ => Response::ready_err(EINVAL, op),
                 }
             }
+            Handle::SchemeRoot => Response::ready_err(EBADF, op),
         }
     }
     fn on_getpgid(&mut self, caller_pid: ProcessId, target_pid: ProcessId) -> Result<ProcessId> {
