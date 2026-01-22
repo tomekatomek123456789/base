@@ -37,7 +37,7 @@ fn main() {
             .expect("expected PORT ID");
 
         let handle =
-            XhciClientHandle::new(scheme.to_owned(), port).expect("Faild to open XhciClientHandle");
+            XhciClientHandle::new(scheme.to_owned(), port).expect("Failed to open XhciClientHandle");
 
         if let Some(_status_scmd_matches) = port_scmd_matches.subcommand_matches("status") {
             let state = handle.port_state().expect("Failed to get port state");

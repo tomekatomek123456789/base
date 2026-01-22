@@ -186,7 +186,7 @@ fn main() {
         interface_num
     );
 
-    let handle = XhciClientHandle::new(scheme, port).expect("Faild to open XhciClientHandle");
+    let handle = XhciClientHandle::new(scheme, port).expect("Failed to open XhciClientHandle");
     let desc: DevDesc = handle
         .get_standard_descs()
         .expect("Failed to get standard descriptors");

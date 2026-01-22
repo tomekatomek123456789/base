@@ -40,7 +40,7 @@ fn main() {
     );
 
     let handle =
-        XhciClientHandle::new(scheme.clone(), port_id).expect("Faild to open XhciClientHandle");
+        XhciClientHandle::new(scheme.clone(), port_id).expect("Failed to open XhciClientHandle");
     let desc: DevDesc = handle
         .get_standard_descs()
         .expect("Failed to get standard descriptors");
@@ -149,7 +149,7 @@ fn main() {
                 usb::HubPortStatus::V2(usb::HubPortStatusV2::default())
             },
             handle: XhciClientHandle::new(scheme.clone(), child_port_id)
-                .expect("Faild to open XhciClientHandle"),
+                .expect("Failed to open XhciClientHandle"),
             attached: false,
         });
     }

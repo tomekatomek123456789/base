@@ -40,7 +40,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
 
     // TODO: Use eventfds.
     let handle =
-        XhciClientHandle::new(scheme.to_owned(), port).expect("Faild to open XhciClientHandle");
+        XhciClientHandle::new(scheme.to_owned(), port).expect("Failed to open XhciClientHandle");
 
     let desc = handle
         .get_standard_descs()
