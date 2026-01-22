@@ -40,7 +40,7 @@ pub fn init() {
 pub fn memory_root_fd() -> &'static libredox::Fd {
     MEMORY_ROOT_FD
         .get()
-        .expect("acpid: failed to get memory_root_fd")
+        .expect("drivers common: memory root fd not initialized. Please call `common::init` in your main function.")
 }
 
 /// Specifies the write behavior for a specific region of memory
