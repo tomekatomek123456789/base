@@ -44,11 +44,11 @@ fn run_command(line_raw: &str) {
         match cmd.as_str() {
             "cd" => {
                 let Some(dir) = args.next() else {
-                    println!("init: failed to cd: no argument");
+                    eprintln!("init: failed to cd: no argument");
                     return;
                 };
                 if let Err(err) = env::set_current_dir(&dir) {
-                    println!("init: failed to cd to '{}': {}", dir, err);
+                    eprintln!("init: failed to cd to '{}': {}", dir, err);
                 }
             }
             "echo" => {
@@ -56,7 +56,7 @@ fn run_command(line_raw: &str) {
             }
             "export" => {
                 let Some(var) = args.next() else {
-                    println!("init: failed to export: no argument");
+                    eprintln!("init: failed to export: no argument");
                     return;
                 };
                 let mut value = String::new();
@@ -71,11 +71,11 @@ fn run_command(line_raw: &str) {
             }
             "run" => {
                 let Some(new_file) = args.next() else {
-                    println!("init: failed to run: no argument");
+                    eprintln!("init: failed to run: no argument");
                     return;
                 };
                 if let Err(err) = run(&Path::new(&new_file)) {
-                    println!("init: failed to run '{}': {}", new_file, err);
+                    eprintln!("init: failed to run '{}': {}", new_file, err);
                 }
             }
             "run.d" => {
@@ -93,7 +93,7 @@ fn run_command(line_raw: &str) {
                     let list = match read_dir(&new_dir) {
                         Ok(list) => list,
                         Err(err) => {
-                            println!("init: failed to run.d: '{}': {}", new_dir, err);
+                            eprintln!("init: failed to run.d: '{}': {}", new_dir, err);
                             continue;
                         }
                     };
@@ -106,31 +106,31 @@ fn run_command(line_raw: &str) {
                                 entries.insert(entry.file_name(), entry.path());
                             }
                             Err(err) => {
-                                println!("init: failed to run.d: '{}': {}", new_dir, err);
+                                eprintln!("init: failed to run.d: '{}': {}", new_dir, err);
                             }
                         }
                     }
                 }
 
                 if missing_arg {
-                    println!("init: failed to run.d: no argument or all dirs are non-existent");
+                    eprintln!("init: failed to run.d: no argument or all dirs are non-existent");
                     return;
                 }
 
                 // This takes advantage of BTreeMap iterating in sorted order.
                 for (_, entry_path) in entries {
                     if let Err(err) = run(&entry_path) {
-                        println!("init: failed to run '{}': {}", entry_path.display(), err);
+                        eprintln!("init: failed to run '{}': {}", entry_path.display(), err);
                     }
                 }
             }
             "stdio" => {
                 let Some(stdio) = args.next() else {
-                    println!("init: failed to set stdio: no argument");
+                    eprintln!("init: failed to set stdio: no argument");
                     return;
                 };
                 if let Err(err) = switch_stdio(&stdio) {
-                    println!("init: failed to switch stdio to '{}': {}", stdio, err);
+                    eprintln!("init: failed to switch stdio to '{}': {}", stdio, err);
                 }
             }
             "unset" => {
@@ -140,7 +140,7 @@ fn run_command(line_raw: &str) {
             }
             "nowait" => {
                 let Some(cmd) = args.next() else {
-                    println!("init: failed to run nowait: no argument");
+                    eprintln!("init: failed to run nowait: no argument");
                     return;
                 };
                 let mut command = Command::new(cmd);
@@ -151,7 +151,7 @@ fn run_command(line_raw: &str) {
 
                 match command.spawn() {
                     Ok(_child) => {}
-                    Err(err) => println!("init: failed to execute '{}': {}", line, err),
+                    Err(err) => eprintln!("init: failed to execute '{}': {}", line, err),
                 }
             }
             _ => {
@@ -163,18 +163,18 @@ fn run_command(line_raw: &str) {
                 let mut child = match command.spawn() {
                     Ok(child) => child,
                     Err(err) => {
-                        println!("init: failed to execute '{}': {}", line, err);
+                        eprintln!("init: failed to execute '{}': {}", line, err);
                         return;
                     }
                 };
                 match child.wait() {
                     Ok(exit_status) => {
                         if !exit_status.success() {
-                            println!("{cmd} failed with {exit_status}");
+                            eprintln!("{cmd} failed with {exit_status}");
                         }
                     }
                     Err(err) => {
-                        println!("init: failed to wait for '{}': {}", line, err)
+                        eprintln!("init: failed to wait for '{}': {}", line, err)
                     }
                 }
             }
@@ -185,7 +185,7 @@ fn run_command(line_raw: &str) {
 pub fn main() {
     let config = "/scheme/initfs/etc/init.rc";
     if let Err(err) = run(&Path::new(config)) {
-        println!("init: failed to run {}: {}", config, err);
+        eprintln!("init: failed to run {}: {}", config, err);
     }
 
     libredox::call::setrens(0, 0).expect("init: failed to enter null namespace");
