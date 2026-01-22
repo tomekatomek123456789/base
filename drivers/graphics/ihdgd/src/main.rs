@@ -11,6 +11,7 @@ mod device;
 use self::device::Device;
 
 fn main() {
+    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 
