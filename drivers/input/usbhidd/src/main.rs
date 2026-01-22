@@ -1,4 +1,4 @@
-use std::{env, time, thread};
+use std::{env, thread, time};
 
 use inputd::ProducerHandle;
 use orbclient::KeyEvent as OrbKeyEvent;
