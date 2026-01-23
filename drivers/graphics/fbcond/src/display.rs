@@ -24,7 +24,13 @@ impl Display {
 
     /// Re-open the display after a handoff.
     pub fn reopen_for_handoff(&mut self) {
-        let display_file = self.input_handle.open_display_v2().unwrap();
+        let display_file = match self.input_handle.open_display_v2() {
+            Ok(display_file) => display_file,
+            Err(err) => {
+                log::error!("fbcond: No display present yet: {err}");
+                return;
+            }
+        };
         let new_display_handle = V2GraphicsHandle::from_file(display_file).unwrap();
 
         log::debug!("fbcond: Opened new display");
@@ -45,7 +51,7 @@ impl Display {
                 self.map = Some(map)
             }
             Err(err) => {
-                eprintln!("fbcond: failed to open display: {}", err);
+                log::error!("fbcond: failed to map new display: {err}");
                 return;
             }
         }
