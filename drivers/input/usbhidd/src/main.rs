@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, time, thread};
 
 use inputd::ProducerHandle;
 use orbclient::KeyEvent as OrbKeyEvent;
@@ -281,7 +281,11 @@ fn main() {
     let mut last_buttons = [false, false, false];
     loop {
         //TODO: get frequency from device
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        //TODO: use sleeps when accuracy is better: thread::sleep(time::Duration::from_millis(10));
+        let mut timer = time::Instant::now();
+        while timer.elapsed() < time::Duration::from_millis(1) {
+            thread::yield_now();
+        }
 
         if let Some(endpoint) = &mut endpoint_opt {
             // interrupt transfer
