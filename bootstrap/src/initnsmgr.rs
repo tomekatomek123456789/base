@@ -168,7 +168,7 @@ impl<'sock> NamespaceScheme<'sock> {
         ctx: &CallerCtx,
     ) -> Result<usize> {
         let Some(cap_fd) = ns.get_scheme_fd(scheme) else {
-            warn!("Scheme {} not found in namespace", scheme);
+            warn!("Scheme {:?} not found in namespace", scheme);
             return Err(Error::new(ENODEV));
         };
 
