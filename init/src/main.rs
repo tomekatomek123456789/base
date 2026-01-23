@@ -19,19 +19,43 @@ fn switch_stdio(stdio: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run(file: &Path) -> Result<()> {
-    for line in fs::read_to_string(file)?.lines() {
-        run_command(line);
+struct InitConfig {
+    pub log_debug: bool,
+    pub skip_cmd: Vec<String>,
+}
+
+impl InitConfig {
+    pub fn new() -> Self {
+        let log_level = env::var("INIT_LOG_LEVEL").unwrap_or("INFO".into());
+        let log_debug = matches!(log_level.as_str(), "DEBUG" | "TRACE");
+        let skip_cmd: Vec<String> = match env::var("INIT_SKIP") {
+            Ok(v) if v.len() > 0 => v.split(',').map(|s| s.to_string()).collect(),
+            _ => Vec::new(),
+        };
+
+        Self {
+            log_debug,
+            skip_cmd,
+        }
+    }
+}
+
+pub fn run(file: &Path, config: &InitConfig) -> Result<()> {
+    for line_raw in fs::read_to_string(file)?.lines() {
+        let line = line_raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if config.log_debug {
+            eprintln!("init: running: {:?}", line);
+        }
+        run_command(line, config);
     }
 
     Ok(())
 }
 
-fn run_command(line_raw: &str) {
-    let line = line_raw.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return;
-    }
+fn run_command(line: &str, config: &InitConfig) {
     let mut args = line.split(' ').map(|arg| {
         if arg.starts_with('$') {
             env::var(&arg[1..]).unwrap_or(String::new())
@@ -74,7 +98,7 @@ fn run_command(line_raw: &str) {
                     eprintln!("init: failed to run: no argument");
                     return;
                 };
-                if let Err(err) = run(&Path::new(&new_file)) {
+                if let Err(err) = run(&Path::new(&new_file), config) {
                     eprintln!("init: failed to run '{}': {}", new_file, err);
                 }
             }
@@ -119,7 +143,7 @@ fn run_command(line_raw: &str) {
 
                 // This takes advantage of BTreeMap iterating in sorted order.
                 for (_, entry_path) in entries {
-                    if let Err(err) = run(&entry_path) {
+                    if let Err(err) = run(&entry_path, config) {
                         eprintln!("init: failed to run '{}': {}", entry_path.display(), err);
                     }
                 }
@@ -160,6 +184,11 @@ fn run_command(line_raw: &str) {
                     command.arg(arg);
                 }
 
+                if config.skip_cmd.contains(&cmd) {
+                    eprintln!("init: skipping '{}'", line);
+                    return;
+                }
+
                 let mut child = match command.spawn() {
                     Ok(child) => child,
                     Err(err) => {
@@ -183,9 +212,10 @@ fn run_command(line_raw: &str) {
 }
 
 pub fn main() {
-    let config = "/scheme/initfs/etc/init.rc";
-    if let Err(err) = run(&Path::new(config)) {
-        eprintln!("init: failed to run {}: {}", config, err);
+    let init_path = Path::new("/scheme/initfs/etc/init.rc");
+    let init_config = InitConfig::new();
+    if let Err(err) = run(&init_path, &init_config) {
+        eprintln!("init: failed to run {:?}: {}", init_path, err);
     }
 
     libredox::call::setrens(0, 0).expect("init: failed to enter null namespace");
