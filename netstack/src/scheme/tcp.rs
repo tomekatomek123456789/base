@@ -10,6 +10,9 @@ use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile};
 use super::{parse_endpoint, SchemeWrapper, SocketSet};
 use crate::port_set::PortSet;
 
+const SO_SNDBUF: usize = 7;
+const SO_RCVBUF: usize = 8;
+
 pub type TcpScheme = SchemeWrapper<TcpSocket<'static>>;
 
 impl<'a> SchemeSocket for TcpSocket<'a> {
@@ -333,5 +336,38 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             _ => return Err(SyscallError::new(syscall::EINVAL)),
         }
         Ok(0)
+    }
+
+    fn get_sock_opt(
+        &self,
+        _file: &SchemeFile<Self>,
+        name: usize,
+        buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        match name {
+            SO_RCVBUF => {
+                let val = self.recv_capacity() as i32;
+                let bytes = val.to_ne_bytes();
+
+                if buf.len() < bytes.len() {
+                    return Err(SyscallError::new(syscall::EINVAL));
+                }
+
+                buf[0..bytes.len()].copy_from_slice(&bytes);
+                Ok(bytes.len())
+            }
+            SO_SNDBUF => {
+                let val = self.send_capacity() as i32;
+                let bytes = val.to_ne_bytes();
+
+                if buf.len() < bytes.len() {
+                    return Err(SyscallError::new(syscall::EINVAL));
+                }
+
+                buf[0..bytes.len()].copy_from_slice(&bytes);
+                Ok(bytes.len())
+            }
+            _ => Err(SyscallError::new(syscall::ENOPROTOOPT)),
+        }
     }
 }
