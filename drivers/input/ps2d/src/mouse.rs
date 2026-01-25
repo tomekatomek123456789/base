@@ -231,6 +231,12 @@ impl MouseState {
                 // The state uses a timeout on init to request a reset
                 self.reset(ps2)
             }
+            MouseState::Reset => {
+                log::warn!("timeout while waiting for mouse reset");
+                //TODO: retry reset?
+                *self = MouseState::None;
+                MouseResult::None
+            }
             MouseState::Bat => {
                 log::warn!("timeout while waiting for BAT completion");
                 //TODO: limit number of resets
@@ -245,9 +251,10 @@ impl MouseState {
                 log::warn!("timeout while requesting mouse id");
                 self.enable_reporting(0, ps2)
             }
-            _ => {
-                log::warn!("TODO: timeout on {:?}", self);
-                MouseResult::None
+            MouseState::EnableReporting { id } => {
+                log::warn!("timeout while enabling reporting");
+                //TODO: limit number of retries
+                self.enable_reporting(id, ps2)
             }
         }
     }
