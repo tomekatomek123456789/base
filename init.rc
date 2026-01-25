@@ -35,4 +35,5 @@ unset REDOXFS_UUID REDOXFS_BLOCK REDOXFS_PASSWORD_ADDR REDOXFS_PASSWORD_SIZE
 # Exit initfs
 cd /
 export PATH /usr/bin
+unset LD_LIBRARY_PATH
 run.d /usr/lib/init.d /etc/init.d
