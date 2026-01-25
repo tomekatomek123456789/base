@@ -159,10 +159,10 @@ impl MouseState {
             }
             MouseState::Reset => {
                 if data == 0xFA {
-                    log::info!("mouse reset ok");
+                    log::debug!("mouse reset ok");
                     MouseResult::Timeout(RESET_TIMEOUT)
                 } else if data == 0xAA {
-                    log::info!("BAT completed");
+                    log::debug!("BAT completed");
                     *self = MouseState::Bat;
                     MouseResult::Timeout(COMMAND_TIMEOUT)
                 } else {
@@ -173,11 +173,11 @@ impl MouseState {
             MouseState::Bat => {
                 if data == MouseId::Base as u8 {
                     // Enable intellimouse features
-                    log::info!("BAT mouse id {:02X} (base)", data);
+                    log::debug!("BAT mouse id {:02X} (base)", data);
                     self.enable_intellimouse(0, false, ps2)
                 } else if data == MouseId::Intellimouse1 as u8 {
                     // Extra packet already enabled
-                    log::info!("BAT mouse id {:02X} (intellimouse)", data);
+                    log::debug!("BAT mouse id {:02X} (intellimouse)", data);
                     self.enable_reporting(data, ps2)
                 } else {
                     log::warn!("unknown mouse id {:02X} after BAT", data);
@@ -204,7 +204,7 @@ impl MouseState {
                     //TODO: handle this separately?
                     MouseResult::Timeout(COMMAND_TIMEOUT)
                 } else if data == MouseId::Base as u8 || data == MouseId::Intellimouse1 as u8 {
-                    log::info!("mouse id {:02X}", data);
+                    log::debug!("mouse id {:02X}", data);
                     self.enable_reporting(data, ps2)
                 } else {
                     log::warn!("unknown mouse id {:02X} after requesting id", data);
@@ -212,7 +212,7 @@ impl MouseState {
                 }
             }
             MouseState::EnableReporting { id } => {
-                log::info!("mouse id {:02X} enable reporting {:02X}", id, data);
+                log::debug!("mouse id {:02X} enable reporting {:02X}", id, data);
                 //TODO: handle response ok/error
                 *self = MouseState::Streaming { id };
                 MouseResult::None
