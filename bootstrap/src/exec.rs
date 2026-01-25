@@ -1,13 +1,13 @@
+use alloc::borrow::ToOwned;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::ffi::CStr;
 use core::str::FromStr;
 
-use alloc::borrow::ToOwned;
-use alloc::vec::Vec;
-
-use syscall::CallFlags;
 use syscall::data::{GlobalSchemes, KernelSchemeInfo};
 use syscall::flag::{O_CLOEXEC, O_RDONLY};
-use syscall::{EINTR, Error};
+use syscall::CallFlags;
+use syscall::{Error, EINTR};
 
 use redox_rt::proc::*;
 
@@ -72,7 +72,7 @@ pub fn main() -> ! {
     let this_thr_fd = unsafe { redox_rt::initialize_freestanding(this_thr_fd) };
 
     let mut env_bytes = [0_u8; 4096];
-    let envs = {
+    let mut envs = {
         let fd = FdGuard::new(
             syscall::openat(
                 *infos_arc
@@ -100,6 +100,8 @@ pub fn main() -> ! {
             .filter(|var| !var.starts_with(b"INITFS_"))
             .collect::<Vec<_>>()
     };
+    //envs.push(b"LD_DEBUG=all");
+    envs.push(b"LD_LIBRARY_PATH=/scheme/initfs/lib");
 
     log::set_max_level(log::LevelFilter::Warn);
 
@@ -196,7 +198,10 @@ pub fn main() -> ! {
 
     let exe_path = alloc::format!("/scheme/initfs{}", path);
 
-    fexec_impl(
+    let FexecResult::Interp {
+        path: interp_path,
+        interp_override,
+    } = fexec_impl(
         image_file,
         init_thr_fd,
         init_proc_fd,
@@ -205,6 +210,33 @@ pub fn main() -> ! {
         &envs,
         &extrainfo,
         None,
+    )
+    .expect("failed to execute init");
+
+    // According to elf(5), PT_INTERP requires that the interpreter path be
+    // null-terminated. Violating this should therefore give the "format error" ENOEXEC.
+    let interp_cstr = CStr::from_bytes_with_nul(&interp_path).expect("interpreter not valid C str");
+    let interp_file = FdGuard::new(
+        syscall::openat(
+            initns_fd, // initns, not initfs!
+            interp_cstr.to_str().expect("interpreter not UTF-8"),
+            O_RDONLY | O_CLOEXEC,
+            0,
+        )
+        .expect("failed to open dynamic linker"),
+    )
+    .to_upper()
+    .unwrap();
+
+    fexec_impl(
+        interp_file,
+        init_thr_fd,
+        init_proc_fd,
+        exe_path.as_bytes(),
+        &[exe_path.as_bytes()],
+        &envs,
+        &extrainfo,
+        Some(interp_override),
     )
     .expect("failed to execute init");
 
