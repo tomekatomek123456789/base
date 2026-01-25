@@ -173,7 +173,7 @@ fn main() {
     let name = format!("{}_{}_{}_hid", scheme, port, interface_num);
     common::setup_logging(
         "usb",
-        "device",
+        "usbhid",
         &name,
         common::output_level(),
         common::file_level(),
@@ -190,6 +190,13 @@ fn main() {
     let desc: DevDesc = handle
         .get_standard_descs()
         .expect("Failed to get standard descriptors");
+
+    log::info!(
+        "USB HID driver: {:?} serial {:?}",
+        desc.product_str.as_ref().map(|s| s.as_str()).unwrap_or(""),
+        desc.serial_str.as_ref().map(|s| s.as_str()).unwrap_or(""),
+    );
+
     log::debug!("{:X?}", desc);
 
     let mut endp_count = 0;
@@ -314,7 +321,7 @@ fn main() {
             .handle(&report_buffer)
             .expect("failed to parse report")
         {
-            log::debug!("{:X?}", event);
+            log::debug!("{}", event);
             if event.usage_page == UsagePage::GenericDesktop as u16 {
                 if event.usage == GenericDesktopUsage::X as u16 {
                     if event.relative {
@@ -381,9 +388,11 @@ fn main() {
         if mouse_pos != last_mouse_pos {
             last_mouse_pos = mouse_pos;
 
+            // TODO
             // ps2d uses 0..=65535 as range, while usb uses 0..=32767. orbital
-            // expects the former range, so multiply by two here to translate
-            // the usb coordinates to what orbital expects.
+            // expects the former range, so multiply by two here to temporarily
+            // align with orbital expectation. This workaround will make cursor
+            //  looks out of sync in QEMU using virtio-vga with usb-tablet.
             let mouse_event = orbclient::event::MouseEvent {
                 x: mouse_pos.0 * 2,
                 y: mouse_pos.1 * 2,
@@ -398,15 +407,18 @@ fn main() {
         }
 
         if mouse_dx != 0 || mouse_dy != 0 {
-            let mouse_event = orbclient::event::MouseRelativeEvent {
-                dx: mouse_dx,
-                dy: mouse_dy,
-            };
+            // TODO: This is a filter to prevent random mouse jumps
+            if mouse_dx > -127 && mouse_dx < 127 {
+                let mouse_event = orbclient::event::MouseRelativeEvent {
+                    dx: mouse_dx,
+                    dy: mouse_dy,
+                };
 
-            match display.write_event(mouse_event.to_event()) {
-                Ok(_) => (),
-                Err(err) => {
-                    log::warn!("failed to send mouse event to orbital: {}", err);
+                match display.write_event(mouse_event.to_event()) {
+                    Ok(_) => (),
+                    Err(err) => {
+                        log::warn!("failed to send mouse event to orbital: {}", err);
+                    }
                 }
             }
         }
@@ -438,5 +450,7 @@ fn main() {
                 }
             }
         }
+
+        // log::trace!("took {}ms", timer.elapsed().as_millis())
     }
 }
