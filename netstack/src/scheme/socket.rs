@@ -26,9 +26,14 @@ use syscall::{
 use super::Interface;
 use crate::router::route_table::RouteTable;
 use crate::scheme::smoltcp::iface::SocketHandle;
+use crate::scheme::Router;
+use crate::Smolnetd;
 use smoltcp::socket::AnySocket;
 
 use super::SocketSet;
+
+const SO_RCVBUF: usize = 8;
+const SO_SNDBUF: usize = 7;
 
 pub struct Context {
     pub iface: Interface,
@@ -237,6 +242,16 @@ where
     ) -> SyscallResult<usize>;
 
     fn handle_shutdown(&mut self, file: &mut SchemeFile<Self>, how: usize) -> SyscallResult<usize>;
+
+    fn get_sock_opt(
+        &self,
+        file: &SchemeFile<Self>,
+        name: usize,
+        buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        // Return Err for default implementation
+        Err(SyscallError::new(syscall::ENOPROTOOPT))
+    }
 }
 
 pub enum Handle<SocketT>
@@ -446,7 +461,40 @@ where
                 // TODO: SO_REUSEADDR from null socket
                 Ok(0)
             }
-            // SocketCall::GetSockOpt => self.handle_getsockopt(id, metadata[1] as i32, payload),
+            SocketCall::GetSockOpt => {
+                let handle = self
+                    .handles
+                    .get_mut(&fd)
+                    .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
+
+                match *handle {
+                    Handle::File(ref mut file) => {
+                        let mut socket_set = self.socket_set.borrow_mut();
+                        let socket = socket_set.get_mut::<SocketT>(file.socket_handle());
+                        SocketT::get_sock_opt(socket, file, metadata[1] as usize, payload)
+                    }
+                    Handle::Null(_) => {
+                        // TODO
+                        // The socket exists but hasn't been bound/connected yet.
+                        // We return default values for buffer sizes to satisfy apps like iperf3.
+                        // Figure out maybe a better way?
+                        let name = metadata[1] as usize;
+                        if name == SO_RCVBUF || name == SO_SNDBUF {
+                            let val: i32 = (Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE) as i32;
+                            let bytes = val.to_ne_bytes();
+
+                            if payload.len() < bytes.len() {
+                                return Err(SyscallError::new(syscall::EINVAL));
+                            }
+                            payload[..bytes.len()].copy_from_slice(&bytes);
+                            Ok(bytes.len())
+                        } else {
+                            Err(SyscallError::new(syscall::EINVAL))
+                        }
+                    }
+                    Handle::SchemeRoot => Err(SyscallError::new(syscall::EBADF)),
+                }
+            }
             // SocketCall::SendMsg => self.handle_sendmsg(id, payload, ctx),
             // SocketCall::RecvMsg => self.handle_recvmsg(id, payload),
             // SocketCall::Unbind => self.handle_unbind(id),
