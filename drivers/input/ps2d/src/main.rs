@@ -19,6 +19,7 @@ use syscall::{EAGAIN, EWOULDBLOCK};
 use crate::state::Ps2d;
 
 mod controller;
+mod mouse;
 mod state;
 mod vm;
 
@@ -39,6 +40,7 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         enum Source {
             Keyboard,
             Mouse,
+            Time,
         }
     }
 
@@ -75,11 +77,26 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         )
         .unwrap();
 
+    let mut time_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(syscall::O_NONBLOCK as i32)
+        .open(format!("/scheme/time/{}", syscall::CLOCK_MONOTONIC))
+        .expect("ps2d: failed to open /scheme/time");
+
+    event_queue
+        .subscribe(
+            time_file.as_raw_fd() as usize,
+            Source::Time,
+            event::EventFlags::READ,
+        )
+        .unwrap();
+
     libredox::call::setrens(0, 0).expect("ps2d: failed to enter null namespace");
 
     daemon.ready();
 
-    let mut ps2d = Ps2d::new(input);
+    let mut ps2d = Ps2d::new(input, time_file);
 
     let mut data = [0; 256];
     for event in event_queue.map(|e| e.expect("ps2d: failed to get next event").user_data) {
@@ -95,6 +112,10 @@ fn daemon(daemon: daemon::Daemon) -> ! {
         let (file, keyboard) = match event {
             Source::Keyboard => (&mut key_file, true),
             Source::Mouse => (&mut mouse_file, false),
+            Source::Time => {
+                ps2d.time_event();
+                continue;
+            }
         };
 
         loop {
