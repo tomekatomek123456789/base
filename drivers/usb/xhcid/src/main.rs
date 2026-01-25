@@ -184,7 +184,6 @@ fn daemon_with_context_size<const N: usize>(
 }
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

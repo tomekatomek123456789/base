@@ -20,7 +20,6 @@ use crate::ide::{AtaCommand, AtaDisk, Channel};
 pub mod ide;
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

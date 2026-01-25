@@ -57,7 +57,6 @@ fn time_arm(time_handle: &mut File, secs: i64) -> io::Result<()> {
 }
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

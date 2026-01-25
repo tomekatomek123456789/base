@@ -99,7 +99,6 @@ pub struct BlockVirtRequest {
 const_assert_eq!(core::mem::size_of::<BlockVirtRequest>(), 16);
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon_runner);
 }
 
