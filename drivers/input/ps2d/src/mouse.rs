@@ -171,15 +171,16 @@ impl MouseState {
                 }
             }
             MouseState::Bat => {
-                log::info!("device ID {:02X}", data);
                 if data == MouseId::Base as u8 {
                     // Enable intellimouse features
+                    log::info!("BAT mouse id {:02X} (base)", data);
                     self.enable_intellimouse(0, false, ps2)
                 } else if data == MouseId::Intellimouse1 as u8 {
                     // Extra packet already enabled
+                    log::info!("BAT mouse id {:02X} (intellimouse)", data);
                     self.enable_reporting(data, ps2)
                 } else {
-                    log::warn!("unknown mouse ID {:02X} after reset", data);
+                    log::warn!("unknown mouse id {:02X} after BAT", data);
                     MouseResult::Timeout(RESET_TIMEOUT)
                 }
             }
@@ -203,14 +204,15 @@ impl MouseState {
                     //TODO: handle this separately?
                     MouseResult::Timeout(COMMAND_TIMEOUT)
                 } else if data == MouseId::Base as u8 || data == MouseId::Intellimouse1 as u8 {
+                    log::info!("mouse id {:02X}", data);
                     self.enable_reporting(data, ps2)
                 } else {
-                    log::warn!("unknown mouse ID {:02X} after requesting device id", data);
+                    log::warn!("unknown mouse id {:02X} after requesting id", data);
                     self.reset(ps2)
                 }
             }
             MouseState::EnableReporting { id } => {
-                log::info!("mouse enable reporting {:02X}", data);
+                log::info!("mouse id {:02X} enable reporting {:02X}", id, data);
                 //TODO: handle response ok/error
                 *self = MouseState::Streaming { id };
                 MouseResult::None
@@ -229,13 +231,18 @@ impl MouseState {
                 // The state uses a timeout on init to request a reset
                 self.reset(ps2)
             }
+            MouseState::Bat => {
+                log::warn!("timeout while waiting for BAT completion");
+                //TODO: limit number of resets
+                self.reset(ps2)
+            }
             MouseState::EnableIntellimouse { .. } => {
                 //TODO: retry?
                 log::warn!("timeout while enabling intellimouse");
                 self.request_id(ps2)
             }
             MouseState::DeviceId => {
-                log::warn!("timeout while requesting device ID");
+                log::warn!("timeout while requesting mouse id");
                 self.enable_reporting(0, ps2)
             }
             _ => {
