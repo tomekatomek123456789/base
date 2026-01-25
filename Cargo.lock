@@ -81,19 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alxd"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.10.0",
- "common",
- "daemon",
- "libredox",
- "redox-scheme",
- "redox_event",
- "redox_syscall 0.7.0",
-]
-
-[[package]]
 name = "amlserde"
 version = "0.0.1"
 dependencies = [
