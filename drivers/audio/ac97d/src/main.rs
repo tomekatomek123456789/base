@@ -20,7 +20,6 @@ use std::cell::RefCell;
 pub mod device;
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

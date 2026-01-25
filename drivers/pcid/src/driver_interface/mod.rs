@@ -486,6 +486,7 @@ impl PciFunctionHandle {
 
 pub fn pci_daemon<F: FnOnce(Daemon, PciFunctionHandle) -> !>(f: F) -> ! {
     Daemon::new(|daemon| {
+        common::init();
         let pcid_handle = PciFunctionHandle::connect_default();
         f(daemon, pcid_handle)
     })
