@@ -13,6 +13,9 @@ use crate::port_set::PortSet;
 use crate::router::Router;
 use std::fmt::Write;
 
+const SO_SNDBUF: usize = 7;
+const SO_RCVBUF: usize = 8;
+
 pub type UdpScheme = SchemeWrapper<UdpSocket<'static>>;
 
 impl<'a> SchemeSocket for UdpSocket<'a> {
@@ -317,5 +320,34 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
             _ => return Err(SyscallError::new(syscall::EINVAL)),
         }
         Ok(0)
+    }
+
+    fn get_sock_opt(
+        &self,
+        _file: &SchemeFile<Self>,
+        name: usize,
+        buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        match name {
+            SO_RCVBUF => {
+                let val = self.payload_recv_capacity() as i32;
+                let bytes = val.to_ne_bytes();
+                if buf.len() < bytes.len() {
+                    return Err(SyscallError::new(syscall::EINVAL));
+                }
+                buf[..bytes.len()].copy_from_slice(&bytes);
+                Ok(bytes.len())
+            }
+            SO_SNDBUF => {
+                let val = self.payload_send_capacity() as i32;
+                let bytes = val.to_ne_bytes();
+                if buf.len() < bytes.len() {
+                    return Err(SyscallError::new(syscall::EINVAL));
+                }
+                buf[..bytes.len()].copy_from_slice(&bytes);
+                Ok(bytes.len())
+            }
+            _ => Err(SyscallError::new(syscall::ENOPROTOOPT)),
+        }
     }
 }
