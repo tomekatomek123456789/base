@@ -8,7 +8,6 @@ use pcid_interface::PciFunctionHandle;
 pub mod device;
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

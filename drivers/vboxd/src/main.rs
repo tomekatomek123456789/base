@@ -190,7 +190,6 @@ impl VboxGuestInfo {
 }
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 

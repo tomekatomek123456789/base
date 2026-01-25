@@ -476,7 +476,6 @@ impl MoveCursor {
 static DEVICE: spin::Once<virtio_core::Device> = spin::Once::new();
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon_runner);
 }
 

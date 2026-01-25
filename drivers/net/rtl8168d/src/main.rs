@@ -36,7 +36,6 @@ fn map_bar(pcid_handle: &mut PciFunctionHandle) -> *mut u8 {
 }
 
 fn main() {
-    common::init();
     pcid_interface::pci_daemon(daemon);
 }
 
