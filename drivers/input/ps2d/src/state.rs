@@ -1,8 +1,16 @@
 use inputd::ProducerHandle;
-use log::{error, warn};
+use log::{error, info, warn};
 use orbclient::{ButtonEvent, KeyEvent, MouseEvent, MouseRelativeEvent, ScrollEvent};
+use std::{
+    convert::TryInto,
+    fs::File,
+    io::{Read, Write},
+    time::Duration,
+};
+use syscall::TimeSpec;
 
 use crate::controller::Ps2;
+use crate::mouse::{MouseResult, MouseState};
 use crate::vm;
 
 bitflags! {
@@ -18,51 +26,92 @@ bitflags! {
     }
 }
 
+fn timespec_from_duration(duration: Duration) -> TimeSpec {
+    TimeSpec {
+        tv_sec: duration.as_secs().try_into().unwrap(),
+        tv_nsec: duration.subsec_nanos().try_into().unwrap(),
+    }
+}
+
+fn duration_from_timespec(timespec: TimeSpec) -> Duration {
+    Duration::new(
+        timespec.tv_sec.try_into().unwrap(),
+        timespec.tv_nsec.try_into().unwrap(),
+    )
+}
+
 pub struct Ps2d {
     ps2: Ps2,
     vmmouse: bool,
     vmmouse_relative: bool,
     input: ProducerHandle,
+    time_file: File,
     extended: bool,
     mouse_x: i32,
     mouse_y: i32,
     mouse_left: bool,
     mouse_middle: bool,
     mouse_right: bool,
+    mouse_state: MouseState,
+    mouse_timeout: Option<TimeSpec>,
     packets: [u8; 4],
     packet_i: usize,
-    extra_packet: bool,
 }
 
 impl Ps2d {
-    pub fn new(input: ProducerHandle) -> Self {
+    pub fn new(input: ProducerHandle, time_file: File) -> Self {
         let mut ps2 = Ps2::new();
-        let extra_packet = ps2.init().expect("ps2d: failed to initialize");
+        ps2.init().expect("failed to initialize");
 
         // FIXME add an option for orbital to disable this when an app captures the mouse.
         let vmmouse_relative = false;
         let vmmouse = vm::enable(vmmouse_relative);
 
-        Ps2d {
+        let mut this = Ps2d {
             ps2,
             vmmouse,
             vmmouse_relative,
             input,
+            time_file,
             extended: false,
             mouse_x: 0,
             mouse_y: 0,
             mouse_left: false,
             mouse_middle: false,
             mouse_right: false,
+            mouse_state: MouseState::Init,
+            mouse_timeout: None,
             packets: [0; 4],
             packet_i: 0,
-            extra_packet,
-        }
+        };
+
+        // This triggers initializing the mouse
+        this.handle_mouse(None);
+
+        this
     }
 
     pub fn irq(&mut self) {
         while let Some((keyboard, data)) = self.ps2.next() {
             self.handle(keyboard, data);
+        }
+    }
+
+    pub fn time_event(&mut self) {
+        let mut time = TimeSpec::default();
+        match self.time_file.read(&mut time) {
+            Ok(_count) => {}
+            Err(err) => {
+                log::error!("failed to read time file: {}", err);
+                return;
+            }
+        }
+        if let Some(mouse_timeout) = self.mouse_timeout {
+            if time.tv_sec > mouse_timeout.tv_sec
+                || (time.tv_sec == mouse_timeout.tv_sec && time.tv_nsec >= mouse_timeout.tv_nsec)
+            {
+                self.handle_mouse(None);
+            }
         }
     }
 
@@ -109,7 +158,7 @@ impl Ps2d {
                         /* 0x80 to 0xFF used for press/release detection */
                         _ => {
                             if pressed {
-                                warn!("ps2d: unknown extended scancode {:02X}", ps2_scancode);
+                                warn!("unknown extended scancode {:02X}", ps2_scancode);
                             }
                             0
                         }
@@ -208,7 +257,7 @@ impl Ps2d {
                         /* 0x80 to 0xFF used for press/release detection */
                         _ => {
                             if pressed {
-                                warn!("ps2d: unknown scancode {:02X}", ps2_scancode);
+                                warn!("unknown scancode {:02X}", ps2_scancode);
                             }
                             0
                         }
@@ -225,7 +274,7 @@ impl Ps2d {
                             }
                             .to_event(),
                         )
-                        .expect("ps2d: failed to write key event");
+                        .expect("failed to write key event");
                 }
             }
         } else if self.vmmouse {
@@ -239,7 +288,7 @@ impl Ps2d {
                 }
 
                 if queue_length % 4 != 0 {
-                    error!("ps2d: queue length not a multiple of 4: {}", queue_length);
+                    error!("queue length not a multiple of 4: {}", queue_length);
                     break;
                 }
 
@@ -304,83 +353,122 @@ impl Ps2d {
                 }
             }
         } else {
-            self.packets[self.packet_i] = data;
-            self.packet_i += 1;
+            self.handle_mouse(Some(data));
+        }
+    }
 
-            let flags = MousePacketFlags::from_bits_truncate(self.packets[0]);
-            if !flags.contains(MousePacketFlags::ALWAYS_ON) {
-                error!("ps2d: mouse misalign {:X}", self.packets[0]);
-
-                self.packets = [0; 4];
-                self.packet_i = 0;
-            } else if self.packet_i >= self.packets.len()
-                || (!self.extra_packet && self.packet_i >= 3)
-            {
-                if !flags.contains(MousePacketFlags::X_OVERFLOW)
-                    && !flags.contains(MousePacketFlags::Y_OVERFLOW)
-                {
-                    let mut dx = self.packets[1] as i32;
-                    if flags.contains(MousePacketFlags::X_SIGN) {
-                        dx -= 0x100;
+    pub fn handle_mouse(&mut self, data_opt: Option<u8>) {
+        let mouse_res = match data_opt {
+            Some(data) => self.mouse_state.handle(data, &mut self.ps2),
+            None => self.mouse_state.handle_timeout(&mut self.ps2),
+        };
+        self.mouse_timeout = None;
+        let (packet_data, extra_packet) = match mouse_res {
+            MouseResult::None => {
+                return;
+            }
+            MouseResult::Packet(packet_data, extra_packet) => (packet_data, extra_packet),
+            MouseResult::Timeout(duration) => {
+                // Read current time
+                let mut time = TimeSpec::default();
+                match self.time_file.read(&mut time) {
+                    Ok(_count) => {}
+                    Err(err) => {
+                        log::error!("failed to read time file: {}", err);
+                        return;
                     }
-
-                    let mut dy = -(self.packets[2] as i32);
-                    if flags.contains(MousePacketFlags::Y_SIGN) {
-                        dy += 0x100;
-                    }
-
-                    let mut dz = 0;
-                    if self.extra_packet {
-                        let mut scroll = (self.packets[3] & 0xF) as i8;
-                        if scroll & (1 << 3) == 1 << 3 {
-                            scroll -= 16;
-                        }
-                        dz = -scroll as i32;
-                    }
-
-                    if dx != 0 || dy != 0 {
-                        self.input
-                            .write_event(MouseRelativeEvent { dx, dy }.to_event())
-                            .expect("ps2d: failed to write mouse event");
-                    }
-
-                    if dz != 0 {
-                        self.input
-                            .write_event(ScrollEvent { x: 0, y: dz }.to_event())
-                            .expect("ps2d: failed to write scroll event");
-                    }
-
-                    let left = flags.contains(MousePacketFlags::LEFT_BUTTON);
-                    let middle = flags.contains(MousePacketFlags::MIDDLE_BUTTON);
-                    let right = flags.contains(MousePacketFlags::RIGHT_BUTTON);
-                    if left != self.mouse_left
-                        || middle != self.mouse_middle
-                        || right != self.mouse_right
-                    {
-                        self.mouse_left = left;
-                        self.mouse_middle = middle;
-                        self.mouse_right = right;
-                        self.input
-                            .write_event(
-                                ButtonEvent {
-                                    left,
-                                    middle,
-                                    right,
-                                }
-                                .to_event(),
-                            )
-                            .expect("ps2d: failed to write button event");
-                    }
-                } else {
-                    warn!(
-                        "ps2d: overflow {:X} {:X} {:X} {:X}",
-                        self.packets[0], self.packets[1], self.packets[2], self.packets[3]
-                    );
                 }
 
-                self.packets = [0; 4];
-                self.packet_i = 0;
+                // Add duration to time
+                time = timespec_from_duration(duration_from_timespec(time) + duration);
+
+                // Write next time
+                match self.time_file.write(&time) {
+                    Ok(_count) => {}
+                    Err(err) => {
+                        log::error!("failed to write time file: {}", err);
+                    }
+                }
+
+                self.mouse_timeout = Some(time);
+                return;
             }
+        };
+
+        self.packets[self.packet_i] = packet_data;
+        self.packet_i += 1;
+
+        let flags = MousePacketFlags::from_bits_truncate(self.packets[0]);
+        if !flags.contains(MousePacketFlags::ALWAYS_ON) {
+            error!("mouse misalign {:X}", self.packets[0]);
+
+            self.packets = [0; 4];
+            self.packet_i = 0;
+        } else if self.packet_i >= self.packets.len() || (!extra_packet && self.packet_i >= 3) {
+            if !flags.contains(MousePacketFlags::X_OVERFLOW)
+                && !flags.contains(MousePacketFlags::Y_OVERFLOW)
+            {
+                let mut dx = self.packets[1] as i32;
+                if flags.contains(MousePacketFlags::X_SIGN) {
+                    dx -= 0x100;
+                }
+
+                let mut dy = -(self.packets[2] as i32);
+                if flags.contains(MousePacketFlags::Y_SIGN) {
+                    dy += 0x100;
+                }
+
+                let mut dz = 0;
+                if extra_packet {
+                    let mut scroll = (self.packets[3] & 0xF) as i8;
+                    if scroll & (1 << 3) == 1 << 3 {
+                        scroll -= 16;
+                    }
+                    dz = -scroll as i32;
+                }
+
+                if dx != 0 || dy != 0 {
+                    self.input
+                        .write_event(MouseRelativeEvent { dx, dy }.to_event())
+                        .expect("ps2d: failed to write mouse event");
+                }
+
+                if dz != 0 {
+                    self.input
+                        .write_event(ScrollEvent { x: 0, y: dz }.to_event())
+                        .expect("ps2d: failed to write scroll event");
+                }
+
+                let left = flags.contains(MousePacketFlags::LEFT_BUTTON);
+                let middle = flags.contains(MousePacketFlags::MIDDLE_BUTTON);
+                let right = flags.contains(MousePacketFlags::RIGHT_BUTTON);
+                if left != self.mouse_left
+                    || middle != self.mouse_middle
+                    || right != self.mouse_right
+                {
+                    self.mouse_left = left;
+                    self.mouse_middle = middle;
+                    self.mouse_right = right;
+                    self.input
+                        .write_event(
+                            ButtonEvent {
+                                left,
+                                middle,
+                                right,
+                            }
+                            .to_event(),
+                        )
+                        .expect("ps2d: failed to write button event");
+                }
+            } else {
+                warn!(
+                    "overflow {:X} {:X} {:X} {:X}",
+                    self.packets[0], self.packets[1], self.packets[2], self.packets[3]
+                );
+            }
+
+            self.packets = [0; 4];
+            self.packet_i = 0;
         }
     }
 }
