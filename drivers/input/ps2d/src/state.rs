@@ -85,8 +85,10 @@ impl Ps2d {
             packet_i: 0,
         };
 
-        // This triggers initializing the mouse
-        this.handle_mouse(None);
+        if !this.vmmouse {
+            // This triggers initializing the mouse
+            this.handle_mouse(None);
+        }
 
         this
     }
