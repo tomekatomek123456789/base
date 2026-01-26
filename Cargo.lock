@@ -1109,6 +1109,7 @@ dependencies = [
 name = "init"
 version = "0.1.0"
 dependencies = [
+ "daemon",
  "libredox",
 ]
 
@@ -1490,6 +1491,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "common",
+ "daemon",
  "log",
  "pcid",
  "pico-args",

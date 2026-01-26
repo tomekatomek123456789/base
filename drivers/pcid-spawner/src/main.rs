@@ -88,13 +88,7 @@ fn main() -> Result<()> {
         let channel_fd = handle.into_inner_fd();
         command.env("PCID_CLIENT_CHANNEL", channel_fd.to_string());
 
-        match command.status() {
-            Ok(status) if !status.success() => {
-                log::error!("pcid-spawner: driver {command:?} failed with {status}")
-            }
-            Ok(_) => {}
-            Err(err) => log::error!("pcid-spawner: failed to execute {command:?}: {err}"),
-        }
+        daemon::Daemon::spawn(command);
         syscall::close(channel_fd as usize).unwrap();
     }
 

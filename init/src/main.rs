@@ -20,12 +20,12 @@ fn switch_stdio(stdio: &str) -> Result<()> {
 }
 
 struct InitConfig {
-    pub log_debug: bool,
-    pub skip_cmd: Vec<String>,
+    log_debug: bool,
+    skip_cmd: Vec<String>,
 }
 
 impl InitConfig {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let log_level = env::var("INIT_LOG_LEVEL").unwrap_or("INFO".into());
         let log_debug = matches!(log_level.as_str(), "DEBUG" | "TRACE");
         let skip_cmd: Vec<String> = match env::var("INIT_SKIP") {
@@ -40,7 +40,7 @@ impl InitConfig {
     }
 }
 
-pub fn run(file: &Path, config: &InitConfig) -> Result<()> {
+fn run(file: &Path, config: &InitConfig) -> Result<()> {
     for line_raw in fs::read_to_string(file)?.lines() {
         let line = line_raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -167,6 +167,11 @@ fn run_command(line: &str, config: &InitConfig) {
                     eprintln!("init: failed to run nowait: no argument");
                     return;
                 };
+                if config.skip_cmd.contains(&cmd) {
+                    eprintln!("init: skipping '{}'", line);
+                    return;
+                }
+
                 let mut command = Command::new(cmd);
 
                 for arg in args {
@@ -178,15 +183,32 @@ fn run_command(line: &str, config: &InitConfig) {
                     Err(err) => eprintln!("init: failed to execute '{}': {}", line, err),
                 }
             }
-            _ => {
-                let mut command = Command::new(cmd.clone());
+            "notify" => {
+                let Some(cmd) = args.next() else {
+                    eprintln!("init: failed to run nowait: no argument");
+                    return;
+                };
+                if config.skip_cmd.contains(&cmd) {
+                    eprintln!("init: skipping '{}'", line);
+                    return;
+                }
+
+                let mut command = Command::new(&cmd);
                 for arg in args {
                     command.arg(arg);
                 }
 
+                daemon::Daemon::spawn(command);
+            }
+            _ => {
                 if config.skip_cmd.contains(&cmd) {
                     eprintln!("init: skipping '{}'", line);
                     return;
+                }
+
+                let mut command = Command::new(cmd.clone());
+                for arg in args {
+                    command.arg(arg);
                 }
 
                 let mut child = match command.spawn() {
@@ -211,7 +233,7 @@ fn run_command(line: &str, config: &InitConfig) {
     }
 }
 
-pub fn main() {
+fn main() {
     let init_path = Path::new("/scheme/initfs/etc/init.rc");
     let init_config = InitConfig::new();
     if let Err(err) = run(&init_path, &init_config) {
