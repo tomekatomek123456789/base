@@ -3,26 +3,26 @@
 export PATH /scheme/initfs/bin
 export RUST_BACKTRACE 1
 rtcd
-nulld
-zerod
-randd
+notify nulld
+notify zerod
+notify randd
 
 # Logging
-logd
+notify logd
 stdio /scheme/log
-ramfs logging
+notify ramfs logging
 
 # Graphics infrastructure
-inputd
-vesad
+notify inputd
+notify vesad
 unset FRAMEBUFFER_ADDR FRAMEBUFFER_VIRT FRAMEBUFFER_WIDTH FRAMEBUFFER_HEIGHT FRAMEBUFFER_STRIDE
 #TODO: unset FRAMEBUFFER1 and beyond?
-fbbootlogd
-fbcond 2
+notify fbbootlogd
+notify fbcond 2
 
 # Live disk
 # Note: Needs to start before drivers to ensure it gets priority when redoxfs searches for disks
-lived
+notify lived
 
 # Drivers
 run /scheme/initfs/etc/init_drivers.rc

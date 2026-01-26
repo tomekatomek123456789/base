@@ -13,7 +13,7 @@ impl Backend for AcpiBackend {
 
         // Spawn acpid
         //TODO: pass rxsdt data to acpid?
-        Command::new("acpid").spawn()?.wait()?;
+        daemon::Daemon::spawn(Command::new("acpid"));
 
         Ok(Self { rxsdt })
     }
