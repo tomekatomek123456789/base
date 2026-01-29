@@ -1185,7 +1185,7 @@ impl<const N: usize> Xhci<N> {
                 .c
                 .write(u32::from(avg_trb_len) | (u32::from(max_esit_payload_lo) << 16));
 
-            log::info!("initialized endpoint {}", endp_num);
+            log::debug!("initialized endpoint {}", endp_num);
         }
 
         {
@@ -1214,7 +1214,7 @@ impl<const N: usize> Xhci<N> {
         let mut req: ConfigureEndpointsReq =
             serde_json::from_slice(json_buf).or(Err(Error::new(EBADMSG)))?;
 
-        info!(
+        debug!(
             "Running configure endpoints command, at port {}, request: {:?}",
             port, req
         );

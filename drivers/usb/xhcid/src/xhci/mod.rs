@@ -417,7 +417,7 @@ impl<const N: usize> Xhci<N> {
             let max_slots = cap.max_slots();
             let max_ports = cap.max_ports();
 
-            info!("xHC max slots: {}, max ports: {}", max_slots, max_ports);
+            debug!("xHC max slots: {}, max ports: {}", max_slots, max_ports);
             (max_slots, max_ports)
         };
 
@@ -589,7 +589,7 @@ impl<const N: usize> Xhci<N> {
         debug!("Ringing command doorbell.");
         self.dbs.lock().unwrap()[0].write(0);
 
-        info!("XHCI initialized.");
+        debug!("XHCI initialized.");
 
         self.op.get_mut().unwrap().set_cie(self.cap.cic());
 
@@ -633,6 +633,7 @@ impl<const N: usize> Xhci<N> {
                      //Do nothing
                 }
                 _ => {
+                    eprintln!("{}: CCS {}, CSC {}", port_id, ccs, csc);
                     //Either something is connected, or nothing is connected and a port status change was asserted.
                     self.device_enumerator_sender
                         .send(DeviceEnumerationRequest { port_id })
@@ -668,7 +669,7 @@ impl<const N: usize> Xhci<N> {
                     warn!("No detected supported protocol for port {}", port_id);
                 }
                 Some(protocol) => {
-                    info!(
+                    debug!(
                         "Port {} is a USB {}.{} port with slot type {} and in current state {}: {:?}",
                         port_id,
                         protocol.rev_major(),
@@ -803,7 +804,7 @@ impl<const N: usize> Xhci<N> {
             (port.read(), port.state(), port.speed(), port.flags())
         };
 
-        info!(
+        debug!(
             "XHCI Port {}: {:X}, State {}, Speed {}, Flags {:?}",
             port_id, data, state, speed, flags
         );
@@ -836,7 +837,7 @@ impl<const N: usize> Xhci<N> {
 
             let mut input = unsafe { self.alloc_dma_zeroed::<InputContext<N>>()? };
 
-            info!("Attempting to address the device");
+            debug!("Attempting to address the device");
             let mut ring = match self
                 .address_device(&mut input, port_id, slot_ty, slot, protocol_speed, speed)
                 .await
@@ -914,7 +915,7 @@ impl<const N: usize> Xhci<N> {
         Ok(())
     }
 
-    pub async fn detach_device(&self, port_id: PortId) -> Result<()> {
+    pub async fn detach_device(&self, port_id: PortId) -> Result<bool> {
         if let Some(children) = self.drivers.remove(&port_id) {
             for mut child in children {
                 info!("killing driver process {} for port {}", child.id(), port_id);
@@ -964,19 +965,18 @@ impl<const N: usize> Xhci<N> {
 
         if let Some(state) = self.port_states.remove(&port_id) {
             debug!("disabling port slot {} for port {}", state.slot, port_id);
-            let result = self.disable_port_slot(state.slot).await;
+            let result = self.disable_port_slot(state.slot).await.and(Ok(true));
             debug!(
                 "disabled port slot {} for port {} with result: {:?}",
                 state.slot, port_id, result
             );
-
             result
         } else {
             debug!(
                 "Attempted to detach from port {}, which wasn't previously attached.",
                 port_id
             );
-            Ok(())
+            Ok(false)
         }
     }
 

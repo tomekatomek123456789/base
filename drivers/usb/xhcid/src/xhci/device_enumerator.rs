@@ -77,7 +77,7 @@ impl<const N: usize> DeviceEnumerator<N> {
                     }
 
                     //THIS LOCKS THE PORTS. DO NOT LOCK PORTS BEFORE THIS POINT
-                    info!("Received a device connect on port {}, but it's not enabled. Resetting the port.", port_id);
+                    debug!("Received a device connect on port {}, but it's not enabled. Resetting the port.", port_id);
                     let _ = self.hci.reset_port(port_id);
 
                     let mut ports = self.hci.ports.lock().unwrap();
@@ -128,8 +128,10 @@ impl<const N: usize> DeviceEnumerator<N> {
                 );
                 let result = futures::executor::block_on(self.hci.detach_device(port_id));
                 match result {
-                    Ok(_) => {
-                        info!("Device on port {} was detached", port_id);
+                    Ok(was_connected) => {
+                        if was_connected {
+                            info!("Device on port {} was detached", port_id);
+                        }
                     }
                     Err(err) => {
                         warn!("processing of device attach request failed! Error: {}", err);
