@@ -67,6 +67,12 @@ impl Ps2d {
         let vmmouse_relative = false;
         let vmmouse = vm::enable(vmmouse_relative);
 
+        // TODO: QEMU hack, maybe do this when Init timed out?
+        if vmmouse {
+            // 3 = MouseId::Intellimouse1
+            MouseState::Bat.handle(3, &mut ps2);
+        }
+
         let mut this = Ps2d {
             ps2,
             vmmouse,
@@ -360,6 +366,11 @@ impl Ps2d {
     }
 
     pub fn handle_mouse(&mut self, data_opt: Option<u8>) {
+        // log::trace!(
+        //     "handle_mouse state {:?} data {:?}",
+        //     self.mouse_state,
+        //     data_opt
+        // );
         let mouse_res = match data_opt {
             Some(data) => self.mouse_state.handle(data, &mut self.ps2),
             None => self.mouse_state.handle_timeout(&mut self.ps2),
