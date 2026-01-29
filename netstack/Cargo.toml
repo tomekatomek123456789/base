@@ -13,7 +13,7 @@ daemon = { path = "../daemon" }
 redox_syscall = { workspace = true, features = ["std"] }
 redox-log.workspace = true
 libredox = { workspace = true, features = ["mkns"] }
-anyhow = "1.0.81"
+anyhow.workspace = true
 redox-scheme.workspace = true
 
 [dependencies.log]

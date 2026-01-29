@@ -9,7 +9,7 @@ daemon = { path = "../daemon" }
 redox_syscall.workspace = true
 redox-scheme.workspace = true
 redox_event.workspace = true
-anyhow = "1.0.97"
+anyhow.workspace = true
 libc.workspace = true
 rand = { version = "0.8", features = ["small_rng"] }
 

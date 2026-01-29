@@ -6,7 +6,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 log.workspace = true
 pico-args = "0.5"
 redox_syscall.workspace = true

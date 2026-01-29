@@ -8,7 +8,7 @@ license = "MIT"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 libredox.workspace = true
 daemon = { path = "../../../daemon" }
 redox_syscall = { workspace = true, features = ["std"] }

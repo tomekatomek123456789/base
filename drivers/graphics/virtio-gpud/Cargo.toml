@@ -11,7 +11,7 @@ edid = "0.3.0"
 log.workspace = true
 static_assertions = "1.1.0"
 futures = { version = "0.3.28", features = ["executor"] }
-anyhow = "1.0.71"
+anyhow.workspace = true
 
 common = { path = "../../common" }
 daemon = { path = "../../../daemon" }

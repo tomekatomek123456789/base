@@ -153,7 +153,7 @@ fn send_key_event(display: &mut ProducerHandle, usage_page: u16, usage: u16, pre
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
 
     const USAGE: &'static str = "usbhidd <scheme> <port> <interface>";

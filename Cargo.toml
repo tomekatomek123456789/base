@@ -74,6 +74,7 @@ exclude = ["bootstrap"]
 # Low-level Redox OS crates should be kept in sync using workspace dependencies
 # Remember to also update bootstrap dependencies, those are not in the workspace
 [workspace.dependencies]
+anyhow = "1"
 libc = "0.2.180"
 log = "0.4"
 libredox = "0.1.12"

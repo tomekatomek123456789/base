@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Anhad Singh <andypython@protonmail.com>"]
 
 [dependencies]
-anyhow = "1.0.71"
+anyhow.workspace = true
 log.workspace = true
 redox_syscall = { workspace = true, features = ["std"] }
 orbclient.workspace = true

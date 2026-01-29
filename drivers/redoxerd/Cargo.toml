@@ -5,7 +5,7 @@ authors = ["Jeremy Soller <jackpot51@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-anyhow = "1.0"
+anyhow.workspace = true
 libredox.workspace = true
 redox_event.workspace = true
 redox_syscall.workspace = true

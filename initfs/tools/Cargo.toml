@@ -17,7 +17,7 @@ name = "redox-initfs-dump"
 path = "src/bin/dump.rs"
 
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 clap = {version = "4", features = ["cargo"]}
 env_logger = "0.8"
 log.workspace = true

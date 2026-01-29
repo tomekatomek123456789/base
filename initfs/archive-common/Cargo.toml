@@ -5,7 +5,7 @@ authors = ["4lDO2 <4lDO2@protonmail.com>", "Kamil Koczurek <koczurekk@gmail.com>
 edition = "2021"
 
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 log.workspace = true
 pathdiff = "0.2.1"
 plain = "0.2"

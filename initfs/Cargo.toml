@@ -17,7 +17,7 @@ std = []
 
 [dev-dependencies]
 # FIXME remove loggers
-anyhow = "1"
+anyhow.workspace = true
 archive-common = {path = "archive-common"}
 env_logger = "0.8"
 log.workspace = true
