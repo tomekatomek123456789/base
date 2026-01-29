@@ -184,43 +184,51 @@ impl MouseState {
 
     fn identify_touchpad(&mut self, ps2: &mut Ps2) -> MouseResult {
         let cmd = TouchpadCommand::Identify as u8;
-        match MouseTx::new(&[
-            // Ensure command alignment
-            MouseCommand::SetScaling1To1 as u8,
-            // Send special identify touchpad command
-            MouseCommandData::SetResolution as u8, 0,
-            MouseCommandData::SetResolution as u8, 0,
-            MouseCommandData::SetResolution as u8, 0,
-            MouseCommandData::SetResolution as u8, 0,
-            // Status request
-            MouseCommand::StatusRequest as u8
-        ], 3, ps2) {
+        match MouseTx::new(
+            &[
+                // Ensure command alignment
+                MouseCommand::SetScaling1To1 as u8,
+                // Send special identify touchpad command
+                MouseCommandData::SetResolution as u8,
+                0,
+                MouseCommandData::SetResolution as u8,
+                0,
+                MouseCommandData::SetResolution as u8,
+                0,
+                MouseCommandData::SetResolution as u8,
+                0,
+                // Status request
+                MouseCommand::StatusRequest as u8,
+            ],
+            3,
+            ps2,
+        ) {
             Ok(tx) => {
                 *self = MouseState::IdentifyTouchpad { tx };
                 MouseResult::Timeout(COMMAND_TIMEOUT)
-            },
-            Err(()) => {
-                self.enable_intellimouse(ps2)
             }
+            Err(()) => self.enable_intellimouse(ps2),
         }
     }
 
-    fn enable_intellimouse(
-        &mut self,
-        ps2: &mut Ps2,
-    ) -> MouseResult {
-        match MouseTx::new(&[
-            MouseCommandData::SetSampleRate as u8, 200,
-            MouseCommandData::SetSampleRate as u8, 100,
-            MouseCommandData::SetSampleRate as u8, 80
-        ], 0, ps2) {
+    fn enable_intellimouse(&mut self, ps2: &mut Ps2) -> MouseResult {
+        match MouseTx::new(
+            &[
+                MouseCommandData::SetSampleRate as u8,
+                200,
+                MouseCommandData::SetSampleRate as u8,
+                100,
+                MouseCommandData::SetSampleRate as u8,
+                80,
+            ],
+            0,
+            ps2,
+        ) {
             Ok(tx) => {
                 *self = MouseState::EnableIntellimouse { tx };
                 MouseResult::Timeout(COMMAND_TIMEOUT)
-            },
-            Err(()) => {
-                self.request_id(ps2)
             }
+            Err(()) => self.request_id(ps2),
         }
     }
 
@@ -263,34 +271,32 @@ impl MouseState {
             }
             MouseState::IdentifyTouchpad { ref mut tx } => {
                 match tx.handle(data, ps2) {
-                    Ok(done) => if done {
-                        //TODO: handle touchpad identification
-                        // If tx.read[1] == 0x47, this is a synaptics touchpad
+                    Ok(done) => {
+                        if done {
+                            //TODO: handle touchpad identification
+                            // If tx.read[1] == 0x47, this is a synaptics touchpad
+                            self.request_status(ps2)
+                        } else {
+                            MouseResult::Timeout(COMMAND_TIMEOUT)
+                        }
+                    }
+                    Err(()) => self.enable_intellimouse(ps2),
+                }
+            }
+            MouseState::EnableIntellimouse { ref mut tx } => match tx.handle(data, ps2) {
+                Ok(done) => {
+                    if done {
                         self.request_status(ps2)
                     } else {
                         MouseResult::Timeout(COMMAND_TIMEOUT)
-                    },
-                    Err(()) => {
-                        self.enable_intellimouse(ps2)
                     }
                 }
-            }
-            MouseState::EnableIntellimouse { ref mut tx } => {
-                match tx.handle(data, ps2) {
-                    Ok(done) => if done {
-                        self.request_status(ps2)
-                    } else {
-                        MouseResult::Timeout(COMMAND_TIMEOUT)
-                    },
-                    Err(()) => {
-                        self.request_status(ps2)
-                    }
-                }
-            }
+                Err(()) => self.request_status(ps2),
+            },
             MouseState::Status { index } => {
                 match index {
                     0 => {
-                        //TODO: check response 
+                        //TODO: check response
                         *self = MouseState::Status { index: 1 };
                         MouseResult::Timeout(COMMAND_TIMEOUT)
                     }
@@ -302,9 +308,7 @@ impl MouseState {
                         *self = MouseState::Status { index: 3 };
                         MouseResult::Timeout(COMMAND_TIMEOUT)
                     }
-                    _ => {
-                        self.request_id(ps2)
-                    }
+                    _ => self.request_id(ps2),
                 }
             }
             MouseState::DeviceId => {
