@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use std::{env, thread, time};
 
 use inputd::ProducerHandle;
@@ -153,7 +154,7 @@ fn send_key_event(display: &mut ProducerHandle, usage_page: u16, usage: u16, pre
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     let mut args = env::args().skip(1);
 
     const USAGE: &'static str = "usbhidd <scheme> <port> <interface>";
@@ -186,10 +187,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         interface_num
     );
 
-    let handle = XhciClientHandle::new(scheme, port).expect("Failed to open XhciClientHandle");
+    let handle = XhciClientHandle::new(scheme, port).context("Failed to open XhciClientHandle")?;
     let desc: DevDesc = handle
         .get_standard_descs()
-        .expect("Failed to get standard descriptors");
+        .context("Failed to get standard descriptors")?;
 
     log::info!(
         "USB HID driver: {:?} serial {:?}",
@@ -228,7 +229,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
             Some((conf_desc.clone(), if_desc))
         })
-        .expect("Failed to find suitable configuration");
+        .context("Failed to find suitable configuration")?;
 
     handle
         .configure_endpoints(&ConfigureEndpointsReq {
@@ -237,13 +238,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             alternate_setting: Some(if_desc.alternate_setting),
             hub_ports: None,
         })
-        .expect("Failed to configure endpoints");
+        .context("Failed to configure endpoints")?;
 
     //TODO: do we need to set protocol to report? It fails for mice.
 
     //TODO: dynamically create good values, fix xhcid so it does not block on each request
     // This sets all reports to a duration of 4ms
-    reqs::set_idle(&handle, 1, 0, interface_num as u16).expect("Failed to set idle");
+    reqs::set_idle(&handle, 1, 0, interface_num as u16).context("Failed to set idle")?;
 
     let report_desc_len = hid_desc.desc_len;
     assert_eq!(hid_desc.desc_ty, REPORT_DESC_TY);
@@ -258,7 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             interface_num as u16,
             &mut report_desc_bytes,
         )
-        .expect("Failed to retrieve report descriptor");
+        .context("Failed to retrieve report descriptor")?;
 
     let mut handler =
         ReportHandler::new(&report_desc_bytes).expect("failed to parse report descriptor");
@@ -271,7 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report_ty = ReportTy::Input;
     let report_id = 0;
 
-    let mut display = ProducerHandle::new().expect("Failed to open input socket");
+    let mut display = ProducerHandle::new().context("Failed to open input socket")?;
     let mut endpoint_opt = match endp_desc_opt {
         Some((endp_num, _endp_desc)) => match handle.open_endpoint(endp_num as u8) {
             Ok(ok) => Some(ok),
@@ -298,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // interrupt transfer
             endpoint
                 .transfer_read(&mut report_buffer)
-                .expect("failed to get report");
+                .context("failed to get report")?;
         } else {
             // control transfer
             reqs::get_report(
@@ -309,7 +310,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 interface_num as u16,
                 &mut report_buffer,
             )
-            .expect("failed to get report");
+            .context("failed to get report")?;
         }
 
         let mut mouse_pos = last_mouse_pos;
@@ -453,4 +454,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // log::trace!("took {}ms", timer.elapsed().as_millis())
     }
+
+    Ok(())
 }
