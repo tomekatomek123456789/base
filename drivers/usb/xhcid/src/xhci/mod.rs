@@ -633,7 +633,6 @@ impl<const N: usize> Xhci<N> {
                      //Do nothing
                 }
                 _ => {
-                    eprintln!("{}: CCS {}, CSC {}", port_id, ccs, csc);
                     //Either something is connected, or nothing is connected and a port status change was asserted.
                     self.device_enumerator_sender
                         .send(DeviceEnumerationRequest { port_id })
