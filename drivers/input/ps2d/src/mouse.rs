@@ -84,6 +84,13 @@ enum MouseId {
     Intellimouse2 = 0x04,
 }
 
+// From Synaptics TouchPad Interfacing Guide
+#[derive(Clone, Copy, Debug)]
+#[repr(u8)]
+pub enum TouchpadCommand {
+    Identify = 0x00,
+}
+
 #[derive(Debug)]
 pub enum MouseState {
     /// No mouse found
