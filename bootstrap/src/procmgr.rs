@@ -2297,7 +2297,7 @@ impl<'a> ProcScheme<'a> {
                                 let rtq = target_proc.rtqs.get_mut(rtidx).unwrap();
 
                                 // TODO(feat): configurable limit?
-                                if rtq.len() > 32 {
+                                if rtq.len() >= 32 {
                                     return SendResult::FullQ;
                                 }
 
