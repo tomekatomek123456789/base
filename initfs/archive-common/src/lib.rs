@@ -537,12 +537,6 @@ pub fn archive(
 
     allocate_contents_and_write_inodes(&mut state, &root, root_metadata)?;
 
-    let current_system_time = std::time::SystemTime::now();
-
-    let time_since_epoch = current_system_time
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .context("could not calculate timestamp")?;
-
     {
         let mut header_bytes = [0_u8; std::mem::size_of::<initfs::Header>()];
         let header = plain::from_mut_bytes(&mut header_bytes)
@@ -551,8 +545,8 @@ pub fn archive(
         *header = initfs::Header {
             magic: initfs::Magic(initfs::MAGIC),
             creation_time: initfs::Timespec {
-                sec: time_since_epoch.as_secs().into(),
-                nsec: time_since_epoch.subsec_nanos().into(),
+                sec: 1471127268.into(),
+                nsec: 0.into(),
             },
             inode_count: state.inode_count.into(),
             inode_table_offset,
