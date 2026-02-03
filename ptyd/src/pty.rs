@@ -246,8 +246,8 @@ impl Pty {
         let lfl = self.termios.c_lflag;
         let cc = self.termios.c_cc;
         let icanon = lfl & ICANON == ICANON;
-        let vmin = cc[VMIN] as usize;
-        let vtime = cc[VTIME] as u64;
+        let vmin = usize::from(cc[VMIN]);
+        let vtime = u64::from(cc[VTIME]);
 
         // http://unixwiz.net/techtips/termios-vmin-vtime.html
         if !icanon {
