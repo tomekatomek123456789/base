@@ -241,7 +241,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
                         if remote_endpoint.is_specified() {
                             remote_endpoint
                         } else {
-                            udp_handle.data
+                            return Err(SyscallError::new(syscall::EADDRNOTAVAIL));
                         },
                     ))
                 } else {
