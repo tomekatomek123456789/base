@@ -2333,7 +2333,7 @@ impl<'a> ProcScheme<'a> {
                                 continue;
                             };
                             log::trace!("TCTL {:#x?}", &**tctl);
-                            if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & sig_bit(sig)
+                            if (tctl.word[sig_group].load(Ordering::Relaxed) >> 32) & (1 << sig_idx)
                                 != 0
                             {
                                 thread
