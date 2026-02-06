@@ -111,6 +111,45 @@ pub struct Ps2 {
     command: WriteOnly<Mmio<u8>>,
 }
 
+#[cfg(target_arch = "x86_64")]
+fn is_amd_jaguar() -> bool {
+    use core::arch::x86_64::__cpuid;
+
+    unsafe {
+        let r = __cpuid(0);
+        // vendor
+        let vendor = [
+            r.ebx.to_le_bytes(),
+            r.edx.to_le_bytes(),
+            r.ecx.to_le_bytes(),
+        ]
+            .concat();
+
+        if &vendor != b"AuthenticAMD" {
+            return false;
+        }
+
+        let r = __cpuid(1);
+        let eax = r.eax;
+
+        let base_family = (eax >> 8) & 0xF;
+        let base_model  = (eax >> 4) & 0xF;
+        let ext_family  = (eax >> 20) & 0xFF;
+        let ext_model   = (eax >> 16) & 0xF;
+
+        let family = if base_family == 0xF {
+            base_family + ext_family
+        } else {
+            base_family
+        };
+
+        let _model = (ext_model << 4) | base_model;
+
+        family == 0x16
+    }
+}
+
+
 impl Ps2 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     pub fn new() -> Self {
@@ -275,15 +314,34 @@ impl Ps2 {
 
         {
             // Reset keyboard
-            b = self.keyboard_command(KeyboardCommand::Reset)?;
-            if b == 0xFA {
-                b = self.read().unwrap_or(0);
-                if b != 0xAA {
-                    error!("keyboard failed self test: {:02X}", b);
+           // b = self.keyboard_command(KeyboardCommand::Reset)?;
+            //if b == 0xFA {
+             //   b = self.read().unwrap_or(0);
+             //   if b != 0xAA {
+             //       error!("keyboard failed self test: {:02X}", b);
+             //   }
+           // } else {
+           //     error!("keyboard failed to reset: {:02X}", b);
+           // }
+           //
+           match self.keyboard_command(KeyboardCommand::Reset) {
+                Ok(b) => {
+                    if b == 0xFA {
+                        let b_test = self.read().unwrap_or(0);
+                        if b_test != 0xAA {
+                            warn!("keyboard failed self test: {:02X}, but continuing",b_test);
+
+                        } else {
+                            warn!("keyboard sent {:02X} instead of ACK,but continuing",b);
+
+                        }
+
+                    }
+                },
+                Err(e) => {
+                    error!("keyboard command failed: {:?}, but ignoring", e);
                 }
-            } else {
-                error!("keyboard failed to reset: {:02X}", b);
-            }
+           }
         }
 
         self.retry(format_args!("keyboard defaults"), 4, |x| {
@@ -300,7 +358,7 @@ impl Ps2 {
         {
             // Set scancode set to 2
             let scancode_set = 2;
-            b = self.keyboard_command_data(KeyboardCommandData::ScancodeSet, scancode_set)?;
+            b = self.keyboard_command_data(KeyboardCommandData::ScancodeSet, scancode_set).unwrap_or(0x00);
             if b != 0xFA {
                 error!(
                     "keyboard failed to set scancode set {}: {:02X}",
@@ -315,8 +373,12 @@ impl Ps2 {
     pub fn init(&mut self) -> Result<(), Error> {
         {
             // Disable devices
-            self.command(Command::DisableFirst)?;
-            self.command(Command::DisableSecond)?;
+            if let err = self.command(Command::DisableFirst) {
+                warn!("Error on Command::DisableFirst ps2d controller, fn init");
+            };
+            if let err = self.command(Command::DisableSecond) {
+                warn!("Error on Command::DisableSecon ps2d controller, fn init");
+            };
         }
 
         // Disable clocks, disable interrupts, and disable translate
@@ -331,8 +393,15 @@ impl Ps2 {
 
         {
             // Perform the self test
-            self.command(Command::TestController)?;
-            let r = self.read()?;
+            if let err = self.command(Command::TestController) {
+                warn!("Error on Command::TestController {:?}", err);
+            };
+            let r =  match self.read() {
+                Ok(success)=> {success},
+                Err(e) => {
+                    warn!("Error at unwrap() r value from self test {:?}", e);
+                    0
+                } };
             if r != 0x55 {
                 warn!("self test unexpected value: {:02X}", r);
             }
@@ -356,7 +425,9 @@ impl Ps2 {
         {
             // Enable keyboard data reporting
             // Use inner function to prevent retries
-            self.keyboard_command_inner(KeyboardCommand::EnableReporting as u8)?;
+            if let err = self.keyboard_command_inner(KeyboardCommand::EnableReporting as u8) {
+                warn!("Error when enabling ps2d keyboard data reporting.");
+            };
             // Response is ignored since scanning is now on
             //TODO: fix by using interrupts?
         }
@@ -371,7 +442,9 @@ impl Ps2 {
                 } else {
                     ConfigFlags::SECOND_DISABLED
                 };
-            self.set_config(config)?;
+            if let err = self.set_config(config) {
+                warn!("Cannot set keyboard config");
+            };
         }
 
         Ok(())
