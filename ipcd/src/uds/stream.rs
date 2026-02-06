@@ -260,7 +260,7 @@ impl Socket {
         ))
     }
 
-    fn establish(&mut self, new_peer: usize, peer: usize) -> Result<()> {
+    fn establish(&mut self, new_socket: &mut Self, peer: usize) -> Result<()> {
         if self.state != State::Connecting {
             eprintln!(
                 "establish(id: {}): Cannot establish connection in state: {:?}",
@@ -274,7 +274,10 @@ impl Socket {
                 // client is expecting other connection
                 return Err(Error::new(EAGAIN));
             }
-            conn.peer = new_peer;
+            conn.peer = new_socket.primary_id;
+            if let Some(ref mut new_conn) = &mut new_socket.connection {
+                new_conn.packets.append(&mut conn.packets);
+            }
         } else {
             // client is dead
             return Err(Error::new(EAGAIN));
@@ -575,8 +578,8 @@ impl<'sock> UdsStreamScheme<'sock> {
     //          The client is still trying to connect.
     //          The client pushes its ID to the listener's awaiting queue
     //          and sets its state to `Connecting`.
-    //          The client will be blocked from sending/receiving messages,
-    //          waiting for the listener to accept it.
+    //          The client will be blocked from receiving messages,
+    //          but now allowed to send messages.
     //
     // Phase 3: The listener accepts the client, changes its state to `Established`,
     //          and then changes the client's state to `Accepted`.
@@ -870,10 +873,10 @@ impl<'sock> UdsStreamScheme<'sock> {
                 return Ok(None); // Client socket has been closed, nothing to accept
             };
             let new_id = self.next_id;
-            let new = listener_socket.accept(new_id, client_id, ctx)?;
+            let mut new = listener_socket.accept(new_id, client_id, ctx)?;
 
             let mut client_socket = client_rc.borrow_mut();
-            client_socket.establish(new_id, listener_socket.primary_id)?;
+            client_socket.establish(&mut new, listener_socket.primary_id)?;
             (new_id, new)
         };
 
@@ -1015,13 +1018,26 @@ impl<'sock> UdsStreamScheme<'sock> {
         }
     }
 
-    fn write_inner(&mut self, receiver_id: usize, buf: &[u8], ctx: &CallerCtx) -> Result<usize> {
+    fn write_inner(
+        &mut self,
+        sender_id: usize,
+        receiver_id: usize,
+        buf: &[u8],
+        ctx: &CallerCtx,
+    ) -> Result<usize> {
         {
             let receiver_rc = self.get_socket(receiver_id)?;
             let mut receiver = receiver_rc.borrow_mut();
             let name = receiver.path.clone();
 
-            let connection = receiver.require_connected_connection(MsgFlags::default())?;
+            let connection = if receiver.is_listening() {
+                // not accepted yet, park the data to client until accept() handle it
+                let receiver_rc = self.get_socket(sender_id)?;
+                receiver = receiver_rc.borrow_mut();
+                receiver.require_connection()?
+            } else {
+                receiver.require_connected_connection(MsgFlags::default())?
+            };
 
             if !buf.is_empty() {
                 // Send readable only if it wasn't readable before
@@ -1303,7 +1319,7 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
         ctx: &CallerCtx,
     ) -> Result<usize> {
         let (receiver_id, _) = self.get_connected_peer(id)?;
-        self.write_inner(receiver_id, buf, ctx)
+        self.write_inner(id, receiver_id, buf, ctx)
     }
 
     fn fpath(&mut self, id: usize, buf: &mut [u8], _ctx: &CallerCtx) -> Result<usize> {
@@ -1332,9 +1348,8 @@ impl<'sock> SchemeSync for UdsStreamScheme<'sock> {
     ) -> Result<usize> {
         let socket_rc = self.get_socket(id)?;
         let mut socket = socket_rc.borrow_mut();
-
         match socket.state {
-            State::Established | State::Accepted => {
+            State::Established | State::Accepted | State::Connecting => {
                 let connection = socket.require_connected_connection(MsgFlags::default())?;
                 Self::read_inner(connection, buf, flags)
             }
