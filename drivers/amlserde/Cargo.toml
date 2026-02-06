@@ -9,6 +9,6 @@ license = "MIT/Apache-2.0"
 edition = "2021"
 
 [dependencies]
-acpi = { git = "https://github.com/jackpot51/acpi.git" }
+acpi = { git = "https://github.com/tomekatomek123456789/acpi.git" }
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.7.3"
