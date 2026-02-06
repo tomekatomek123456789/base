@@ -61,7 +61,9 @@ pub struct Ps2d {
 impl Ps2d {
     pub fn new(input: ProducerHandle, time_file: File) -> Self {
         let mut ps2 = Ps2::new();
-        ps2.init().expect("failed to initialize");
+        if let err = ps2.init() {
+            warn!("Failed to intialize ps2: {:?}", err);
+        }
 
         // FIXME add an option for orbital to disable this when an app captures the mouse.
         let vmmouse_relative = false;
